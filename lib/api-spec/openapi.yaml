@@ -3,13 +3,17 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: OneOffice AI API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: User onboarding and authentication
+  - name: posts
+    description: Post management
 paths:
   /healthz:
     get:
@@ -24,6 +28,105 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /connect:
+    post:
+      operationId: connectUser
+      tags: [auth]
+      summary: Connect user with Telegram bot
+      description: Verify bot token via Telegram, store user info and channel connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectInput"
+      responses:
+        "200":
+          description: Successfully connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectResult"
+        "400":
+          description: Invalid input or bot token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /publish:
+    post:
+      operationId: publishPost
+      tags: [posts]
+      summary: Publish a post to Telegram channel
+      description: Sends a post to the user's connected Telegram channel using the stored bot token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishInput"
+      responses:
+        "200":
+          description: Successfully published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishResult"
+        "400":
+          description: Invalid input or publish error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /posts:
+    get:
+      operationId: listPosts
+      tags: [posts]
+      summary: List posts for a user
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of posts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Post"
+
+  /stats:
+    get:
+      operationId: getUserStats
+      tags: [posts]
+      summary: Get user stats
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: User statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserStats"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +137,111 @@ components:
       required:
         - status
 
+    ConnectInput:
+      type: object
+      required:
+        - firstName
+        - lastName
+        - telegramUsername
+        - company
+        - channelUsername
+        - botToken
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        telegramUsername:
+          type: string
+        company:
+          type: string
+        channelUsername:
+          type: string
+        botToken:
+          type: string
+
+    ConnectResult:
+      type: object
+      required:
+        - id
+        - channelId
+        - botUsername
+      properties:
+        id:
+          type: integer
+        channelId:
+          type: string
+        botUsername:
+          type: string
+
+    PublishInput:
+      type: object
+      required:
+        - userId
+        - text
+      properties:
+        userId:
+          type: integer
+        text:
+          type: string
+        imageUrl:
+          type: ["string", "null"]
+
+    PublishResult:
+      type: object
+      required:
+        - success
+        - messageId
+      properties:
+        success:
+          type: boolean
+        messageId:
+          type: integer
+
+    Post:
+      type: object
+      required:
+        - id
+        - name
+        - price
+        - category
+        - status
+        - createdAt
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        price:
+          type: string
+        category:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+
+    UserStats:
+      type: object
+      required:
+        - total
+        - published
+        - pending
+        - rejected
+      properties:
+        total:
+          type: integer
+        published:
+          type: integer
+        pending:
+          type: integer
+        rejected:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
