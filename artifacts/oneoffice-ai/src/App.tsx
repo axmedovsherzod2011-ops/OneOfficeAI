@@ -17,6 +17,7 @@ import {
   usePublishPost,
   useListPosts,
   useGetUserStats,
+  useEnrichProduct,
   getListPostsQueryKey,
   getGetUserStatsQueryKey,
 } from "@workspace/api-client-react";
@@ -729,30 +730,45 @@ function CreateForm({ form, setForm, onGenerate }: any) {
   );
 }
 
-function Generating({ onDone }: any) {
+function Generating({ form, onDone, onError }: any) {
   const [step, setStep] = useState(0);
-  const [progress, setProgress] = useState(0);
   const total = PIPELINE_STEPS.length;
+  const enrichProduct = useEnrichProduct();
+  const called = useRef(false);
 
   useEffect(() => {
-    const stepDuration = 1000;
+    if (called.current) return;
+    called.current = true;
+
+    // Animate pipeline steps while API call runs
     const timer = setInterval(() => {
-      setStep((s) => {
-        const next = s + 1;
-        if (next >= total) {
-          clearInterval(timer);
-          setTimeout(onDone, 500);
-          return s;
-        }
-        return next;
-      });
-    }, stepDuration);
-    return () => clearInterval(timer);
-  }, [onDone, total]);
+      setStep((s) => (s < total - 2 ? s + 1 : s));
+    }, 1400);
 
-  useEffect(() => {
-    setProgress(Math.min(100, Math.round(((step + 1) / total) * 100)));
-  }, [step, total]);
+    enrichProduct
+      .mutateAsync({
+        data: {
+          name: form.name,
+          price: form.price,
+          category: form.category,
+          notes: form.notes || "",
+        },
+      })
+      .then((data) => {
+        clearInterval(timer);
+        setStep(total - 1);
+        setTimeout(() => onDone(data), 600);
+      })
+      .catch((err: any) => {
+        clearInterval(timer);
+        onError?.(err?.error || err?.message || "AI generation failed. Check your OpenAI API key.");
+      });
+
+    return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const progress = Math.round(((step + 1) / total) * 100);
 
   return (
     <div className="p-6 md:p-10 max-w-xl">
@@ -764,7 +780,7 @@ function Generating({ onDone }: any) {
           </div>
         </div>
         <h3 className="text-white text-lg font-semibold mb-1">AI is working its magic</h3>
-        <p className="text-slate-400 text-sm mb-6">This usually takes about 10–15 seconds.</p>
+        <p className="text-slate-400 text-sm mb-6">Rasm izlanmoqda, narx tahlil qilinmoqda, post yozilmoqda…</p>
 
         <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden mb-6">
           <div className="h-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-700 ease-out" style={{ width: `${progress}%` }} />
@@ -790,28 +806,52 @@ function Generating({ onDone }: any) {
   );
 }
 
-function ImageMock({ style, price }: any) {
+function ImagePickerCard({ img, selected, onSelect }: { img: any; selected: boolean; onSelect: () => void }) {
+  const [loaded, setLoaded] = useState(false);
+  const [errored, setErrored] = useState(false);
   return (
-    <div className={`aspect-square rounded-2xl bg-gradient-to-br ${style.from} ${style.to} flex flex-col items-center justify-center relative overflow-hidden`}>
-      <div className={`h-16 w-16 rounded-2xl ${style.accent} flex items-center justify-center shadow-lg`}>
-        <Package className="h-8 w-8 text-white" />
-      </div>
-      <span className={`absolute bottom-3 right-3 text-xs font-semibold px-2.5 py-1 rounded-full bg-black/20 ${style.text}`}>
-        {price} UZS
-      </span>
-      <span className={`absolute top-3 left-3 text-xs font-medium ${style.text} opacity-70`}>{style.name}</span>
-    </div>
+    <button
+      onClick={onSelect}
+      className={`shrink-0 relative rounded-2xl overflow-hidden snap-start transition-all ring-2 ${selected ? "ring-violet-400 scale-[1.03]" : "ring-transparent hover:ring-white/20"}`}
+      style={{ width: 140, height: 140 }}
+    >
+      {!loaded && !errored && (
+        <div className="absolute inset-0 bg-white/5 flex items-center justify-center">
+          <Loader2 className="h-5 w-5 text-slate-500 animate-spin" />
+        </div>
+      )}
+      {!errored ? (
+        <img
+          src={img.thumbnail || img.url}
+          alt={img.title}
+          onLoad={() => setLoaded(true)}
+          onError={() => { setErrored(true); setLoaded(true); }}
+          className={`w-full h-full object-cover transition-opacity duration-300 ${loaded ? "opacity-100" : "opacity-0"}`}
+        />
+      ) : (
+        <div className="w-full h-full bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center">
+          <Package className="h-8 w-8 text-slate-600" />
+        </div>
+      )}
+      {selected && (
+        <div className="absolute top-2 right-2 h-6 w-6 rounded-full bg-violet-500 flex items-center justify-center">
+          <Check className="h-3.5 w-3.5 text-white" />
+        </div>
+      )}
+    </button>
   );
 }
 
-function Results({ form, error, onPreview, onApprove, onReject }: any) {
-  const [selected, setSelected] = useState("dark");
-  const style = IMAGE_STYLES.find((s) => s.key === selected) || IMAGE_STYLES[2];
+function Results({ form, enrichData, selectedImage, onSelectImage, error, onPreview, onApprove, onReject }: any) {
+  const images: any[] = enrichData?.images || [];
+  const postText: string = enrichData?.postText || `✨ ${form.name}\n\n💰 ${form.price} UZS\n\n📲 Buyurtma uchun yozing!`;
+  const enriched = enrichData?.enriched || {};
+  const priceDiffPercent: number = enriched.priceDiffPercent ?? 0;
 
   return (
     <div className="p-6 md:p-10 max-w-3xl space-y-6">
       <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
-        <CheckCircle2 className="h-4 w-4" /> Generation complete
+        <CheckCircle2 className="h-4 w-4" /> Generation complete — AI post va rasmlar tayyor
       </div>
 
       {error && (
@@ -820,60 +860,141 @@ function Results({ form, error, onPreview, onApprove, onReject }: any) {
         </div>
       )}
 
+      {/* ── IMAGE PICKER ── */}
       <Glass className="p-6">
-        <h3 className="text-white font-semibold mb-4">Choose an image style</h3>
-        <div className="grid grid-cols-3 gap-4">
-          {IMAGE_STYLES.map((s) => (
-            <button key={s.key} onClick={() => setSelected(s.key)} className={`rounded-2xl transition ring-2 ${selected === s.key ? "ring-violet-400" : "ring-transparent"}`}>
-              <ImageMock style={s} price={form.price || "0"} />
-            </button>
-          ))}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-white font-semibold">Mahsulot rasmi tanlang</h3>
+          <span className="text-xs text-slate-400">{images.length} ta real rasm topildi</span>
         </div>
+        {images.length > 0 ? (
+          <div className="flex gap-3 overflow-x-auto pb-2 snap-x scrollbar-thin">
+            {images.map((img: any, i: number) => (
+              <ImagePickerCard key={i} img={img} selected={selectedImage?.url === img.url} onSelect={() => onSelectImage(img)} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-slate-500 text-sm">Rasmlar yuklanmadi — nashr qilishda matn bilan yuboriladi.</p>
+        )}
+        {selectedImage && (
+          <p className="mt-3 text-xs text-slate-400 truncate">Tanlangan: {selectedImage.title}</p>
+        )}
       </Glass>
 
+      {/* ── MARKET PRICE COMPARISON ── */}
+      {enriched.marketPrice && (
+        <Glass className="p-6">
+          <h3 className="text-white font-semibold mb-4">📊 Narx tahlili</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white/5 rounded-2xl p-4">
+              <p className="text-xs text-slate-400 mb-1">Sizning narxingiz</p>
+              <p className="text-white font-semibold text-lg">{form.price} UZS</p>
+            </div>
+            <div className="bg-white/5 rounded-2xl p-4">
+              <p className="text-xs text-slate-400 mb-1">Bozor o'rtacha narxi</p>
+              <p className="text-white font-semibold text-lg">{enriched.marketPrice} UZS</p>
+            </div>
+          </div>
+          <div className={`mt-3 flex items-center gap-2 text-sm font-medium px-4 py-2.5 rounded-xl ${priceDiffPercent >= 0 ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"}`}>
+            <TrendingUp className="h-4 w-4 shrink-0" />
+            {enriched.priceDiff}
+          </div>
+        </Glass>
+      )}
+
+      {/* ── PRODUCT INFO ── */}
+      {(enriched.description || enriched.dimensions) && (
+        <Glass className="p-6 space-y-5">
+          <h3 className="text-white font-semibold">📦 Mahsulot ma'lumotlari</h3>
+
+          {enriched.description && (
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">Tavsif</p>
+              <p className="text-slate-300 text-sm leading-relaxed">{enriched.description}</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            {enriched.dimensions && (
+              <div className="bg-white/5 rounded-xl p-3">
+                <p className="text-xs text-slate-500 mb-1">📐 O'lchamlar</p>
+                <p className="text-white text-sm font-medium">{enriched.dimensions}</p>
+              </div>
+            )}
+            {enriched.weight && (
+              <div className="bg-white/5 rounded-xl p-3">
+                <p className="text-xs text-slate-500 mb-1">⚖️ Og'irligi</p>
+                <p className="text-white text-sm font-medium">{enriched.weight}</p>
+              </div>
+            )}
+          </div>
+
+          {enriched.extras && (
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">Texnik xususiyatlar</p>
+              <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">{enriched.extras}</p>
+            </div>
+          )}
+
+          {enriched.usageGuide && (
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">🎯 Ishlatish bo'yicha maslahat</p>
+              <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">{enriched.usageGuide}</p>
+            </div>
+          )}
+
+          {enriched.lifehacks && (
+            <div className="bg-violet-500/10 border border-violet-500/20 rounded-xl p-4">
+              <p className="text-xs text-violet-300 mb-1.5 font-medium uppercase tracking-wider">💡 Lifehacklar</p>
+              <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">{enriched.lifehacks}</p>
+            </div>
+          )}
+        </Glass>
+      )}
+
+      {/* ── GENERATED POST ── */}
       <Glass className="p-6">
-        <h3 className="text-white font-semibold mb-4">Generated post</h3>
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-3">
-          <h4 className="text-white text-lg font-semibold">✨ {form.name || "Premium Product"} — Now Available!</h4>
-          <p className="text-slate-300 text-sm leading-relaxed">
-            Discover the {form.name || "product"} — thoughtfully designed for everyday performance and built to impress.
-            Crafted with premium materials and backed by outstanding reviews, it's the upgrade your routine deserves.
-          </p>
-          <ul className="text-sm text-slate-300 space-y-1">
-            <li>✔ Premium build quality</li>
-            <li>✔ Fast, reliable performance</li>
-            <li>✔ Limited stock available</li>
-          </ul>
-          <p className="text-white font-semibold text-lg">💰 {form.price || "0"} UZS</p>
-          <p className="text-violet-300 text-sm font-medium">👉 Order now — DM to reserve yours!</p>
-          <p className="text-blue-400 text-xs">#{(form.category || "New").replace(/\s/g, "")} #OneOfficeAI #PremiumQuality #{selected}</p>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-white font-semibold">✍️ Tayyor post matni</h3>
+          <button
+            onClick={() => navigator.clipboard?.writeText(postText)}
+            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition px-3 py-1.5 rounded-lg bg-white/5 border border-white/10"
+          >
+            <Copy className="h-3 w-3" /> Nusxa olish
+          </button>
+        </div>
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+          <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-line">{postText}</p>
         </div>
       </Glass>
 
       <div className="flex flex-wrap gap-3">
-        <button data-testid="button-preview" onClick={() => onPreview(style)} className="flex items-center gap-2 bg-white/5 border border-white/10 text-white px-5 py-3 rounded-xl text-sm font-medium hover:border-white/20 transition">
+        <button data-testid="button-preview" onClick={() => onPreview()} className="flex items-center gap-2 bg-white/5 border border-white/10 text-white px-5 py-3 rounded-xl text-sm font-medium hover:border-white/20 transition">
           <Eye className="h-4 w-4" /> Preview
         </button>
-        <button data-testid="button-approve" onClick={() => onApprove(style)} className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30">
-          <ThumbsUp className="h-4 w-4" /> Approve
+        <button data-testid="button-approve" onClick={() => onApprove()} className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30">
+          <ThumbsUp className="h-4 w-4" /> Approve &amp; Publish
         </button>
         <button data-testid="button-reject" onClick={onReject} className="flex items-center gap-2 bg-white/5 border border-rose-500/30 text-rose-400 px-5 py-3 rounded-xl text-sm font-medium hover:bg-rose-500/10 transition">
-          <ThumbsDown className="h-4 w-4" /> Reject
+          <ThumbsDown className="h-4 w-4" /> Rad etish
         </button>
       </div>
     </div>
   );
 }
 
-function TelegramPreviewModal({ form, style, onClose, onApprove }: any) {
+function TelegramPreviewModal({ form, selectedImage, postText, onClose, onApprove }: any) {
+  const preview = postText || `✨ ${form.name}\n\n💰 ${form.price} UZS\n\n📲 Buyurtma uchun yozing!`;
+  const lines = preview.split("\n").filter(Boolean);
+
   return (
-    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="w-full max-w-sm my-4">
         <div className="flex items-center justify-between mb-3 px-1">
           <span className="text-white text-sm font-medium">Telegram Preview</span>
           <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="h-5 w-5" /></button>
         </div>
         <div className="bg-[#0e1621] rounded-2xl overflow-hidden shadow-2xl border border-white/10">
+          {/* Channel header */}
           <div className="flex items-center gap-3 px-4 py-3 bg-[#17212b]">
             <div className="h-9 w-9 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center text-white text-sm font-semibold">O</div>
             <div>
@@ -882,19 +1003,29 @@ function TelegramPreviewModal({ form, style, onClose, onApprove }: any) {
             </div>
           </div>
           <div className="p-3">
-            <div className={`rounded-xl bg-gradient-to-br ${style.from} ${style.to} aspect-square flex items-center justify-center relative mb-2`}>
-              <div className={`h-14 w-14 rounded-2xl ${style.accent} flex items-center justify-center`}>
-                <Package className="h-7 w-7 text-white" />
+            {/* Product image */}
+            {selectedImage ? (
+              <img
+                src={selectedImage.thumbnail || selectedImage.url}
+                alt={selectedImage.title}
+                className="w-full aspect-square object-cover rounded-xl mb-2"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            ) : (
+              <div className="w-full aspect-square rounded-xl bg-gradient-to-br from-violet-900 to-indigo-950 flex items-center justify-center mb-2">
+                <Package className="h-14 w-14 text-violet-400" />
               </div>
-            </div>
+            )}
+            {/* Post text */}
             <div className="bg-[#182533] rounded-xl p-3">
-              <p className="text-white text-sm font-semibold mb-1">✨ {form.name || "Premium Product"} — Now Available!</p>
-              <p className="text-slate-300 text-xs leading-relaxed mb-2">
-                Discover the {form.name || "product"} — premium quality, fast performance, limited stock.
-              </p>
-              <p className="text-white text-sm font-semibold mb-1">💰 {form.price || "0"} UZS</p>
-              <p className="text-violet-300 text-xs mb-2">👉 Order now — DM to reserve yours!</p>
-              <p className="text-blue-400 text-xs">#{(form.category || "New").replace(/\s/g, "")} #OneOfficeAI</p>
+              <div className="space-y-1 text-sm">
+                {lines.slice(0, 12).map((line: string, i: number) => (
+                  <p key={i} className={`leading-relaxed ${line.startsWith("#") ? "text-blue-400 text-xs" : line.includes("UZS") || line.includes("💰") ? "text-white font-semibold" : "text-slate-300"}`}>
+                    {line}
+                  </p>
+                ))}
+                {lines.length > 12 && <p className="text-slate-500 text-xs">…</p>}
+              </div>
               <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/5">
                 <span className="text-slate-500 text-xs">18:42</span>
                 <span className="text-slate-500 text-xs">✓✓ 1.2k views</span>
@@ -904,26 +1035,28 @@ function TelegramPreviewModal({ form, style, onClose, onApprove }: any) {
           </div>
         </div>
         <div className="flex gap-3 mt-4">
-          <button onClick={onClose} className="flex-1 bg-white/5 border border-white/10 text-white py-3 rounded-xl text-sm font-medium">Close</button>
-          <button data-testid="button-approve-publish" onClick={onApprove} className="flex-1 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white py-3 rounded-xl text-sm font-medium">Approve &amp; Publish</button>
+          <button onClick={onClose} className="flex-1 bg-white/5 border border-white/10 text-white py-3 rounded-xl text-sm font-medium">Yopish</button>
+          <button data-testid="button-approve-publish" onClick={onApprove} className="flex-1 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white py-3 rounded-xl text-sm font-medium">✅ Tasdiqlash</button>
         </div>
       </div>
     </div>
   );
 }
 
-function Publishing({ user, form, onDone, onError }: any) {
+function Publishing({ user, form, enrichData, selectedImage, onDone, onError }: any) {
   const publishPost = usePublishPost();
   const mounted = useRef(true);
 
   useEffect(() => {
     async function run() {
+      const postText = enrichData?.postText || `${form.name} — ${form.price} UZS`;
+      const imageUrl = selectedImage?.url || null;
       try {
         await publishPost.mutateAsync({
           data: {
-            userId: user?.id || 1, // Fallback if no user
-            text: `${form.name} — ${form.price}`.trim(),
-            ...(form.imageUrl ? { imageUrl: form.imageUrl } : {}),
+            userId: user?.id || 1,
+            text: postText,
+            ...(imageUrl ? { imageUrl } : {}),
           }
         });
         if (mounted.current) onDone();
@@ -1146,36 +1279,55 @@ function ProfilePage({ user }: any) {
 // ---------------------------------------------------------------------------
 
 function OneOfficeAI() {
-  const [screen, setScreen] = useState(() => (loadOnboarding() ? "signup" : "landing")); 
-  const [navView, setNavView] = useState("dashboard"); 
-  const [flow, setFlow] = useState("form"); 
+  const [screen, setScreen] = useState(() => (loadOnboarding() ? "signup" : "landing"));
+  const [navView, setNavView] = useState("dashboard");
+  const [flow, setFlow] = useState("form");
   const [form, setForm] = useState({ name: "", price: "", category: "Electronics", notes: "" });
-  const [previewStyle, setPreviewStyle] = useState(null);
+  const [enrichData, setEnrichData] = useState<any>(null);
+  const [selectedImage, setSelectedImage] = useState<any>(null);
+  const [showPreview, setShowPreview] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [publishError, setPublishError] = useState("");
+  const [generateError, setGenerateError] = useState("");
 
   const appQueryClient = useQueryClient();
 
-  const titles: Record<string, string> = { dashboard: "Dashboard", create: "Create Post", history: "History", settings: "Settings", profile: "Profile" };
+  const titles: Record<string, string> = {
+    dashboard: "Dashboard", create: "Create Post", history: "History",
+    settings: "Settings", profile: "Profile",
+  };
 
   function resetCreate() {
     setFlow("form");
     setForm({ name: "", price: "", category: "Electronics", notes: "" });
+    setEnrichData(null);
+    setSelectedImage(null);
+    setShowPreview(false);
     setPublishError("");
+    setGenerateError("");
   }
 
-  function handleApprove(style?: any) {
-    if (style) {
-      setPreviewStyle(null);
-    }
+  function handleGenerateDone(data: any) {
+    setEnrichData(data);
+    // Pre-select first image if available
+    if (data?.images?.length > 0) setSelectedImage(data.images[0]);
+    setFlow("results");
+  }
+
+  function handleGenerateError(msg: string) {
+    setGenerateError(msg);
+    setFlow("results"); // Show results even on error with fallback text
+  }
+
+  function handleApprove() {
+    setShowPreview(false);
     setPublishError("");
     setFlow("publishing");
   }
 
   function handlePublishDone() {
-    // Invalidate queries so new posts are fetched from the backend
     if (user?.id) {
       appQueryClient.invalidateQueries({ queryKey: getListPostsQueryKey({ userId: user.id }) });
       appQueryClient.invalidateQueries({ queryKey: getGetUserStatsQueryKey({ userId: user.id }) });
@@ -1193,7 +1345,13 @@ function OneOfficeAI() {
 
   return (
     <div className="min-h-screen bg-slate-950 flex" onClick={() => notifOpen && setNotifOpen(false)}>
-      <Sidebar user={user} active={navView} setActive={(v: string) => { setNavView(v); if (v === "create") resetCreate(); }} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      <Sidebar
+        user={user}
+        active={navView}
+        setActive={(v: string) => { setNavView(v); if (v === "create") resetCreate(); }}
+        mobileOpen={mobileOpen}
+        setMobileOpen={setMobileOpen}
+      />
 
       <div className="flex-1 min-w-0">
         <Topbar title={titles[navView]} onMenu={() => setMobileOpen(true)} notifOpen={notifOpen} setNotifOpen={setNotifOpen} />
@@ -1202,21 +1360,37 @@ function OneOfficeAI() {
 
         {navView === "create" && (
           <>
-            {flow === "form" && <CreateForm form={form} setForm={setForm} onGenerate={() => setFlow("generating")} />}
-            {flow === "generating" && <Generating onDone={() => setFlow("results")} />}
+            {flow === "form" && (
+              <CreateForm form={form} setForm={setForm} onGenerate={() => { setGenerateError(""); setFlow("generating"); }} />
+            )}
+            {flow === "generating" && (
+              <Generating form={form} onDone={handleGenerateDone} onError={handleGenerateError} />
+            )}
             {flow === "results" && (
               <Results
                 form={form}
-                error={publishError}
-                onPreview={(style: any) => setPreviewStyle(style)}
+                enrichData={enrichData}
+                selectedImage={selectedImage}
+                onSelectImage={setSelectedImage}
+                error={publishError || generateError}
+                onPreview={() => setShowPreview(true)}
                 onApprove={handleApprove}
                 onReject={resetCreate}
               />
             )}
             {flow === "publishing" && (
-              <Publishing user={user} form={form} onDone={handlePublishDone} onError={handlePublishError} />
+              <Publishing
+                user={user}
+                form={form}
+                enrichData={enrichData}
+                selectedImage={selectedImage}
+                onDone={handlePublishDone}
+                onError={handlePublishError}
+              />
             )}
-            {flow === "success" && <SuccessScreen form={form} onDone={() => { setNavView("dashboard"); resetCreate(); }} />}
+            {flow === "success" && (
+              <SuccessScreen form={form} onDone={() => { setNavView("dashboard"); resetCreate(); }} />
+            )}
           </>
         )}
 
@@ -1225,12 +1399,13 @@ function OneOfficeAI() {
         {navView === "profile" && <ProfilePage user={user} />}
       </div>
 
-      {previewStyle && (
+      {showPreview && (
         <TelegramPreviewModal
           form={form}
-          style={previewStyle}
-          onClose={() => setPreviewStyle(null)}
-          onApprove={() => handleApprove(previewStyle)}
+          selectedImage={selectedImage}
+          postText={enrichData?.postText}
+          onClose={() => setShowPreview(false)}
+          onApprove={handleApprove}
         />
       )}
     </div>

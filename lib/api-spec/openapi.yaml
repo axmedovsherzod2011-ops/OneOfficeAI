@@ -127,6 +127,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/UserStats"
 
+  /enrich:
+    post:
+      operationId: enrichProduct
+      tags: [posts]
+      summary: AI-enrich a product and find images
+      description: Uses AI to generate premium post text, specs, market price analysis, lifehacks, and finds real product images
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrichInput"
+      responses:
+        "200":
+          description: Enriched product data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrichResult"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /images:
+    get:
+      operationId: searchImages
+      tags: [posts]
+      summary: Search product images
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: count
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Image search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageSearchResult"
+
 components:
   schemas:
     HealthStatus:
@@ -237,6 +287,86 @@ components:
           type: integer
         rejected:
           type: integer
+
+    EnrichInput:
+      type: object
+      required:
+        - name
+        - price
+        - category
+      properties:
+        name:
+          type: string
+        price:
+          type: string
+        category:
+          type: string
+        notes:
+          type: string
+
+    EnrichedSpecs:
+      type: object
+      properties:
+        marketPrice:
+          type: string
+        priceDiff:
+          type: string
+        priceDiffPercent:
+          type: number
+        description:
+          type: string
+        usageGuide:
+          type: string
+        dimensions:
+          type: string
+        weight:
+          type: string
+        extras:
+          type: string
+        lifehacks:
+          type: string
+
+    ProductImage:
+      type: object
+      required:
+        - url
+        - thumbnail
+        - title
+      properties:
+        url:
+          type: string
+        thumbnail:
+          type: string
+        title:
+          type: string
+        source:
+          type: string
+
+    EnrichResult:
+      type: object
+      required:
+        - postText
+        - images
+        - enriched
+      properties:
+        postText:
+          type: string
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductImage"
+        enriched:
+          $ref: "#/components/schemas/EnrichedSpecs"
+
+    ImageSearchResult:
+      type: object
+      required:
+        - images
+      properties:
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductImage"
 
     ErrorResponse:
       type: object

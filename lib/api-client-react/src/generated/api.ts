@@ -22,13 +22,17 @@ import type {
 import type {
   ConnectInput,
   ConnectResult,
+  EnrichInput,
+  EnrichResult,
   ErrorResponse,
   GetUserStatsParams,
   HealthStatus,
+  ImageSearchResult,
   ListPostsParams,
   Post,
   PublishInput,
   PublishResult,
+  SearchImagesParams,
   UserStats
 } from './api.schemas';
 
@@ -437,6 +441,162 @@ export function useGetUserStats<TData = Awaited<ReturnType<typeof getUserStats>>
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetUserStatsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getEnrichProductUrl = () => {
+
+
+
+
+  return `/api/enrich`
+}
+
+/**
+ * Uses AI to generate premium post text, specs, market price analysis, lifehacks, and finds real product images
+ * @summary AI-enrich a product and find images
+ */
+export const enrichProduct = async (enrichInput: EnrichInput, options?: RequestInit): Promise<EnrichResult> => {
+
+  return customFetch<EnrichResult>(getEnrichProductUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(enrichInput)
+  }
+);}
+
+
+
+
+
+export const getEnrichProductMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof enrichProduct>>, TError,{data: BodyType<EnrichInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof enrichProduct>>, TError,{data: BodyType<EnrichInput>}, TContext> => {
+
+const mutationKey = ['enrichProduct'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof enrichProduct>>, {data: BodyType<EnrichInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  enrichProduct(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type EnrichProductMutationResult = NonNullable<Awaited<ReturnType<typeof enrichProduct>>>
+    export type EnrichProductMutationBody = BodyType<EnrichInput>
+    export type EnrichProductMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary AI-enrich a product and find images
+ */
+export const useEnrichProduct = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof enrichProduct>>, TError,{data: BodyType<EnrichInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof enrichProduct>>,
+        TError,
+        {data: BodyType<EnrichInput>},
+        TContext
+      > => {
+      return useMutation(getEnrichProductMutationOptions(options));
+    }
+
+export const getSearchImagesUrl = (params: SearchImagesParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/images?${stringifiedParams}` : `/api/images`
+}
+
+/**
+ * @summary Search product images
+ */
+export const searchImages = async (params: SearchImagesParams, options?: RequestInit): Promise<ImageSearchResult> => {
+
+  return customFetch<ImageSearchResult>(getSearchImagesUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getSearchImagesQueryKey = (params?: SearchImagesParams,) => {
+    return [
+    `/api/images`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getSearchImagesQueryOptions = <TData = Awaited<ReturnType<typeof searchImages>>, TError = ErrorType<unknown>>(params: SearchImagesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchImages>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSearchImagesQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof searchImages>>> = ({ signal }) => searchImages(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof searchImages>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SearchImagesQueryResult = NonNullable<Awaited<ReturnType<typeof searchImages>>>
+export type SearchImagesQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Search product images
+ */
+
+export function useSearchImages<TData = Awaited<ReturnType<typeof searchImages>>, TError = ErrorType<unknown>>(
+ params: SearchImagesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof searchImages>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSearchImagesQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

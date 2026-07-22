@@ -8,11 +8,17 @@
 
 export * from './connectInput';
 export * from './connectResult';
+export * from './enrichedSpecs';
+export * from './enrichInput';
+export * from './enrichResult';
 export * from './errorResponse';
 export * from './getUserStatsParams';
 export * from './healthStatus';
+export * from './imageSearchResult';
 export * from './listPostsParams';
 export * from './post';
+export * from './productImage';
 export * from './publishInput';
 export * from './publishResult';
+export * from './searchImagesParams';
 export * from './userStats';

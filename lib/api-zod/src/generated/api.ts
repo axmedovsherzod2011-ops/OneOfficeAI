@@ -86,3 +86,54 @@ export const GetUserStatsResponse = zod.object({
 })
 
 
+/**
+ * Uses AI to generate premium post text, specs, market price analysis, lifehacks, and finds real product images
+ * @summary AI-enrich a product and find images
+ */
+export const EnrichProductBody = zod.object({
+  "name": zod.string(),
+  "price": zod.string(),
+  "category": zod.string(),
+  "notes": zod.string().optional()
+})
+
+export const EnrichProductResponse = zod.object({
+  "postText": zod.string(),
+  "images": zod.array(zod.object({
+  "url": zod.string(),
+  "thumbnail": zod.string(),
+  "title": zod.string(),
+  "source": zod.string().optional()
+})),
+  "enriched": zod.object({
+  "marketPrice": zod.string().optional(),
+  "priceDiff": zod.string().optional(),
+  "priceDiffPercent": zod.number().optional(),
+  "description": zod.string().optional(),
+  "usageGuide": zod.string().optional(),
+  "dimensions": zod.string().optional(),
+  "weight": zod.string().optional(),
+  "extras": zod.string().optional(),
+  "lifehacks": zod.string().optional()
+})
+})
+
+
+/**
+ * @summary Search product images
+ */
+export const SearchImagesQueryParams = zod.object({
+  "q": zod.coerce.string(),
+  "count": zod.coerce.number().optional()
+})
+
+export const SearchImagesResponse = zod.object({
+  "images": zod.array(zod.object({
+  "url": zod.string(),
+  "thumbnail": zod.string(),
+  "title": zod.string(),
+  "source": zod.string().optional()
+}))
+})
+
+

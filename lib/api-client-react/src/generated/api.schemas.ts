@@ -52,6 +52,42 @@ export interface UserStats {
   rejected: number;
 }
 
+export interface EnrichInput {
+  name: string;
+  price: string;
+  category: string;
+  notes?: string;
+}
+
+export interface EnrichedSpecs {
+  marketPrice?: string;
+  priceDiff?: string;
+  priceDiffPercent?: number;
+  description?: string;
+  usageGuide?: string;
+  dimensions?: string;
+  weight?: string;
+  extras?: string;
+  lifehacks?: string;
+}
+
+export interface ProductImage {
+  url: string;
+  thumbnail: string;
+  title: string;
+  source?: string;
+}
+
+export interface EnrichResult {
+  postText: string;
+  images: ProductImage[];
+  enriched: EnrichedSpecs;
+}
+
+export interface ImageSearchResult {
+  images: ProductImage[];
+}
+
 export interface ErrorResponse {
   error: string;
 }
@@ -62,5 +98,10 @@ userId: number;
 
 export type GetUserStatsParams = {
 userId: number;
+};
+
+export type SearchImagesParams = {
+q: string;
+count?: number;
 };
 
