@@ -30,33 +30,46 @@ router.post("/connect", async (req, res) => {
   }
 
   // Resolve channel via getChat
+  // The bot must be added as admin to the channel BEFORE this step,
+  // otherwise Telegram returns "chat not found" for private channels.
   const channelHandle = channelUsername.startsWith("@") ? channelUsername : `@${channelUsername}`;
   let channelId: string;
   try {
     const chatRes = await fetch(`https://api.telegram.org/bot${botToken}/getChat?chat_id=${encodeURIComponent(channelHandle)}`);
     const chatData = await chatRes.json() as { ok: boolean; result?: { id?: number }; description?: string };
     if (!chatData.ok) {
-      res.status(400).json({ error: `Channel not found: ${chatData.description || "Make sure the channel username is correct"}` });
+      res.status(400).json({
+        error: `Kanal topilmadi. Iltimos, botni kanalingizga admin sifatida qo'shib, keyin ulanishni bosing. (${chatData.description ?? "chat not found"})`,
+      });
       return;
     }
     channelId = String(chatData.result?.id ?? "");
   } catch {
-    res.status(400).json({ error: "Failed to resolve channel from Telegram." });
+    res.status(400).json({ error: "Telegram API bilan bog'lanib bo'lmadi. Internet aloqangizni tekshiring." });
     return;
   }
 
-  // Verify bot is admin in the channel
+  // Verify bot is admin in the channel using its numeric user ID from getMe
+  // We already know botUsername from getMe; fetch numeric id separately for getChatMember
   try {
-    const memberRes = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${encodeURIComponent(channelHandle)}&user_id=${encodeURIComponent(botUsername)}`);
-    const memberData = await memberRes.json() as { ok: boolean; result?: { status?: string } };
-    if (memberData.ok && memberData.result) {
-      const status = memberData.result.status;
-      if (status !== "administrator" && status !== "creator") {
-        res.status(400).json({ error: "The bot is not an administrator in the channel. Please add it as admin with Post Messages permission." });
-        return;
+    const meRes2 = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+    const meData2 = await meRes2.json() as { ok: boolean; result?: { id?: number } };
+    const botNumericId = meData2.ok ? meData2.result?.id : undefined;
+
+    if (botNumericId) {
+      const memberRes = await fetch(
+        `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${encodeURIComponent(channelId)}&user_id=${botNumericId}`,
+      );
+      const memberData = await memberRes.json() as { ok: boolean; result?: { status?: string } };
+      if (memberData.ok && memberData.result) {
+        const status = memberData.result.status;
+        if (status !== "administrator" && status !== "creator") {
+          res.status(400).json({ error: "Bot kanalda admin emas. Botni kanalga admin sifatida qo'shing va 'Post Messages' ruxsatini bering." });
+          return;
+        }
       }
     }
-    // If getChatMember fails (e.g. private channel nuance), proceed anyway — the publish step will surface the real error
+    // If getChatMember lookup fails, proceed — publish step will surface the real error
   } catch {
     // Non-fatal — proceed
   }

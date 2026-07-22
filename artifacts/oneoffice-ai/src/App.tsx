@@ -98,6 +98,40 @@ function clearOnboarding() {
 }
 
 // ---------------------------------------------------------------------------
+// SESSION PERSISTENCE
+// ---------------------------------------------------------------------------
+
+const SESSION_KEY = "oneoffice_session_v1";
+
+function loadSession(): any | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(user: any) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+  } catch {
+    // storage unavailable
+  }
+}
+
+function clearSession() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // no-op
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SMALL HELPERS
 // ---------------------------------------------------------------------------
 
@@ -349,7 +383,7 @@ function SignUp({ onDone }: { onDone: (data: any) => void }) {
       clearOnboarding();
       onDone({ ...f, id: connected.id, channelId: connected.channelId, botUsername: connected.botUsername });
     } catch (err: any) {
-      setError(err?.error || err?.message || "Something went wrong while connecting. Please try again.");
+      setError((err as any)?.data?.error || err?.message || "Something went wrong while connecting. Please try again.");
     }
   }
 
@@ -761,7 +795,7 @@ function Generating({ form, onDone, onError }: any) {
       })
       .catch((err: any) => {
         clearInterval(timer);
-        onError?.(err?.error || err?.message || "AI generation failed. Check your OpenAI API key.");
+        onError?.((err as any)?.data?.error || err?.message || "AI generation failed. Check your OpenAI API key.");
       });
 
     return () => clearInterval(timer);
@@ -1061,7 +1095,7 @@ function Publishing({ user, form, enrichData, selectedImage, onDone, onError }: 
         });
         if (mounted.current) onDone();
       } catch (err: any) {
-        if (mounted.current) onError?.(err?.error || err?.message || "Failed to publish to Telegram.");
+        if (mounted.current) onError?.((err as any)?.data?.error || err?.message || "Failed to publish to Telegram.");
       }
     }
     run();
@@ -1279,7 +1313,12 @@ function ProfilePage({ user }: any) {
 // ---------------------------------------------------------------------------
 
 function OneOfficeAI() {
-  const [screen, setScreen] = useState(() => (loadOnboarding() ? "signup" : "landing"));
+  const savedSession = loadSession();
+  const [screen, setScreen] = useState(() => {
+    if (savedSession) return "app";
+    if (loadOnboarding()) return "signup";
+    return "landing";
+  });
   const [navView, setNavView] = useState("dashboard");
   const [flow, setFlow] = useState("form");
   const [form, setForm] = useState({ name: "", price: "", category: "Electronics", notes: "" });
@@ -1288,7 +1327,7 @@ function OneOfficeAI() {
   const [showPreview, setShowPreview] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<any>(savedSession ?? null);
   const [publishError, setPublishError] = useState("");
   const [generateError, setGenerateError] = useState("");
 
@@ -1341,7 +1380,7 @@ function OneOfficeAI() {
   }
 
   if (screen === "landing") return <Landing onStart={() => setScreen("signup")} />;
-  if (screen === "signup") return <SignUp onDone={(data) => { setUser(data); setScreen("app"); }} />;
+  if (screen === "signup") return <SignUp onDone={(data) => { saveSession(data); setUser(data); setScreen("app"); }} />;
 
   return (
     <div className="min-h-screen bg-slate-950 flex" onClick={() => notifOpen && setNotifOpen(false)}>
