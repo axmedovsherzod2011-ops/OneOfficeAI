@@ -1,7 +1,93 @@
 import { Router } from "express";
-import OpenAI from "openai";
 
 const router = Router();
+
+if (!process.env.GROQ_API_KEY) {
+  throw new Error(
+    "GROQ_API_KEY must be set. Add your Groq API key (from console.groq.com/keys) in Replit Secrets.",
+  );
+}
+
+const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+interface GroqResponse {
+  choices?: Array<{ message?: { content?: string } }>;
+  error?: { message?: string };
+}
+
+async function callGroq(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  const res = await fetch(GROQ_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 8192,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => "");
+    const err = new Error(
+      `Groq API error ${res.status}: ${bodyText.slice(0, 300)}`,
+    ) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+
+  const data = (await res.json()) as GroqResponse;
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Groq javobida matn topilmadi");
+  return content;
+}
+
+// ---------------------------------------------------------------------------
+// Retry helper for transient Groq API errors (503 overloaded, 429 rate
+// limit, network hiccups). Uses exponential backoff: 1s, 2s, 4s.
+// ---------------------------------------------------------------------------
+
+function isRetryableError(err: unknown): boolean {
+  const status =
+    (err as { status?: number; code?: number })?.status ??
+    (err as { status?: number; code?: number })?.code;
+  if (status === 503 || status === 429 || status === 500) return true;
+  const message = String((err as Error)?.message ?? err ?? "");
+  return /503|overloaded|high demand|unavailable|429|rate limit/i.test(message);
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  { retries = 3, baseDelayMs = 1000 } = {},
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const isLastAttempt = attempt === retries;
+      if (isLastAttempt || !isRetryableError(err)) throw err;
+      const delay = baseDelayMs * 2 ** attempt; // 1s, 2s, 4s
+      console.warn(
+        `Groq so'rovi muvaffaqiyatsiz (urinish ${attempt + 1}/${retries + 1}), ${delay}ms dan keyin qayta urinamiz...`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
 
 // ---------------------------------------------------------------------------
 // DuckDuckGo image search (no API key required)
@@ -14,7 +100,10 @@ interface DdgImage {
   source: string;
 }
 
-async function searchProductImages(query: string, count = 6): Promise<DdgImage[]> {
+async function searchProductImages(
+  query: string,
+  count = 6,
+): Promise<DdgImage[]> {
   try {
     // Step 1: get the VQD token DDG requires for image searches
     const vqdRes = await fetch(
@@ -25,7 +114,7 @@ async function searchProductImages(query: string, count = 6): Promise<DdgImage[]
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
           Accept: "text/html,application/xhtml+xml",
         },
-      }
+      },
     );
     const html = await vqdRes.text();
     const vqdMatch = html.match(/vqd=["']?([^"'&\s]+)["']?/);
@@ -97,24 +186,11 @@ router.post("/enrich", async (req, res) => {
     return;
   }
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-  // Run AI enrichment and image search in parallel
-  const [enrichedRaw, images] = await Promise.all([
-    // ---- OpenAI enrichment ----
-    openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      max_tokens: 1500,
-      messages: [
-        {
-          role: "system",
-          content: `You are an expert Uzbek e-commerce copywriter who writes premium Telegram channel posts in Uzbek language (use both Uzbek and some Russian/English words naturally as Uzbek sellers do).
+  const systemPrompt = `You are an expert Uzbek e-commerce copywriter who writes premium Telegram channel posts in Uzbek language (use both Uzbek and some Russian/English words naturally as Uzbek sellers do).
 You write posts that are engaging, use relevant emojis/stickers as bullet points, highlight value, and drive sales.
-Always respond with a valid JSON object, no extra text.`,
-        },
-        {
-          role: "user",
-          content: `Product: "${name}"
+Always respond with a valid JSON object, no extra text.`;
+
+  const userPrompt = `Product: "${name}"
 Price: ${price} UZS
 Category: ${category}
 ${notes ? `Seller notes: ${notes}` : ""}
@@ -131,20 +207,32 @@ Return a JSON object with these exact keys:
   "extras": "2-3 category-specific technical specs or notable features with emoji bullets",
   "lifehacks": "2-3 useful lifehacks or pro tips for this product with emoji bullets",
   "postText": "Full premium Telegram post text in Uzbek. Must include: product name with sparkle emoji, short punchy headline, key benefits with emoji bullets (✅ or 🔥 or ⚡), price highlighted with 💰, market comparison, call to action with 👇 or 📲, relevant hashtags. Use line breaks. Be exciting and persuasive. DO NOT include image captions."
-}`,
-        },
-      ],
-      response_format: { type: "json_object" },
-    }),
-    // ---- Image search ----
-    searchProductImages(`${name} product photo`, 6),
-  ]);
+}`;
+
+  // Run AI enrichment and image search in parallel
+  let enrichedRawText: string;
+  let images: DdgImage[];
+  try {
+    [enrichedRawText, images] = await Promise.all([
+      // ---- Groq enrichment (with retry on 503/429/500) ----
+      withRetry(() => callGroq(systemPrompt, userPrompt)),
+      // ---- Image search ----
+      searchProductImages(`${name} product photo`, 6),
+    ]);
+  } catch (err) {
+    console.error("Groq enrichment failed after retries:", err);
+    res.status(503).json({
+      error:
+        "AI xizmati hozir band yoki mavjud emas. Iltimos, bir necha daqiqadan so'ng qayta urinib ko'ring.",
+    });
+    return;
+  }
 
   // Parse AI response
   let enriched: Record<string, unknown> = {};
   let postText = "";
   try {
-    const parsed = JSON.parse(enrichedRaw.choices[0]?.message?.content ?? "{}") as Record<string, unknown>;
+    const parsed = JSON.parse(enrichedRawText) as Record<string, unknown>;
     postText = String(parsed.postText ?? "");
     enriched = {
       marketPrice: String(parsed.marketPrice ?? ""),
