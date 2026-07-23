@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 const router = Router();
 
@@ -6,6 +7,40 @@ if (!process.env.GROQ_API_KEY) {
   throw new Error(
     "GROQ_API_KEY must be set. Add your Groq API key (from console.groq.com/keys) in Replit Secrets.",
   );
+}
+
+// Image generation still uses Gemini (text generation moved to Groq above).
+// This is optional — if GEMINI_API_KEY is missing, image generation is
+// disabled but the rest of the app (text + DDG image search) keeps working.
+const geminiAi = process.env.GEMINI_API_KEY
+  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+  : null;
+const IMAGE_MODEL = "gemini-3.1-flash-image-preview";
+
+// ---------------------------------------------------------------------------
+// Shared helper: fetch an external image's raw bytes, verifying it's really
+// an image (many hotlink-protected/CDN URLs return HTML or a 403 instead).
+// ---------------------------------------------------------------------------
+
+async function fetchImageBuffer(
+  url: string,
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "image/*",
+        Referer: "https://duckduckgo.com/",
+      },
+    });
+    const contentType = res.headers.get("content-type") || "";
+    if (!res.ok || !contentType.startsWith("image/")) return null;
+    const arrayBuffer = await res.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), contentType };
+  } catch {
+    return null;
+  }
 }
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
@@ -167,6 +202,111 @@ router.get("/images", async (req, res) => {
   }
   const images = await searchProductImages(q, count);
   res.json({ images });
+});
+
+// ---------------------------------------------------------------------------
+// Image proxy — lets the browser display scraped image URLs that would
+// otherwise fail to load due to hotlink protection or missing CORS headers.
+// ---------------------------------------------------------------------------
+
+router.get("/images/proxy", async (req, res) => {
+  const url = String(req.query.url || "");
+  if (!url) {
+    res.status(400).json({ error: "url is required" });
+    return;
+  }
+  const img = await fetchImageBuffer(url);
+  if (!img) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader("Content-Type", img.contentType);
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.send(img.buffer);
+});
+
+// ---------------------------------------------------------------------------
+// AI image generation — takes a reference image (found via web search) and
+// generates a brand-new, similar-looking product photo with Gemini's image
+// model. This avoids publishing scraped/copyrighted photos directly and
+// sidesteps the reliability issues of hotlinked URLs.
+// ---------------------------------------------------------------------------
+
+router.post("/images/generate", async (req, res) => {
+  const { referenceUrl, productName, category } = req.body as {
+    referenceUrl?: string;
+    productName?: string;
+    category?: string;
+  };
+
+  if (!referenceUrl || !productName) {
+    res
+      .status(400)
+      .json({ error: "referenceUrl and productName are required" });
+    return;
+  }
+
+  if (!geminiAi) {
+    res.status(503).json({
+      error: "Rasm generatsiya xizmati sozlanmagan (GEMINI_API_KEY yo'q).",
+    });
+    return;
+  }
+
+  const ref = await fetchImageBuffer(referenceUrl);
+  if (!ref) {
+    res.status(400).json({ error: "Namuna rasmni yuklab bo'lmadi." });
+    return;
+  }
+
+  try {
+    const result = await withRetry(() =>
+      geminiAi.models.generateContent({
+        model: IMAGE_MODEL,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  data: ref.buffer.toString("base64"),
+                  mimeType: ref.contentType,
+                },
+              },
+              {
+                text: `Generate a brand-new, high-quality professional e-commerce product photo of "${productName}"${category ? ` (category: ${category})` : ""}, closely matching the composition, framing, lighting, and style of the reference image. Clean background, premium and realistic, studio-quality. Do not include any text, watermark, or logo in the image.`,
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: [Modality.TEXT, Modality.IMAGE],
+        },
+      }),
+    );
+
+    const candidate = result.candidates?.[0];
+    const imagePart = candidate?.content?.parts?.find(
+      (part: { inlineData?: { data?: string; mimeType?: string } }) =>
+        part.inlineData,
+    );
+
+    if (!imagePart?.inlineData?.data) {
+      res.status(502).json({ error: "AI rasm generatsiya qila olmadi." });
+      return;
+    }
+
+    const mimeType = imagePart.inlineData.mimeType || "image/png";
+    res.json({
+      dataUrl: `data:${mimeType};base64,${imagePart.inlineData.data}`,
+    });
+  } catch (err) {
+    console.error("Image generation failed after retries:", err);
+    res.status(503).json({
+      error:
+        "Rasm generatsiya xizmati hozir band. Birozdan so'ng qayta urinib ko'ring.",
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
