@@ -3,19 +3,30 @@ import { GoogleGenAI, Modality } from "@google/genai";
 
 const router = Router();
 
-if (!process.env.GROQ_API_KEY) {
+// ---------------------------------------------------------------------------
+// At least ONE text-generation provider key must be present. We no longer
+// require Groq specifically — Groq is just the first (fastest/free) link in
+// a 4-provider fallback chain: Groq -> Cerebras -> Gemini -> Mistral.
+// ---------------------------------------------------------------------------
+if (
+  !process.env.GROQ_API_KEY &&
+  !process.env.CEREBRAS_API_KEY &&
+  !process.env.GEMINI_API_KEY &&
+  !process.env.MISTRAL_API_KEY
+) {
   throw new Error(
-    "GROQ_API_KEY must be set. Add your Groq API key (from console.groq.com/keys) in Replit Secrets.",
+    "Kamida bitta AI provayder kaliti kerak: GROQ_API_KEY, CEREBRAS_API_KEY, GEMINI_API_KEY yoki MISTRAL_API_KEY. Replit Secrets'da hech biri topilmadi.",
   );
 }
 
-// Image generation still uses Gemini (text generation moved to Groq above).
+// Image generation still uses Gemini.
 // This is optional — if GEMINI_API_KEY is missing, image generation is
 // disabled but the rest of the app (text + DDG image search) keeps working.
 const geminiAi = process.env.GEMINI_API_KEY
   ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
 const IMAGE_MODEL = "gemini-3.1-flash-image-preview";
+const GEMINI_TEXT_MODEL = "gemini-2.5-flash";
 
 // ---------------------------------------------------------------------------
 // Shared helper: fetch an external image's raw bytes, verifying it's really
@@ -43,10 +54,50 @@ async function fetchImageBuffer(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Retry helper for transient API errors (503 overloaded, 429 rate limit,
+// network hiccups). Uses exponential backoff: 1s, 2s, 4s.
+// ---------------------------------------------------------------------------
+
+function isRetryableError(err: unknown): boolean {
+  const status =
+    (err as { status?: number; code?: number })?.status ??
+    (err as { status?: number; code?: number })?.code;
+  if (status === 503 || status === 429 || status === 500) return true;
+  const message = String((err as Error)?.message ?? err ?? "");
+  return /503|overloaded|high demand|unavailable|429|rate limit/i.test(message);
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  { retries = 3, baseDelayMs = 1000 } = {},
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const isLastAttempt = attempt === retries;
+      if (isLastAttempt || !isRetryableError(err)) throw err;
+      const delay = baseDelayMs * 2 ** attempt; // 1s, 2s, 4s
+      console.warn(
+        `So'rov muvaffaqiyatsiz (urinish ${attempt + 1}/${retries + 1}), ${delay}ms dan keyin qayta urinamiz...`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
+
+// ---------------------------------------------------------------------------
+// Provider #1: Groq (fastest, free, primary)
+// ---------------------------------------------------------------------------
+
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-interface GroqResponse {
+interface OpenAiCompatibleResponse {
   choices?: Array<{ message?: { content?: string } }>;
   error?: { message?: string };
 }
@@ -82,46 +133,178 @@ async function callGroq(
     throw err;
   }
 
-  const data = (await res.json()) as GroqResponse;
+  const data = (await res.json()) as OpenAiCompatibleResponse;
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error("Groq javobida matn topilmadi");
   return content;
 }
 
 // ---------------------------------------------------------------------------
-// Retry helper for transient Groq API errors (503 overloaded, 429 rate
-// limit, network hiccups). Uses exponential backoff: 1s, 2s, 4s.
+// Provider #2: Cerebras (very fast, free, ~14,400 req/day)
 // ---------------------------------------------------------------------------
 
-function isRetryableError(err: unknown): boolean {
-  const status =
-    (err as { status?: number; code?: number })?.status ??
-    (err as { status?: number; code?: number })?.code;
-  if (status === 503 || status === 429 || status === 500) return true;
-  const message = String((err as Error)?.message ?? err ?? "");
-  return /503|overloaded|high demand|unavailable|429|rate limit/i.test(message);
+const CEREBRAS_MODEL = "llama-3.3-70b";
+const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
+
+async function callCerebras(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  const res = await fetch(CEREBRAS_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: CEREBRAS_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 8192,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => "");
+    const err = new Error(
+      `Cerebras API error ${res.status}: ${bodyText.slice(0, 300)}`,
+    ) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+
+  const data = (await res.json()) as OpenAiCompatibleResponse;
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Cerebras javobida matn topilmadi");
+  return content;
 }
 
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  { retries = 3, baseDelayMs = 1000 } = {},
-): Promise<T> {
+// ---------------------------------------------------------------------------
+// Provider #3: Gemini (text) — reuses the same client/key used for image
+// generation below.
+// ---------------------------------------------------------------------------
+
+async function callGeminiText(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  if (!geminiAi) throw new Error("GEMINI_API_KEY sozlanmagan");
+
+  const result = await geminiAi.models.generateContent({
+    model: GEMINI_TEXT_MODEL,
+    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+    config: {
+      systemInstruction: systemPrompt,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const content = result.text;
+  if (!content) throw new Error("Gemini javobida matn topilmadi");
+  return content;
+}
+
+// ---------------------------------------------------------------------------
+// Provider #4: Mistral (last resort — generous monthly quota, ~1 req/sec)
+// ---------------------------------------------------------------------------
+
+const MISTRAL_MODEL = "mistral-small-latest";
+const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
+
+async function callMistral(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  const res = await fetch(MISTRAL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: MISTRAL_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 8192,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => "");
+    const err = new Error(
+      `Mistral API error ${res.status}: ${bodyText.slice(0, 300)}`,
+    ) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+
+  const data = (await res.json()) as OpenAiCompatibleResponse;
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Mistral javobida matn topilmadi");
+  return content;
+}
+
+// ---------------------------------------------------------------------------
+// Master fallback chain: Groq -> Cerebras -> Gemini -> Mistral.
+// Each provider is skipped entirely if its key isn't set. Each attempt gets
+// its own retry-with-backoff. Only throws once every available provider
+// has failed.
+// ---------------------------------------------------------------------------
+
+async function generateText(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  const providers: Array<{
+    name: string;
+    enabled: boolean;
+    call: () => Promise<string>;
+  }> = [
+    {
+      name: "Groq",
+      enabled: !!process.env.GROQ_API_KEY,
+      call: () => callGroq(systemPrompt, userPrompt),
+    },
+    {
+      name: "Cerebras",
+      enabled: !!process.env.CEREBRAS_API_KEY,
+      call: () => callCerebras(systemPrompt, userPrompt),
+    },
+    {
+      name: "Gemini",
+      enabled: !!geminiAi,
+      call: () => callGeminiText(systemPrompt, userPrompt),
+    },
+    {
+      name: "Mistral",
+      enabled: !!process.env.MISTRAL_API_KEY,
+      call: () => callMistral(systemPrompt, userPrompt),
+    },
+  ];
+
   let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  for (const provider of providers) {
+    if (!provider.enabled) continue;
     try {
-      return await fn();
+      return await withRetry(provider.call);
     } catch (err) {
-      lastErr = err;
-      const isLastAttempt = attempt === retries;
-      if (isLastAttempt || !isRetryableError(err)) throw err;
-      const delay = baseDelayMs * 2 ** attempt; // 1s, 2s, 4s
       console.warn(
-        `Groq so'rovi muvaffaqiyatsiz (urinish ${attempt + 1}/${retries + 1}), ${delay}ms dan keyin qayta urinamiz...`,
+        `${provider.name} muvaffaqiyatsiz, keyingi provayderga o'tamiz:`,
+        err,
       );
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      lastErr = err;
     }
   }
-  throw lastErr;
+
+  throw lastErr ?? new Error("Hech qanday AI provayder sozlanmagan");
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +370,77 @@ async function searchProductImages(
   } catch {
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// DuckDuckGo TEXT search — finds real pages about the exact product (name +
+// seller notes like brand/origin + category) so the AI grounds the
+// description in facts it actually found, instead of inventing generic
+// copy. No API key required (same approach as the image search above).
+// ---------------------------------------------------------------------------
+
+interface WebSnippet {
+  title: string;
+  snippet: string;
+  source: string;
+}
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/<[^>]+>/g, "");
+}
+
+async function searchProductWebInfo(
+  query: string,
+  count = 5,
+): Promise<WebSnippet[]> {
+  try {
+    const res = await fetch(
+      `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+      {
+        method: "POST",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: `q=${encodeURIComponent(query)}`,
+      },
+    );
+    const html = await res.text();
+
+    const results: WebSnippet[] = [];
+    const blockRegex =
+      /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+    let match: RegExpExecArray | null;
+    while ((match = blockRegex.exec(html)) && results.length < count) {
+      const [, url, titleHtml, snippetHtml] = match;
+      const title = decodeHtmlEntities(titleHtml).trim();
+      const snippet = decodeHtmlEntities(snippetHtml).trim();
+      if (title || snippet) {
+        results.push({ title, snippet, source: url });
+      }
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+// Turns the raw search hits into a compact block the AI prompt can cite
+// facts from. Kept short (title + snippet only) to stay within token
+// budget while still giving the model real, product-specific grounding.
+function formatWebContext(results: WebSnippet[]): string {
+  if (!results.length) return "";
+  return results
+    .map((r, i) => `${i + 1}. ${r.title}\n${r.snippet}`)
+    .join("\n\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -372,8 +626,20 @@ router.post("/enrich", async (req, res) => {
     return;
   }
 
+  // ---- Step 1: find the REAL product on the web first ----------------
+  // Build a search query from exactly what the seller typed (product name +
+  // their notes, e.g. brand/origin like "Rossiya", + category) so we look up
+  // the actual item instead of something generic.
+  const searchQuery = [name, notes, category].filter(Boolean).join(" ");
+  const [webResults, images] = await Promise.all([
+    searchProductWebInfo(searchQuery, 5),
+    searchProductImages(`${name} product photo`, 6),
+  ]);
+  const webContext = formatWebContext(webResults);
+
   const systemPrompt = `You are an expert Uzbek e-commerce copywriter who writes premium Telegram channel posts in Uzbek language (use both Uzbek and some Russian/English words naturally as Uzbek sellers do).
 You write posts that are engaging, use relevant emojis/stickers as bullet points, highlight value, and drive sales.
+You are ALSO a careful researcher: before writing, you are given real web search results about this exact product. Ground every factual claim (specs, material, origin, typical use) in those search results. Only fall back to general category knowledge for a field when the search results say nothing relevant to it — never contradict what the search results say.
 Always respond with a valid JSON object, no extra text.`;
 
   const userPrompt = `Product: "${name}"
@@ -381,37 +647,37 @@ Price: ${price} UZS
 Category: ${category}
 ${notes ? `Seller notes: ${notes}` : ""}
 
-Return a JSON object with these exact keys:
+${
+  webContext
+    ? `Real web search results about this exact product (use these as your source of truth for facts):\n${webContext}`
+    : `No usable web search results were found for this product — write based on general knowledge of this product category, and keep specific claims (dimensions, weight, specs) conservative/typical rather than inventing precise details.`
+}
+
+Using the information above, return a JSON object with these exact keys:
 {
   "marketPrice": "average market price in UZS as a formatted string, e.g. '380,000'",
   "priceDiff": "text like 'bozordan 8% arzon' or 'bozor narxida' comparing to market",
   "priceDiffPercent": number (positive = cheaper than market, negative = more expensive),
   "headline": "A short, punchy 1-line headline in Uzbek starting with a sparkle/fire emoji, mentioning the product name",
-  "description": "2-3 sentence premium description of the product in Uzbek, highlight key benefits",
+  "description": "2-3 sentence premium description of the product in Uzbek, grounded in the real product info found above, highlighting key benefits",
   "usageGuide": "3-4 practical usage tips in Uzbek, each on its own line starting with an emoji bullet",
-  "dimensions": "typical dimensions for this product type (e.g. '15 x 8 x 3 sm')",
-  "weight": "typical weight (e.g. '320 g')",
-  "extras": "2-3 category-specific technical specs or notable features, each on its own line with emoji bullets",
+  "dimensions": "actual/typical dimensions for this specific product (e.g. '15 x 8 x 3 sm')",
+  "weight": "actual/typical weight (e.g. '320 g')",
+  "extras": "2-3 category-specific technical specs or notable features found for this product, each on its own line with emoji bullets",
   "lifehacks": "2-3 useful lifehacks or pro tips for this product, each on its own line with emoji bullets",
   "hashtags": "3-5 relevant Uzbek/Russian hashtags separated by spaces, each starting with #, no other text"
 }
 Do not write a full post yourself — just fill in these fields, each field standalone. DO NOT include image captions.`;
 
-  // Run AI enrichment and image search in parallel
+  // ---- Step 2: AI writes the post using the grounded facts above -------
   let enrichedRawText: string;
-  let images: DdgImage[];
   try {
-    [enrichedRawText, images] = await Promise.all([
-      // ---- Groq enrichment (with retry on 503/429/500) ----
-      withRetry(() => callGroq(systemPrompt, userPrompt)),
-      // ---- Image search ----
-      searchProductImages(`${name} product photo`, 6),
-    ]);
+    enrichedRawText = await generateText(systemPrompt, userPrompt);
   } catch (err) {
-    console.error("Groq enrichment failed after retries:", err);
+    console.error("Barcha AI provayderlar muvaffaqiyatsiz tugadi:", err);
     res.status(503).json({
       error:
-        "AI xizmati hozir band yoki mavjud emas. Iltimos, bir necha daqiqadan so'ng qayta urinib ko'ring.",
+        "AI xizmatlari hozir band yoki mavjud emas. Iltimos, bir necha daqiqadan so'ng qayta urinib ko'ring.",
     });
     return;
   }

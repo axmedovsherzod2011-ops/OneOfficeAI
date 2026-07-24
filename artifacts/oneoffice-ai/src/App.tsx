@@ -43,7 +43,6 @@ import {
   Camera,
   PenTool,
   BarChart3,
-  Clock,
   Rocket,
   ChevronDown,
   Menu,
@@ -357,7 +356,22 @@ function StatusPill({ status }: { status: string }) {
 // CHANNEL PERFORMANCE CHART
 // ---------------------------------------------------------------------------
 
-function ChartTooltip({ active, payload, label }: any) {
+const METRIC_CONFIG = {
+  views: {
+    label: "Ko'rishlar",
+    title: "Kanal faolligi — ko'rishlar",
+    color: "#a78bfa",
+    dash: undefined as string | undefined,
+  },
+  orders: {
+    label: "Sotuvlar",
+    title: "Kanal faolligi — sotuvlar",
+    color: "#22d3ee",
+    dash: "5 4",
+  },
+} as const;
+
+function ChartTooltip({ active, payload, label, metricLabel }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 shadow-xl">
@@ -368,30 +382,32 @@ function ChartTooltip({ active, payload, label }: any) {
           className="text-xs font-medium"
           style={{ color: p.color }}
         >
-          {p.dataKey === "views" ? "Ko'rishlar" : "Buyurtmalar"}:{" "}
-          {p.value.toLocaleString()}
+          {metricLabel}: {p.value.toLocaleString()}
         </p>
       ))}
     </div>
   );
 }
 
-function ChannelPerformanceChart() {
+function ChannelPerformanceChart({
+  metric = "views",
+}: {
+  metric?: "views" | "orders";
+}) {
   const [period, setPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
   const [pickerOpen, setPickerOpen] = useState(false);
   const data = PERFORMANCE_DATA[period];
   const currentLabel =
     PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
+  const cfg = METRIC_CONFIG[metric];
 
   return (
     <Glass className="p-6">
       <div className="flex items-center justify-between mb-1">
-        <h3 className="text-white font-semibold">
-          Kanal faolligi — ko'rishlar va buyurtmalar
-        </h3>
+        <h3 className="text-white font-semibold">{cfg.title}</h3>
         <div className="relative shrink-0">
           <button
-            data-testid="button-performance-period"
+            data-testid={`button-performance-period-${metric}`}
             onClick={() => setPickerOpen((v) => !v)}
             className="flex items-center gap-1.5 text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 hover:border-white/20 transition"
           >
@@ -422,12 +438,11 @@ function ChannelPerformanceChart() {
 
       <div className="flex items-center gap-4 mb-4">
         <span className="flex items-center gap-1.5 text-xs text-slate-400">
-          <span className="h-0.5 w-4 rounded-full bg-violet-400 inline-block" />
-          Ko'rishlar
-        </span>
-        <span className="flex items-center gap-1.5 text-xs text-slate-400">
-          <span className="h-0.5 w-4 rounded-full bg-cyan-400 inline-block border-dashed" />
-          Buyurtmalar
+          <span
+            className="h-0.5 w-4 rounded-full inline-block"
+            style={{ backgroundColor: cfg.color }}
+          />
+          {cfg.label}
         </span>
       </div>
 
@@ -455,21 +470,15 @@ function ChannelPerformanceChart() {
               tickLine={false}
               width={40}
             />
-            <RechartsTooltip content={<ChartTooltip />} />
-            <Line
-              type="monotone"
-              dataKey="views"
-              stroke="#a78bfa"
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 4 }}
+            <RechartsTooltip
+              content={<ChartTooltip metricLabel={cfg.label} />}
             />
             <Line
               type="monotone"
-              dataKey="orders"
-              stroke="#22d3ee"
-              strokeWidth={2}
-              strokeDasharray="5 4"
+              dataKey={metric}
+              stroke={cfg.color}
+              strokeWidth={2.5}
+              strokeDasharray={cfg.dash}
               dot={false}
               activeDot={{ r: 4 }}
             />
@@ -1142,7 +1151,7 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
   ];
 
   return (
-    <aside className="hidden md:flex md:static z-40 top-0 left-0 h-full w-64 bg-white/5 backdrop-blur-xl border-r border-white/10 flex-col py-6 px-4">
+    <aside className="hidden md:flex md:sticky top-0 h-screen w-64 bg-white/5 backdrop-blur-xl border-r border-white/10 flex-col py-6 px-4">
       <div className="flex items-center gap-2 px-2 mb-10">
         <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
           <Sparkles className="h-5 w-5 text-white" />
@@ -1180,12 +1189,6 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
             <p className="text-xs text-slate-500 truncate">{subLabel}</p>
           </div>
         </div>
-        <button
-          onClick={onLogout}
-          className="w-full flex items-center gap-2 text-xs text-slate-500 hover:text-rose-400 px-2 py-1 transition"
-        >
-          <LogOut className="h-3.5 w-3.5" /> Sign out
-        </button>
       </div>
     </aside>
   );
@@ -1274,44 +1277,14 @@ function Dashboard({ goCreate, user }: any) {
     },
   );
 
-  const displayStats = stats || {
-    total: 128,
-    published: 109,
-    pending: 4,
-    rejected: 0,
-  };
+  void stats; // reserved for future stat cards
 
   return (
     <div className="p-6 md:p-10 space-y-8">
-      <div className="flex flex-col md:flex-row gap-4">
-        <StatCard
-          icon={FileText}
-          label="Generated Posts"
-          value={displayStats.total}
-          accent="bg-violet-600"
-        />
-        <StatCard
-          icon={Clock}
-          label="Pending"
-          value={displayStats.pending}
-          accent="bg-amber-600"
-        />
-        <StatCard
-          icon={Rocket}
-          label="Published"
-          value={displayStats.published}
-          accent="bg-blue-600"
-        />
-        <StatCard
-          icon={ShieldCheck}
-          label="AI Accuracy"
-          value="98.7%"
-          sub="+0.4%"
-          accent="bg-emerald-600"
-        />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <ChannelPerformanceChart metric="views" />
+        <ChannelPerformanceChart metric="orders" />
       </div>
-
-      <ChannelPerformanceChart />
     </div>
   );
 }
