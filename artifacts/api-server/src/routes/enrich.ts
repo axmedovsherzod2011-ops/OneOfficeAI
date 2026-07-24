@@ -226,10 +226,10 @@ router.get("/images/proxy", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// AI image generation — takes a reference image (found via web search) and
-// generates a brand-new, similar-looking product photo with Gemini's image
-// model. This avoids publishing scraped/copyrighted photos directly and
-// sidesteps the reliability issues of hotlinked URLs.
+// AI image generation — generates a brand-new, similar-looking product photo
+// with Gemini's image model. This avoids publishing scraped/copyrighted
+// photos directly and sidesteps the reliability issues of hotlinked URLs.
+// (Requires GEMINI_API_KEY.)
 // ---------------------------------------------------------------------------
 
 router.post("/images/generate", async (req, res) => {
@@ -252,6 +252,7 @@ router.post("/images/generate", async (req, res) => {
     });
     return;
   }
+  const client = geminiAi;
 
   const ref = await fetchImageBuffer(referenceUrl);
   if (!ref) {
@@ -261,7 +262,7 @@ router.post("/images/generate", async (req, res) => {
 
   try {
     const result = await withRetry(() =>
-      geminiAi.models.generateContent({
+      client.models.generateContent({
         model: IMAGE_MODEL,
         contents: [
           {
@@ -310,6 +311,51 @@ router.post("/images/generate", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Builds the final Telegram post text ourselves instead of trusting the AI
+// to remember to fold every field in. Each section is only added if the AI
+// actually returned it, and every section is separated by a blank line
+// (double "\n") so Telegram renders clear paragraph breaks.
+// ---------------------------------------------------------------------------
+
+function buildPostText(
+  name: string,
+  price: string,
+  enriched: Record<string, unknown>,
+): string {
+  const get = (key: string) => String(enriched[key] ?? "").trim();
+
+  const blocks: string[] = [];
+
+  blocks.push(get("headline") || `✨ ${name}`);
+
+  if (get("description")) blocks.push(get("description"));
+
+  if (get("extras")) blocks.push(`🔧 Xususiyatlar:\n${get("extras")}`);
+
+  if (get("usageGuide"))
+    blocks.push(`🎯 Ishlatish bo'yicha maslahat:\n${get("usageGuide")}`);
+
+  const dims = [
+    get("dimensions") ? `📐 ${get("dimensions")}` : "",
+    get("weight") ? `⚖️ ${get("weight")}` : "",
+  ]
+    .filter(Boolean)
+    .join("   ");
+  if (dims) blocks.push(dims);
+
+  if (get("lifehacks")) blocks.push(`💡 Lifehack:\n${get("lifehacks")}`);
+
+  const priceDiff = get("priceDiff");
+  blocks.push(priceDiff ? `💰 ${price} UZS (${priceDiff})` : `💰 ${price} UZS`);
+
+  blocks.push("📲 Buyurtma uchun yozing!");
+
+  if (get("hashtags")) blocks.push(get("hashtags"));
+
+  return blocks.filter(Boolean).join("\n\n");
+}
+
+// ---------------------------------------------------------------------------
 // AI enrichment endpoint
 // ---------------------------------------------------------------------------
 
@@ -340,14 +386,16 @@ Return a JSON object with these exact keys:
   "marketPrice": "average market price in UZS as a formatted string, e.g. '380,000'",
   "priceDiff": "text like 'bozordan 8% arzon' or 'bozor narxida' comparing to market",
   "priceDiffPercent": number (positive = cheaper than market, negative = more expensive),
+  "headline": "A short, punchy 1-line headline in Uzbek starting with a sparkle/fire emoji, mentioning the product name",
   "description": "2-3 sentence premium description of the product in Uzbek, highlight key benefits",
-  "usageGuide": "3-4 practical usage tips in Uzbek, each starting with an emoji bullet",
+  "usageGuide": "3-4 practical usage tips in Uzbek, each on its own line starting with an emoji bullet",
   "dimensions": "typical dimensions for this product type (e.g. '15 x 8 x 3 sm')",
   "weight": "typical weight (e.g. '320 g')",
-  "extras": "2-3 category-specific technical specs or notable features with emoji bullets",
-  "lifehacks": "2-3 useful lifehacks or pro tips for this product with emoji bullets",
-  "postText": "Full premium Telegram post text in Uzbek. Must include: product name with sparkle emoji, short punchy headline, key benefits with emoji bullets (✅ or 🔥 or ⚡), price highlighted with 💰, market comparison, call to action with 👇 or 📲, relevant hashtags. Use line breaks. Be exciting and persuasive. DO NOT include image captions."
-}`;
+  "extras": "2-3 category-specific technical specs or notable features, each on its own line with emoji bullets",
+  "lifehacks": "2-3 useful lifehacks or pro tips for this product, each on its own line with emoji bullets",
+  "hashtags": "3-5 relevant Uzbek/Russian hashtags separated by spaces, each starting with #, no other text"
+}
+Do not write a full post yourself — just fill in these fields, each field standalone. DO NOT include image captions.`;
 
   // Run AI enrichment and image search in parallel
   let enrichedRawText: string;
@@ -373,18 +421,20 @@ Return a JSON object with these exact keys:
   let postText = "";
   try {
     const parsed = JSON.parse(enrichedRawText) as Record<string, unknown>;
-    postText = String(parsed.postText ?? "");
     enriched = {
       marketPrice: String(parsed.marketPrice ?? ""),
       priceDiff: String(parsed.priceDiff ?? ""),
       priceDiffPercent: Number(parsed.priceDiffPercent ?? 0),
+      headline: String(parsed.headline ?? ""),
       description: String(parsed.description ?? ""),
       usageGuide: String(parsed.usageGuide ?? ""),
       dimensions: String(parsed.dimensions ?? ""),
       weight: String(parsed.weight ?? ""),
       extras: String(parsed.extras ?? ""),
       lifehacks: String(parsed.lifehacks ?? ""),
+      hashtags: String(parsed.hashtags ?? ""),
     };
+    postText = buildPostText(name, price, enriched);
   } catch {
     postText = `✨ ${name}\n\n💰 ${price} UZS\n\n📲 Buyurtma uchun yozing!`;
   }
