@@ -3,7 +3,17 @@ import {
   QueryClient,
   QueryClientProvider,
   useQueryClient,
+  useQuery,
 } from "@tanstack/react-query";
+import { Switch, Route, useLocation, Router as WouterRouter } from "wouter";
+import { AuthProvider, useAuth } from "@/lib/auth-context";
+import {
+  signInWithEmail,
+  signUpWithEmail,
+  signInWithGoogle,
+  signInWithApple,
+  resetPassword,
+} from "@/lib/firebase";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -247,36 +257,41 @@ function clearOnboarding() {
 }
 
 // ---------------------------------------------------------------------------
-// SESSION PERSISTENCE
+// FIREBASE AUTH CONFIG
 // ---------------------------------------------------------------------------
+// Identity (sign up / sign in via email+password, Google, and Apple) is now
+// fully owned by Firebase Authentication — no more Clerk. The app-specific
+// business profile (telegram channel, bot, etc.) is fetched separately from
+// /api/me once the person is signed in, using the Firebase ID token as the
+// bearer credential.
 
-const SESSION_KEY = "oneoffice_session_v1";
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-function loadSession(): any | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveSession(user: any) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-  } catch {
-    // storage unavailable
-  }
-}
-
-function clearSession() {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(SESSION_KEY);
-  } catch {
-    // no-op
+// Translates common Firebase Auth error codes into user-facing Uzbek copy.
+function mapFirebaseError(err: any): string {
+  const code = err?.code || "";
+  switch (code) {
+    case "auth/email-already-in-use":
+      return "Bu email allaqachon ro'yxatdan o'tgan.";
+    case "auth/invalid-email":
+      return "Email manzil noto'g'ri.";
+    case "auth/weak-password":
+      return "Parol juda oddiy. Kamida 6 belgidan foydalaning.";
+    case "auth/missing-password":
+      return "Iltimos, parolni kiriting.";
+    case "auth/user-not-found":
+    case "auth/wrong-password":
+    case "auth/invalid-credential":
+      return "Email yoki parol noto'g'ri.";
+    case "auth/too-many-requests":
+      return "Urinishlar juda ko'p. Birozdan so'ng qayta urinib ko'ring.";
+    case "auth/popup-closed-by-user":
+    case "auth/cancelled-popup-request":
+      return "Oyna yopildi. Qayta urinib ko'ring.";
+    case "auth/account-exists-with-different-credential":
+      return "Bu email boshqa usulda (masalan, parol bilan) ro'yxatdan o'tgan.";
+    default:
+      return err?.message || "Xatolik yuz berdi. Qayta urinib ko'ring.";
   }
 }
 
@@ -579,113 +594,417 @@ function Landing({
   );
 }
 
-function SignIn({
-  onDone,
-  onSwitchToSignUp,
+// ---------------------------------------------------------------------------
+// SIGN IN / SIGN UP (Firebase Authentication) — email/password, Google, and
+// Apple. Firebase has no drop-in hosted UI like Clerk, so the forms and the
+// "Google" / "Apple" buttons are hand-built here and call the Firebase Auth
+// SDK directly (see src/lib/firebase.ts).
+// ---------------------------------------------------------------------------
+
+function AuthCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl w-[440px] max-w-full overflow-hidden shadow-2xl shadow-black/30 p-8">
+      {children}
+    </div>
+  );
+}
+
+function AuthBrand() {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+        <Sparkles className="h-5 w-5 text-white" />
+      </div>
+      <span className="text-white font-semibold text-lg tracking-tight">
+        OneOffice AI
+      </span>
+    </div>
+  );
+}
+
+function SocialButtons({
+  onGoogle,
+  onApple,
+  disabled,
 }: {
-  onDone: (data: any) => void;
-  onSwitchToSignUp: () => void;
+  onGoogle: () => void;
+  onApple: () => void;
+  disabled: boolean;
 }) {
-  const [telegramUsername, setTelegramUsername] = useState("");
-  const [loading, setLoading] = useState(false);
+  return (
+    <div className="flex flex-col gap-3">
+      <button
+        type="button"
+        onClick={onGoogle}
+        disabled={disabled}
+        className="w-full flex items-center justify-center gap-2 bg-white/5 border border-white/10 hover:bg-white/10 transition rounded-xl py-2.5 text-white font-medium disabled:opacity-50"
+      >
+        <svg className="h-4 w-4" viewBox="0 0 24 24">
+          <path
+            fill="#4285F4"
+            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+          />
+          <path
+            fill="#34A853"
+            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+          />
+          <path
+            fill="#FBBC05"
+            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+          />
+          <path
+            fill="#EA4335"
+            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+          />
+        </svg>
+        Google bilan davom etish
+      </button>
+      <button
+        type="button"
+        onClick={onApple}
+        disabled={disabled}
+        className="w-full flex items-center justify-center gap-2 bg-white/5 border border-white/10 hover:bg-white/10 transition rounded-xl py-2.5 text-white font-medium disabled:opacity-50"
+      >
+        <svg className="h-4 w-4" viewBox="0 0 384 512" fill="currentColor">
+          <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z" />
+        </svg>
+        Apple bilan davom etish
+      </button>
+    </div>
+  );
+}
+
+function SignInPage() {
+  const [, setLocation] = useLocation();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [resetSent, setResetSent] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!telegramUsername.trim()) return;
+    setError("");
     setLoading(true);
+    try {
+      await signInWithEmail(email, password);
+      setLocation(basePath || "/");
+    } catch (err: any) {
+      setError(mapFirebaseError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGoogle() {
+    setError("");
+    setLoading(true);
+    try {
+      await signInWithGoogle();
+      setLocation(basePath || "/");
+    } catch (err: any) {
+      setError(mapFirebaseError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleApple() {
+    setError("");
+    setLoading(true);
+    try {
+      await signInWithApple();
+      setLocation(basePath || "/");
+    } catch (err: any) {
+      setError(mapFirebaseError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleReset() {
+    if (!email) {
+      setError("Parolni tiklash uchun avval email manzilingizni kiriting.");
+      return;
+    }
     setError("");
     try {
-      const res = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ telegramUsername }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Kirib bo'lmadi");
-      onDone(data);
+      await resetPassword(email);
+      setResetSent(true);
     } catch (err: any) {
-      setError(err?.message || "Kirib bo'lmadi. Qayta urinib ko'ring.");
+      setError(mapFirebaseError(err));
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center px-4 py-10">
+      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
+      <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 right-1/4" />
+      <div className="relative z-10 flex flex-col items-center gap-6">
+        <AuthBrand />
+
+        <AuthCard>
+          <h1 className="text-white font-semibold text-xl mb-1">
+            Xush kelibsiz
+          </h1>
+          <p className="text-slate-400 text-sm mb-6">Hisobingizga kiring</p>
+
+          <SocialButtons
+            onGoogle={handleGoogle}
+            onApple={handleApple}
+            disabled={loading}
+          />
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="h-px flex-1 bg-white/10" />
+            <span className="text-slate-500 text-xs">yoki</span>
+            <div className="h-px flex-1 bg-white/10" />
+          </div>
+
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-slate-300 text-sm">Email</label>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+                placeholder="siz@example.com"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-300 text-sm">Parol</label>
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="text-violet-400 hover:text-violet-300 text-xs font-medium"
+                >
+                  Parolni unutdingizmi?
+                </button>
+              </div>
+              <input
+                type="password"
+                required
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+                placeholder="••••••••"
+              />
+            </div>
+
+            {resetSent && (
+              <p className="text-emerald-400 text-sm">
+                Parolni tiklash havolasi emailingizga yuborildi.
+              </p>
+            )}
+            {error && <p className="text-rose-400 text-sm">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-gradient-to-r from-violet-500 to-blue-500 hover:opacity-90 transition rounded-xl py-2.5 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              Kirish
+            </button>
+          </form>
+
+          <p className="text-slate-500 text-sm text-center mt-6">
+            Hisobingiz yo'qmi?{" "}
+            <button
+              onClick={() => setLocation("/sign-up")}
+              className="text-violet-400 hover:text-violet-300 font-medium"
+            >
+              Ro'yxatdan o'tish
+            </button>
+          </p>
+        </AuthCard>
+      </div>
+    </div>
+  );
+}
+
+function SignUpPage() {
+  const [, setLocation] = useLocation();
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    if (password !== confirmPassword) {
+      setError("Parollar bir xil emas.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await signUpWithEmail(email, password, firstName, lastName);
+      setLocation(basePath || "/");
+    } catch (err: any) {
+      setError(mapFirebaseError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGoogle() {
+    setError("");
+    setLoading(true);
+    try {
+      await signInWithGoogle();
+      setLocation(basePath || "/");
+    } catch (err: any) {
+      setError(mapFirebaseError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleApple() {
+    setError("");
+    setLoading(true);
+    try {
+      await signInWithApple();
+      setLocation(basePath || "/");
+    } catch (err: any) {
+      setError(mapFirebaseError(err));
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center px-6">
-      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
-      <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 right-1/4" />
+    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center px-4 py-10">
+      <GradientBlob className="h-96 w-96 bg-violet-600 -top-20 -left-20" />
+      <GradientBlob className="h-96 w-96 bg-blue-600 bottom-0 -right-20" />
+      <div className="relative z-10 flex flex-col items-center gap-6">
+        <AuthBrand />
 
-      <div className="relative z-10 w-full max-w-sm">
-        <div className="flex items-center gap-2 justify-center mb-8">
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
-            <Sparkles className="h-5 w-5 text-white" />
-          </div>
-          <span className="text-white font-semibold text-lg tracking-tight">
-            OneOffice AI
-          </span>
-        </div>
-
-        <Glass className="p-8">
-          <h2 className="text-white font-semibold text-xl mb-1 text-center">
-            Xush kelibsiz
-          </h2>
-          <p className="text-slate-400 text-sm mb-6 text-center">
-            Hisobingizga kirish uchun Telegram username'ingizni kiriting
+        <AuthCard>
+          <h1 className="text-white font-semibold text-xl mb-1">
+            Hisob yarating
+          </h1>
+          <p className="text-slate-400 text-sm mb-6">
+            Bir necha soniyada boshlang
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="text-xs text-slate-400 mb-1.5 block">
-                Telegram username
+          <SocialButtons
+            onGoogle={handleGoogle}
+            onApple={handleApple}
+            disabled={loading}
+          />
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="h-px flex-1 bg-white/10" />
+            <span className="text-slate-500 text-xs">yoki</span>
+            <div className="h-px flex-1 bg-white/10" />
+          </div>
+
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-300 text-sm">Ism</label>
+                <input
+                  type="text"
+                  required
+                  autoComplete="given-name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-300 text-sm">Familiya</label>
+                <input
+                  type="text"
+                  required
+                  autoComplete="family-name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+                />
+              </div>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-slate-300 text-sm">Email</label>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+                placeholder="siz@example.com"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-slate-300 text-sm">Parol</label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+                placeholder="Kamida 6 belgi"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-slate-300 text-sm">
+                Parolni tasdiqlang
               </label>
               <input
-                data-testid="input-signin-telegram"
-                value={telegramUsername}
-                onChange={(e) => setTelegramUsername(e.target.value)}
-                placeholder="username"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-violet-400/50"
+                type="password"
+                required
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
               />
             </div>
 
-            {error && (
-              <div className="flex items-center gap-2 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2.5">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {error}
-              </div>
-            )}
+            {error && <p className="text-rose-400 text-sm">{error}</p>}
 
             <button
-              data-testid="button-signin-submit"
               type="submit"
-              disabled={loading || !telegramUsername.trim()}
-              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3 rounded-xl text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={loading}
+              className="w-full bg-gradient-to-r from-violet-500 to-blue-500 hover:opacity-90 transition rounded-xl py-2.5 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ArrowRight className="h-4 w-4" />
-              )}
-              Kirish
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              Ro'yxatdan o'tish
             </button>
           </form>
-        </Glass>
 
-        <p className="text-center text-sm text-slate-500 mt-6">
-          Hisobingiz yo'qmi?{" "}
-          <button
-            onClick={onSwitchToSignUp}
-            className="text-violet-400 hover:text-violet-300 font-medium"
-          >
-            Ro'yxatdan o'tish
-          </button>
-        </p>
+          <p className="text-slate-500 text-sm text-center mt-6">
+            Hisobingiz bormi?{" "}
+            <button
+              onClick={() => setLocation("/sign-in")}
+              className="text-violet-400 hover:text-violet-300 font-medium"
+            >
+              Kirish
+            </button>
+          </p>
+        </AuthCard>
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// SIGN UP
+// ONBOARDING WIZARD — business profile (Telegram channel + posting bot).
+// Runs once, right after Firebase sign-up, before the person reaches the
+// dashboard. Identity (email/Google/Apple) is already handled by Firebase by
+// this point, so this only collects app-specific details.
 // ---------------------------------------------------------------------------
 
 const SIGNUP_STEPS = [
@@ -771,12 +1090,12 @@ function CopyField({ value }: { value: string }) {
   );
 }
 
-function SignUp({
+function OnboardingWizard({
+  firebaseUser,
   onDone,
-  onSwitchToSignIn,
 }: {
+  firebaseUser: any;
   onDone: (data: any) => void;
-  onSwitchToSignIn: () => void;
 }) {
   const [step, setStep] = useState(0);
   const [f, setF] = useState({
@@ -797,8 +1116,20 @@ function SignUp({
     if (saved) {
       setStep(saved.step || 0);
       setF((prev) => ({ ...prev, ...saved.data }));
+    } else {
+      // First time through the wizard — prefill name from the Firebase
+      // account created during sign-up (email/Google/Apple all provide a
+      // displayName), so the person doesn't retype it.
+      const displayName = firebaseUser?.displayName || "";
+      const [firstGuess, ...restGuess] = displayName.split(" ").filter(Boolean);
+      setF((prev) => ({
+        ...prev,
+        first: prev.first || firstGuess || "",
+        last: prev.last || restGuess.join(" ") || "",
+      }));
     }
     restored.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -883,7 +1214,7 @@ function SignUp({
         {step === 0 && (
           <div>
             <h2 className="text-2xl font-semibold text-white mb-1">
-              Create your account
+              Set up your workspace
             </h2>
             <p className="text-sm text-slate-400 mb-6">
               Tell us a bit about you and your business.
@@ -925,16 +1256,6 @@ function SignUp({
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
               />
             </div>
-            <p className="text-center text-sm text-slate-500 mt-5">
-              Already have an account?{" "}
-              <button
-                type="button"
-                onClick={onSwitchToSignIn}
-                className="text-violet-400 hover:text-violet-300 font-medium"
-              >
-                Sign in
-              </button>
-            </p>
           </div>
         )}
 
@@ -2301,13 +2622,43 @@ function ProfilePage({ user, onLogout }: any) {
 // ROOT APP
 // ---------------------------------------------------------------------------
 
-function OneOfficeAI() {
-  const savedSession = loadSession();
-  const [screen, setScreen] = useState(() => {
-    if (savedSession) return "app";
-    if (loadOnboarding()) return "signup";
-    return "landing";
+// ---------------------------------------------------------------------------
+// APP SHELL — everything the person sees once they're signed in with Firebase.
+// Fetches the app-specific business profile from /api/me: if it doesn't
+// exist yet (first time), shows the onboarding wizard; otherwise shows the
+// normal dashboard/create/history/settings/profile app.
+// ---------------------------------------------------------------------------
+
+function FullscreenLoader() {
+  return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <Loader2 className="h-8 w-8 text-violet-400 animate-spin" />
+    </div>
+  );
+}
+
+function AppShell() {
+  const { user: firebaseUser, signOut } = useAuth();
+  const appQueryClient = useQueryClient();
+
+  const {
+    data: profile,
+    isLoading: profileLoading,
+    refetch: refetchProfile,
+  } = useQuery({
+    queryKey: ["me", firebaseUser?.uid],
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch("/api/me", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error("Failed to load profile");
+      return res.json();
+    },
+    enabled: !!firebaseUser,
   });
+
   const [navView, setNavView] = useState("dashboard");
   const [flow, setFlow] = useState("form");
   const [form, setForm] = useState({
@@ -2319,11 +2670,8 @@ function OneOfficeAI() {
   const [enrichData, setEnrichData] = useState<any>(null);
   const [selectedImages, setSelectedImages] = useState<any[]>([]);
   const [showPreview, setShowPreview] = useState(false);
-  const [user, setUser] = useState<any>(savedSession ?? null);
   const [publishError, setPublishError] = useState("");
   const [generateError, setGenerateError] = useState("");
-
-  const appQueryClient = useQueryClient();
 
   const titles: Record<string, string> = {
     dashboard: "Dashboard",
@@ -2368,12 +2716,12 @@ function OneOfficeAI() {
   }
 
   function handlePublishDone() {
-    if (user?.id) {
+    if (profile?.id) {
       appQueryClient.invalidateQueries({
-        queryKey: getListPostsQueryKey({ userId: user.id }),
+        queryKey: getListPostsQueryKey({ userId: profile.id }),
       });
       appQueryClient.invalidateQueries({
-        queryKey: getGetUserStatsQueryKey({ userId: user.id }),
+        queryKey: getGetUserStatsQueryKey({ userId: profile.id }),
       });
     }
     setFlow("success");
@@ -2385,43 +2733,25 @@ function OneOfficeAI() {
   }
 
   function handleLogout() {
-    clearSession();
     clearOnboarding();
-    setUser(null);
-    resetCreate();
-    setNavView("dashboard");
-    setScreen("landing");
+    signOut();
   }
 
-  if (screen === "landing")
+  if (profileLoading) return <FullscreenLoader />;
+
+  if (!profile) {
     return (
-      <Landing
-        onStart={() => setScreen("signup")}
-        onSignIn={() => setScreen("signin")}
-      />
-    );
-  if (screen === "signin")
-    return (
-      <SignIn
-        onDone={(data) => {
-          saveSession(data);
-          setUser(data);
-          setScreen("app");
+      <OnboardingWizard
+        firebaseUser={firebaseUser}
+        onDone={() => {
+          clearOnboarding();
+          refetchProfile();
         }}
-        onSwitchToSignUp={() => setScreen("signup")}
       />
     );
-  if (screen === "signup")
-    return (
-      <SignUp
-        onDone={(data) => {
-          saveSession(data);
-          setUser(data);
-          setScreen("app");
-        }}
-        onSwitchToSignIn={() => setScreen("signin")}
-      />
-    );
+  }
+
+  const user = profile;
 
   return (
     <div className="min-h-screen bg-slate-950 flex">
@@ -2539,11 +2869,74 @@ function OneOfficeAI() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// ROUTES — "/" shows Landing when signed out and AppShell when signed in;
+// "/sign-in" and "/sign-up" are dedicated routes so Google/Apple OAuth
+// redirects and deep links land on a predictable browser path.
+// ---------------------------------------------------------------------------
+
+function AppRoutes() {
+  const [, setLocation] = useLocation();
+  const { user, isLoaded } = useAuth();
+
+  return (
+    <Switch>
+      <Route path="/sign-in/*?" component={SignInPage} />
+      <Route path="/sign-up/*?" component={SignUpPage} />
+      <Route path="/">
+        {!isLoaded ? (
+          <FullscreenLoader />
+        ) : user ? (
+          <AppShell />
+        ) : (
+          <Landing
+            onStart={() => setLocation("/sign-up")}
+            onSignIn={() => setLocation("/sign-in")}
+          />
+        )}
+      </Route>
+    </Switch>
+  );
+}
+
+// Clears the React Query cache whenever the signed-in Firebase user changes,
+// so one person's cached data never leaks into the next session on the same
+// device.
+function AuthQueryClientCacheInvalidator() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const prevUserIdRef = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    const userId = user?.uid ?? null;
+    if (
+      prevUserIdRef.current !== undefined &&
+      prevUserIdRef.current !== userId
+    ) {
+      queryClient.clear();
+    }
+    prevUserIdRef.current = userId;
+  }, [user, queryClient]);
+
+  return null;
+}
+
+function AuthProviderWithRoutes() {
+  return (
+    <AuthProvider>
+      <AuthQueryClientCacheInvalidator />
+      <AppRoutes />
+    </AuthProvider>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <OneOfficeAI />
+        <WouterRouter base={basePath}>
+          <AuthProviderWithRoutes />
+        </WouterRouter>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

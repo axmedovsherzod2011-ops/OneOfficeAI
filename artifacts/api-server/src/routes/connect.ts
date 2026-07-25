@@ -1,36 +1,37 @@
 import { Router } from "express";
+import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable } from "@workspace/db/schema";
 import { ConnectUserBody } from "@workspace/api-zod";
-import { ilike } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const router = Router();
 
 // ---------------------------------------------------------------------------
-// Sign in — look up an existing account by the Telegram username they signed
-// up with, so returning users don't have to redo the whole connect wizard.
+// Current user's app-specific business profile (Telegram channel, bot,
+// etc). Identity itself (who is signed in) is entirely handled by Firebase
+// Authentication — this just looks up "our" data for whichever Firebase
+// user made the request.
+//
+// 404 means the person is signed in with Firebase but hasn't completed the
+// onboarding wizard yet (first time here) — the client shows the wizard.
 // ---------------------------------------------------------------------------
 
-router.post("/login", async (req, res) => {
-  const { telegramUsername } = req.body as { telegramUsername?: string };
-
-  if (!telegramUsername || !telegramUsername.trim()) {
-    res.status(400).json({ error: "Telegram username kiritilishi shart." });
+router.get("/me", async (req, res) => {
+  const { userId: firebaseUid } = getAuth(req);
+  if (!firebaseUid) {
+    res.status(401).json({ error: "Tizimga kirilmagan." });
     return;
   }
-
-  const handle = telegramUsername.replace(/^@/, "").trim();
 
   const [user] = await db
     .select()
     .from(usersTable)
-    .where(ilike(usersTable.telegramUsername, handle))
+    .where(eq(usersTable.firebaseUid, firebaseUid))
     .limit(1);
 
   if (!user) {
-    res.status(404).json({
-      error: "Bunday foydalanuvchi topilmadi. Avval ro'yxatdan o'ting.",
-    });
+    res.status(404).json({ error: "Profil hali sozlanmagan." });
     return;
   }
 
@@ -48,6 +49,12 @@ router.post("/login", async (req, res) => {
 });
 
 router.post("/connect", async (req, res) => {
+  const { userId: firebaseUid } = getAuth(req);
+  if (!firebaseUid) {
+    res.status(401).json({ error: "Tizimga kirilmagan." });
+    return;
+  }
+
   const parsed = ConnectUserBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input" });
@@ -151,10 +158,13 @@ router.post("/connect", async (req, res) => {
     // Non-fatal — proceed
   }
 
-  // Store user in DB
+  // Store the business profile, keyed by the signed-in Firebase user.
+  // Running the wizard again (e.g. to reconnect a different bot) updates
+  // the same row instead of creating a duplicate.
   const [user] = await db
     .insert(usersTable)
     .values({
+      firebaseUid,
       firstName,
       lastName,
       telegramUsername,
@@ -163,6 +173,19 @@ router.post("/connect", async (req, res) => {
       channelId,
       botToken,
       botUsername,
+    })
+    .onConflictDoUpdate({
+      target: usersTable.firebaseUid,
+      set: {
+        firstName,
+        lastName,
+        telegramUsername,
+        company,
+        channelUsername,
+        channelId,
+        botToken,
+        botUsername,
+      },
     })
     .returning({ id: usersTable.id });
 
