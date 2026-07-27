@@ -22,6 +22,8 @@ import type {
 import type {
   ConnectInput,
   ConnectResult,
+  ConnectTelegramChannelInput,
+  CreateProfileInput,
   EnrichInput,
   EnrichResult,
   ErrorResponse,
@@ -30,9 +32,11 @@ import type {
   ImageSearchResult,
   ListPostsParams,
   Post,
+  Profile,
   PublishInput,
   PublishResult,
   SearchImagesParams,
+  TelegramChannel,
   UserStats
 } from './api.schemas';
 
@@ -211,6 +215,239 @@ export const useConnectUser = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getConnectUserMutationOptions(options));
+    }
+
+export const getCreateProfileUrl = () => {
+
+
+
+
+  return `/api/profile`
+}
+
+/**
+ * Creates the app-specific business profile right after Firebase sign-up (no Telegram details required)
+ * @summary Create the signed-in user's business profile
+ */
+export const createProfile = async (createProfileInput: CreateProfileInput, options?: RequestInit): Promise<Profile> => {
+
+  return customFetch<Profile>(getCreateProfileUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createProfileInput)
+  }
+);}
+
+export const getCreateProfileMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createProfile>>, TError,{data: BodyType<CreateProfileInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createProfile>>, TError,{data: BodyType<CreateProfileInput>}, TContext> => {
+
+const mutationKey = ['createProfile'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createProfile>>, {data: BodyType<CreateProfileInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createProfile(data,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateProfileMutationResult = NonNullable<Awaited<ReturnType<typeof createProfile>>>
+    export type CreateProfileMutationBody = BodyType<CreateProfileInput>
+    export type CreateProfileMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Create the signed-in user's business profile
+ */
+export const useCreateProfile = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createProfile>>, TError,{data: BodyType<CreateProfileInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createProfile>>,
+        TError,
+        {data: BodyType<CreateProfileInput>},
+        TContext
+      > => {
+      return useMutation(getCreateProfileMutationOptions(options));
+    }
+
+export const getListTelegramChannelsUrl = () => {
+
+
+
+
+  return `/api/connectors/telegram`
+}
+
+/**
+ * @summary List the signed-in user's connected Telegram channels
+ */
+export const listTelegramChannels = async ( options?: RequestInit): Promise<TelegramChannel[]> => {
+
+  return customFetch<TelegramChannel[]>(getListTelegramChannelsUrl(),
+  {
+    ...options,
+    method: 'GET'
+  }
+);}
+
+export const getListTelegramChannelsQueryKey = () => {
+    return [
+    `/api/connectors/telegram`
+    ] as const;
+    }
+
+export const getListTelegramChannelsQueryOptions = <TData = Awaited<ReturnType<typeof listTelegramChannels>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listTelegramChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListTelegramChannelsQueryKey();
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listTelegramChannels>>> = ({ signal }) => listTelegramChannels({ signal, ...requestOptions });
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listTelegramChannels>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListTelegramChannelsQueryResult = NonNullable<Awaited<ReturnType<typeof listTelegramChannels>>>
+export type ListTelegramChannelsQueryError = ErrorType<unknown>
+
+/**
+ * @summary List the signed-in user's connected Telegram channels
+ */
+
+export function useListTelegramChannels<TData = Awaited<ReturnType<typeof listTelegramChannels>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listTelegramChannels>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListTelegramChannelsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getConnectTelegramChannelUrl = () => {
+
+
+
+
+  return `/api/connectors/telegram`
+}
+
+/**
+ * Verifies the bot token + channel via Telegram, then stores the connection (max 3 per user)
+ * @summary Connect a Telegram channel
+ */
+export const connectTelegramChannel = async (connectTelegramChannelInput: ConnectTelegramChannelInput, options?: RequestInit): Promise<TelegramChannel> => {
+
+  return customFetch<TelegramChannel>(getConnectTelegramChannelUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(connectTelegramChannelInput)
+  }
+);}
+
+export const getConnectTelegramChannelMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof connectTelegramChannel>>, TError,{data: BodyType<ConnectTelegramChannelInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof connectTelegramChannel>>, TError,{data: BodyType<ConnectTelegramChannelInput>}, TContext> => {
+
+const mutationKey = ['connectTelegramChannel'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof connectTelegramChannel>>, {data: BodyType<ConnectTelegramChannelInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  connectTelegramChannel(data,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ConnectTelegramChannelMutationResult = NonNullable<Awaited<ReturnType<typeof connectTelegramChannel>>>
+    export type ConnectTelegramChannelMutationBody = BodyType<ConnectTelegramChannelInput>
+    export type ConnectTelegramChannelMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Connect a Telegram channel
+ */
+export const useConnectTelegramChannel = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof connectTelegramChannel>>, TError,{data: BodyType<ConnectTelegramChannelInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof connectTelegramChannel>>,
+        TError,
+        {data: BodyType<ConnectTelegramChannelInput>},
+        TContext
+      > => {
+      return useMutation(getConnectTelegramChannelMutationOptions(options));
+    }
+
+export const getDisconnectTelegramChannelUrl = (id: number,) => {
+
+
+
+
+  return `/api/connectors/telegram/${id}`
+}
+
+/**
+ * @summary Disconnect (remove) a connected Telegram channel
+ */
+export const disconnectTelegramChannel = async (id: number, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getDisconnectTelegramChannelUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+  }
+);}
+
+export const getDisconnectTelegramChannelMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disconnectTelegramChannel>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof disconnectTelegramChannel>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['disconnectTelegramChannel'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof disconnectTelegramChannel>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  disconnectTelegramChannel(id,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DisconnectTelegramChannelMutationResult = NonNullable<Awaited<ReturnType<typeof disconnectTelegramChannel>>>
+    export type DisconnectTelegramChannelMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Disconnect (remove) a connected Telegram channel
+ */
+export const useDisconnectTelegramChannel = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disconnectTelegramChannel>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof disconnectTelegramChannel>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDisconnectTelegramChannelMutationOptions(options));
     }
 
 export const getPublishPostUrl = () => {

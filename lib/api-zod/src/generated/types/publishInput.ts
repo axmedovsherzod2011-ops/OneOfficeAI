@@ -8,7 +8,10 @@
 
 export interface PublishInput {
   userId: number;
+  /** id of the connected Telegram channel (from /api/connectors/telegram) to publish to */
+  channelId: number;
   text: string;
   /** @nullable */
   imageUrl?: string | null;
+  imageUrls?: string[];
 }

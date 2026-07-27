@@ -18,33 +18,61 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * Verify bot token via Telegram, store user info and channel connection
- * @summary Connect user with Telegram bot
+ * Create the app-specific business profile right after Firebase sign-up.
+ * No Telegram details are required here anymore — those are connected
+ * later, from Settings → Connectors.
+ * @summary Create the signed-in user's business profile
  */
-export const ConnectUserBody = zod.object({
+export const CreateProfileBody = zod.object({
   "firstName": zod.string(),
   "lastName": zod.string(),
-  "telegramUsername": zod.string(),
-  "company": zod.string(),
-  "channelUsername": zod.string(),
-  "botToken": zod.string()
+  "company": zod.string()
 })
 
-export const ConnectUserResponse = zod.object({
+export const CreateProfileResponse = zod.object({
   "id": zod.number(),
-  "channelId": zod.string(),
-  "botUsername": zod.string()
+  "firstName": zod.string(),
+  "lastName": zod.string(),
+  "company": zod.string()
 })
 
 
 /**
- * Sends a post to the user's connected Telegram channel using the stored bot token
+ * A single connected Telegram channel + posting bot.
+ */
+export const TelegramChannelItem = zod.object({
+  "id": zod.number(),
+  "channelUsername": zod.string(),
+  "channelId": zod.string(),
+  "botUsername": zod.string()
+})
+
+export const ListTelegramChannelsResponse = zod.array(TelegramChannelItem)
+
+/**
+ * Verify bot token + channel via Telegram, then store the connection. Up
+ * to 3 channels may be connected per user.
+ * @summary Connect a Telegram channel
+ */
+export const ConnectTelegramChannelBody = zod.object({
+  "channelUsername": zod.string(),
+  "botToken": zod.string()
+})
+
+export const ConnectTelegramChannelResponse = TelegramChannelItem
+
+
+/**
+ * Sends a post to one of the user's connected Telegram channels using the
+ * stored bot token for that channel.
  * @summary Publish a post to Telegram channel
  */
 export const PublishPostBody = zod.object({
   "userId": zod.number(),
+  "channelId": zod.number(),
   "text": zod.string(),
-  "imageUrl": zod.string().nullish()
+  "imageUrl": zod.string().nullish(),
+  "imageUrls": zod.array(zod.string()).optional()
 })
 
 export const PublishPostResponse = zod.object({

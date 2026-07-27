@@ -64,10 +64,17 @@ import {
   ArrowLeft,
   Hash,
   ClipboardCheck,
+  Trash2,
+  Link2,
+  Radio,
 } from "lucide-react";
 
 import {
-  useConnectUser,
+  useCreateProfile,
+  useListTelegramChannels,
+  useConnectTelegramChannel,
+  useDisconnectTelegramChannel,
+  getListTelegramChannelsQueryKey,
   usePublishPost,
   useListPosts,
   useGetUserStats,
@@ -832,11 +839,29 @@ function SignUpPage() {
   const [, setLocation] = useLocation();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const createProfile = useCreateProfile();
+
+  // After Firebase creates the account, save the app-specific profile
+  // (first/last name + business name) right away so the person lands
+  // straight on the dashboard — no separate Telegram-gated wizard anymore.
+  // If this call fails (e.g. dropped connection), AppShell's lightweight
+  // fallback form on next load asks for the same three fields again.
+  async function finishSignUp(fName: string, lName: string, biz: string) {
+    if (!fName && !lName && !biz) return;
+    try {
+      await createProfile.mutateAsync({
+        data: { firstName: fName, lastName: lName, company: biz },
+      });
+    } catch {
+      // Non-fatal — AppShell will show the fallback "finish setup" form.
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -848,6 +873,7 @@ function SignUpPage() {
     setLoading(true);
     try {
       await signUpWithEmail(email, password, firstName, lastName);
+      await finishSignUp(firstName, lastName, company);
       setLocation(basePath || "/");
     } catch (err: any) {
       setError(mapFirebaseError(err));
@@ -860,7 +886,10 @@ function SignUpPage() {
     setError("");
     setLoading(true);
     try {
-      await signInWithGoogle();
+      const credential = await signInWithGoogle();
+      const displayName = credential.user?.displayName || "";
+      const [firstGuess, ...restGuess] = displayName.split(" ").filter(Boolean);
+      await finishSignUp(firstGuess || "", restGuess.join(" ") || "", company);
       setLocation(basePath || "/");
     } catch (err: any) {
       setError(mapFirebaseError(err));
@@ -873,7 +902,10 @@ function SignUpPage() {
     setError("");
     setLoading(true);
     try {
-      await signInWithApple();
+      const credential = await signInWithApple();
+      const displayName = credential.user?.displayName || "";
+      const [firstGuess, ...restGuess] = displayName.split(" ").filter(Boolean);
+      await finishSignUp(firstGuess || "", restGuess.join(" ") || "", company);
       setLocation(basePath || "/");
     } catch (err: any) {
       setError(mapFirebaseError(err));
@@ -896,6 +928,19 @@ function SignUpPage() {
           <p className="text-slate-400 text-sm mb-6">
             Bir necha soniyada boshlang
           </p>
+
+          <div className="flex flex-col gap-1.5 mb-5">
+            <label className="text-slate-300 text-sm">Biznes nomi</label>
+            <input
+              data-testid="input-signup-company"
+              type="text"
+              required
+              value={company}
+              onChange={(e) => setCompany(e.target.value)}
+              placeholder="OneStore LLC"
+              className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+            />
+          </div>
 
           <SocialButtons
             onGoogle={handleGoogle}
@@ -1001,23 +1046,131 @@ function SignUpPage() {
 }
 
 // ---------------------------------------------------------------------------
-// ONBOARDING WIZARD — business profile (Telegram channel + posting bot).
-// Runs once, right after Firebase sign-up, before the person reaches the
-// dashboard. Identity (email/Google/Apple) is already handled by Firebase by
-// this point, so this only collects app-specific details.
+// PROFILE FALLBACK — sign-up now creates the business profile immediately
+// (see SignUpPage), so this only ever shows up in the rare case where that
+// call failed (e.g. the connection dropped right after Firebase created the
+// account). It asks for the same three fields and nothing else — no
+// Telegram required to reach the dashboard.
 // ---------------------------------------------------------------------------
 
-const SIGNUP_STEPS = [
-  { key: "info", label: "Your details" },
-  { key: "channel", label: "Create channel" },
-  { key: "bot", label: "Create bot" },
-  { key: "connect", label: "Connect" },
-];
+function ProfileFallbackForm({
+  firebaseUser,
+  onDone,
+}: {
+  firebaseUser: any;
+  onDone: (data: any) => void;
+}) {
+  const displayName = firebaseUser?.displayName || "";
+  const [firstGuess, ...restGuess] = displayName.split(" ").filter(Boolean);
+  const [first, setFirst] = useState(firstGuess || "");
+  const [last, setLast] = useState(restGuess.join(" ") || "");
+  const [company, setCompany] = useState("");
+  const [error, setError] = useState("");
+  const createProfile = useCreateProfile();
 
-function StepRail({ step }: { step: number }) {
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!first || !last || !company) {
+      setError("Iltimos, barcha maydonlarni to'ldiring.");
+      return;
+    }
+    setError("");
+    try {
+      const profile = await createProfile.mutateAsync({
+        data: { firstName: first, lastName: last, company },
+      });
+      onDone(profile);
+    } catch (err: any) {
+      setError(
+        (err as any)?.data?.error ||
+          err?.message ||
+          "Something went wrong. Please try again.",
+      );
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center px-4 py-10">
+      <GradientBlob className="h-96 w-96 bg-violet-600 -top-20 -left-20" />
+      <GradientBlob className="h-96 w-96 bg-blue-600 bottom-0 -right-20" />
+
+      <Glass className="relative z-10 w-full max-w-md p-8">
+        <div className="flex items-center gap-2 mb-6">
+          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+            <Sparkles className="h-5 w-5 text-white" />
+          </div>
+          <span className="text-white font-semibold text-lg">OneOffice AI</span>
+        </div>
+        <h2 className="text-2xl font-semibold text-white mb-1">
+          Hisobingizni yakunlang
+        </h2>
+        <p className="text-sm text-slate-400 mb-6">
+          Bir necha ma'lumot qoldi — Telegram keyinroq, xohlagan vaqtingizda
+          ulanadi.
+        </p>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              data-testid="input-fallback-first-name"
+              value={first}
+              onChange={(e) => setFirst(e.target.value)}
+              placeholder="Ism"
+              className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+            />
+            <input
+              data-testid="input-fallback-last-name"
+              value={last}
+              onChange={(e) => setLast(e.target.value)}
+              placeholder="Familiya"
+              className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+            />
+          </div>
+          <input
+            data-testid="input-fallback-company"
+            value={company}
+            onChange={(e) => setCompany(e.target.value)}
+            placeholder="Biznes nomi"
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+          />
+          {error && (
+            <div className="flex items-center gap-2 text-rose-400 text-xs">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {error}
+            </div>
+          )}
+          <button
+            data-testid="button-fallback-continue"
+            type="submit"
+            disabled={createProfile.isPending}
+            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition disabled:opacity-60"
+          >
+            {createProfile.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                Davom etish <ChevronRight className="h-4 w-4" />
+              </>
+            )}
+          </button>
+        </form>
+      </Glass>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SHARED STEP-BY-STEP UI — used by the Telegram connect modal below.
+// ---------------------------------------------------------------------------
+
+function StepRail({
+  step,
+  steps,
+}: {
+  step: number;
+  steps: { key: string; label: string }[];
+}) {
   return (
     <div className="flex items-center mb-8">
-      {SIGNUP_STEPS.map((s, i) => (
+      {steps.map((s, i) => (
         <div key={s.key} className="flex items-center flex-1 last:flex-none">
           <div className="flex flex-col items-center gap-1.5 shrink-0">
             <div
@@ -1037,7 +1190,7 @@ function StepRail({ step }: { step: number }) {
               {s.label}
             </span>
           </div>
-          {i < SIGNUP_STEPS.length - 1 && (
+          {i < steps.length - 1 && (
             <div
               className={`h-px flex-1 mx-2 mb-4 ${i < step ? "bg-violet-500" : "bg-white/10"}`}
             />
@@ -1090,72 +1243,44 @@ function CopyField({ value }: { value: string }) {
   );
 }
 
-function OnboardingWizard({
-  firebaseUser,
-  onDone,
+// ---------------------------------------------------------------------------
+// CONNECTORS — Settings-adjacent screen where a person connects (or
+// disconnects) up to MAX_TELEGRAM_CHANNELS Telegram channels. Sign-up no
+// longer requires this; it's entirely opt-in, whenever they're ready.
+// ---------------------------------------------------------------------------
+
+const MAX_TELEGRAM_CHANNELS = 3;
+
+const CONNECT_STEPS = [
+  { key: "channel", label: "Create channel" },
+  { key: "bot", label: "Create bot" },
+  { key: "connect", label: "Connect" },
+];
+
+function TelegramConnectModal({
+  company,
+  onClose,
+  onConnected,
 }: {
-  firebaseUser: any;
-  onDone: (data: any) => void;
+  company?: string;
+  onClose: () => void;
+  onConnected: () => void;
 }) {
   const [step, setStep] = useState(0);
-  const [f, setF] = useState({
-    first: "",
-    last: "",
-    tgUsername: "",
-    company: "",
-    channelUsername: "",
-    botToken: "",
-  });
+  const [channelUsername, setChannelUsername] = useState("");
+  const [botToken, setBotToken] = useState("");
   const [error, setError] = useState("");
-  const restored = useRef(false);
+  const connectChannel = useConnectTelegramChannel();
 
-  const connectUser = useConnectUser();
-
-  useEffect(() => {
-    const saved = loadOnboarding();
-    if (saved) {
-      setStep(saved.step || 0);
-      setF((prev) => ({ ...prev, ...saved.data }));
-    } else {
-      // First time through the wizard — prefill name from the Firebase
-      // account created during sign-up (email/Google/Apple all provide a
-      // displayName), so the person doesn't retype it.
-      const displayName = firebaseUser?.displayName || "";
-      const [firstGuess, ...restGuess] = displayName.split(" ").filter(Boolean);
-      setF((prev) => ({
-        ...prev,
-        first: prev.first || firstGuess || "",
-        last: prev.last || restGuess.join(" ") || "",
-      }));
-    }
-    restored.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!restored.current) return;
-    saveOnboarding({ step, data: f });
-  }, [step, f]);
-
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setError("");
-    setF({ ...f, [k]: e.target.value });
-  };
-
-  const canNext = [
-    f.first && f.last && f.tgUsername && f.company,
-    !!f.channelUsername,
-    true,
-    true,
-  ][step];
+  const canNext = [!!channelUsername, true][step];
 
   function goNext() {
     if (!canNext) {
-      setError("Please fill in every field to continue.");
+      setError("Iltimos, kanal username kiriting.");
       return;
     }
     setError("");
-    setStep((s) => Math.min(s + 1, SIGNUP_STEPS.length - 1));
+    setStep((s) => Math.min(s + 1, CONNECT_STEPS.length - 1));
   }
 
   function goBack() {
@@ -1164,29 +1289,16 @@ function OnboardingWizard({
   }
 
   async function handleConnect() {
-    if (!f.botToken.trim()) {
-      setError("Paste your bot token to finish connecting.");
+    if (!botToken.trim()) {
+      setError("Bot tokenini kiriting.");
       return;
     }
     setError("");
     try {
-      const connected = await connectUser.mutateAsync({
-        data: {
-          firstName: f.first,
-          lastName: f.last,
-          telegramUsername: f.tgUsername,
-          company: f.company,
-          channelUsername: f.channelUsername,
-          botToken: f.botToken,
-        },
+      await connectChannel.mutateAsync({
+        data: { channelUsername, botToken },
       });
-      clearOnboarding();
-      onDone({
-        ...f,
-        id: connected.id,
-        channelId: connected.channelId,
-        botUsername: connected.botUsername,
-      });
+      onConnected();
     } catch (err: any) {
       setError(
         (err as any)?.data?.error ||
@@ -1197,110 +1309,63 @@ function OnboardingWizard({
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center px-4 py-10">
-      <GradientBlob className="h-96 w-96 bg-violet-600 -top-20 -left-20" />
-      <GradientBlob className="h-96 w-96 bg-blue-600 bottom-0 -right-20" />
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <Glass className="relative w-full max-w-lg p-8 my-4">
+        <button
+          onClick={onClose}
+          className="absolute top-5 right-5 text-slate-400 hover:text-white"
+        >
+          <X className="h-5 w-5" />
+        </button>
 
-      <Glass className="relative z-10 w-full max-w-lg p-8">
-        <div className="flex items-center gap-2 mb-6">
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
-            <Sparkles className="h-5 w-5 text-white" />
+        <div className="flex items-center gap-3 mb-6">
+          <div className="h-9 w-9 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+            <Send className="h-4 w-4 text-blue-400" />
           </div>
-          <span className="text-white font-semibold text-lg">OneOffice AI</span>
+          <span className="text-white font-semibold text-lg">
+            Telegram ulash
+          </span>
         </div>
 
-        <StepRail step={step} />
+        <StepRail step={step} steps={CONNECT_STEPS} />
 
         {step === 0 && (
           <div>
-            <h2 className="text-2xl font-semibold text-white mb-1">
-              Set up your workspace
+            <h2 className="text-xl font-semibold text-white mb-1">
+              Telegram kanalingizni yarating
             </h2>
-            <p className="text-sm text-slate-400 mb-6">
-              Tell us a bit about you and your business.
-            </p>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  data-testid="input-first-name"
-                  value={f.first}
-                  onChange={set("first")}
-                  placeholder="First name"
-                  className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-                />
-                <input
-                  data-testid="input-last-name"
-                  value={f.last}
-                  onChange={set("last")}
-                  placeholder="Last name"
-                  className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-                />
-              </div>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                  @
-                </span>
-                <input
-                  data-testid="input-tg-username"
-                  value={f.tgUsername}
-                  onChange={set("tgUsername")}
-                  placeholder="Telegram username"
-                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-8 pr-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-                />
-              </div>
-              <input
-                data-testid="input-company"
-                value={f.company}
-                onChange={set("company")}
-                placeholder="Business name"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-              />
-            </div>
-          </div>
-        )}
-
-        {step === 1 && (
-          <div>
-            <div className="flex items-center gap-3 mb-1">
-              <div className="h-9 w-9 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                <Send className="h-4 w-4 text-blue-400" />
-              </div>
-              <h2 className="text-xl font-semibold text-white">
-                Create your Telegram channel
-              </h2>
-            </div>
-            <p className="text-sm text-slate-400 mb-5 ml-12">
-              This is where your AI-generated posts will be published.
+            <p className="text-sm text-slate-400 mb-5">
+              AI tomonidan yaratilgan postlar shu yerda e'lon qilinadi.
             </p>
             <InstructionList
               items={[
                 <>
-                  In Telegram, tap the compose icon and choose{" "}
-                  <b className="text-white">New Channel</b>.
+                  Telegram'da yozish belgisini bosing va{" "}
+                  <b className="text-white">New Channel</b> ni tanlang.
                 </>,
                 <>
-                  Name it after your business — e.g.{" "}
+                  Biznesingiz nomi bilan ataang — masalan{" "}
                   <span className="text-slate-100">
-                    "{f.company || "Your Business"} Store"
+                    "{company || "Sizning biznesingiz"} Store"
                   </span>
                   .
                 </>,
                 <>
-                  In channel settings, set it to{" "}
-                  <b className="text-white">Public</b> and pick a channel
-                  username.
+                  Kanal sozlamalarida uni <b className="text-white">Public</b>{" "}
+                  qiling va username tanlang.
                 </>,
-                <>
-                  Enter that username below so OneOffice AI knows where to post.
-                </>,
+                <>Shu username'ni pastga kiriting.</>,
               ]}
             />
             <div className="relative mb-2">
               <Hash className="h-4 w-4 text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
               <input
-                data-testid="input-channel-username"
-                value={f.channelUsername}
-                onChange={set("channelUsername")}
+                data-testid="input-connect-channel-username"
+                value={channelUsername}
+                onChange={(e) => {
+                  setError("");
+                  setChannelUsername(e.target.value);
+                }}
                 placeholder="yourchannelname"
                 className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
               />
@@ -1308,35 +1373,28 @@ function OnboardingWizard({
           </div>
         )}
 
-        {step === 2 && (
+        {step === 1 && (
           <div>
-            <div className="flex items-center gap-3 mb-1">
-              <div className="h-9 w-9 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                <Bot className="h-4 w-4 text-violet-400" />
-              </div>
-              <h2 className="text-xl font-semibold text-white">
-                Create your posting bot
-              </h2>
-            </div>
-            <p className="text-sm text-slate-400 mb-5 ml-12">
-              Telegram bots publish on your behalf — BotFather creates one in
-              seconds.
+            <h2 className="text-xl font-semibold text-white mb-1">
+              Post qiluvchi botingizni yarating
+            </h2>
+            <p className="text-sm text-slate-400 mb-5">
+              Telegram botlar siz nomingizdan post qiladi — BotFather buni bir
+              necha soniyada yaratadi.
             </p>
             <InstructionList
               items={[
                 <>
-                  Open <b className="text-white">@BotFather</b> in Telegram.
+                  Telegram'da <b className="text-white">@BotFather</b> ni
+                  oching.
                 </>,
-                <>Send the command below to start creating a bot.</>,
+                <>Quyidagi buyruqni yuboring.</>,
                 <>
-                  Choose a display name, then a username ending in{" "}
-                  <span className="text-slate-100">"bot"</span> (e.g.{" "}
-                  {(f.company || "yourstore").replace(/\s/g, "").toLowerCase()}
-                  _bot).
+                  Nom, keyin <span className="text-slate-100">"bot"</span> bilan
+                  tugaydigan username tanlang.
                 </>,
                 <>
-                  BotFather replies with an API token — keep that chat open,
-                  you'll need it in the next step.
+                  BotFather API token yuboradi — keyingi qadamda kerak bo'ladi.
                 </>,
               ]}
             />
@@ -1347,46 +1405,43 @@ function OnboardingWizard({
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 text-xs text-violet-300 hover:text-violet-200 transition"
             >
-              Open @BotFather <ExternalLink className="h-3 w-3" />
+              @BotFather'ni ochish <ExternalLink className="h-3 w-3" />
             </a>
           </div>
         )}
 
-        {step === 3 && (
+        {step === 2 && (
           <div>
-            <div className="flex items-center gap-3 mb-1">
-              <div className="h-9 w-9 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                <KeyRound className="h-4 w-4 text-emerald-400" />
-              </div>
-              <h2 className="text-xl font-semibold text-white">
-                Add your bot as a poster
-              </h2>
-            </div>
-            <p className="text-sm text-slate-400 mb-5 ml-12">
-              Give the bot permission to post in your channel, then connect it
-              here.
+            <h2 className="text-xl font-semibold text-white mb-1">
+              Botni admin sifatida qo'shing
+            </h2>
+            <p className="text-sm text-slate-400 mb-5">
+              Botga kanalda post qilish huquqini bering, so'ng shu yerda ulang.
             </p>
             <InstructionList
               items={[
                 <>
-                  Open your channel →{" "}
+                  Kanal →{" "}
                   <b className="text-white">
                     Settings → Administrators → Add Admin
                   </b>
                   .
                 </>,
-                <>Search for your bot's username and select it.</>,
+                <>Bot username'ini qidiring va tanlang.</>,
                 <>
-                  Enable <b className="text-white">Post Messages</b> permission
-                  and save.
+                  <b className="text-white">Post Messages</b> ruxsatini yoqing
+                  va saqlang.
                 </>,
-                <>Paste the API token BotFather gave you below.</>,
+                <>BotFather bergan API tokenni pastga joylashtiring.</>,
               ]}
             />
             <input
-              data-testid="input-bot-token"
-              value={f.botToken}
-              onChange={set("botToken")}
+              data-testid="input-connect-bot-token"
+              value={botToken}
+              onChange={(e) => {
+                setError("");
+                setBotToken(e.target.value);
+              }}
               type="password"
               placeholder="123456789:AAExampleTokenFromBotFather"
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition font-mono"
@@ -1403,49 +1458,167 @@ function OnboardingWizard({
         <div className="flex items-center gap-3 mt-7">
           {step > 0 && (
             <button
-              data-testid="button-back"
               onClick={goBack}
-              disabled={connectUser.isPending}
+              disabled={connectChannel.isPending}
               className="flex items-center gap-1.5 text-slate-400 hover:text-white px-4 py-3.5 rounded-xl border border-white/10 hover:border-white/20 transition text-sm font-medium disabled:opacity-40"
             >
-              <ArrowLeft className="h-4 w-4" /> Back
+              <ArrowLeft className="h-4 w-4" /> Orqaga
             </button>
           )}
-          {step < SIGNUP_STEPS.length - 1 ? (
+          {step < CONNECT_STEPS.length - 1 ? (
             <button
-              data-testid="button-continue"
+              data-testid="button-connect-continue"
               onClick={goNext}
               className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
             >
-              Continue
-              <ChevronRight className="h-4 w-4" />
+              Davom etish <ChevronRight className="h-4 w-4" />
             </button>
           ) : (
             <button
-              data-testid="button-finish-connect"
+              data-testid="button-connect-finish"
               onClick={handleConnect}
-              disabled={connectUser.isPending}
+              disabled={connectChannel.isPending}
               className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 disabled:opacity-60 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-emerald-900/30 transition"
             >
-              {connectUser.isPending ? (
+              {connectChannel.isPending ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Verifying bot
-                  token...
+                  <Loader2 className="h-4 w-4 animate-spin" /> Tekshirilmoqda...
                 </>
               ) : (
                 <>
-                  Connect &amp; finish <Check className="h-4 w-4" />
+                  Ulash <Check className="h-4 w-4" />
                 </>
               )}
             </button>
           )}
         </div>
-
-        <p className="text-center text-[11px] text-slate-600 mt-5">
-          Steps saved automatically — close anytime and pick up right where you
-          left off.
-        </p>
       </Glass>
+    </div>
+  );
+}
+
+function ConnectorsPage({ company }: { company?: string }) {
+  const { user: firebaseUser } = useAuth();
+  const queryClient = useQueryClient();
+  const channelsQueryKey = [
+    ...getListTelegramChannelsQueryKey(),
+    firebaseUser?.uid,
+  ] as const;
+  const {
+    data: channels,
+    isLoading,
+    refetch,
+  } = useListTelegramChannels({
+    query: { queryKey: channelsQueryKey },
+  });
+  const disconnectChannel = useDisconnectTelegramChannel();
+  const [showModal, setShowModal] = useState(false);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  const list = channels || [];
+  const atLimit = list.length >= MAX_TELEGRAM_CHANNELS;
+
+  async function handleDisconnect(id: number) {
+    setRemovingId(id);
+    try {
+      await disconnectChannel.mutateAsync({ id });
+      refetch();
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  return (
+    <div className="p-6 md:p-10 max-w-2xl space-y-6">
+      <Glass className="p-6">
+        <div className="flex items-start justify-between gap-4 mb-1">
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+              <Send className="h-5 w-5 text-blue-400" />
+            </div>
+            <div>
+              <h3 className="text-white font-semibold">Telegram</h3>
+              <p className="text-slate-500 text-xs mt-0.5">
+                {list.length}/{MAX_TELEGRAM_CHANNELS} kanal ulangan
+              </p>
+            </div>
+          </div>
+          <button
+            data-testid="button-connect-telegram"
+            onClick={() => setShowModal(true)}
+            disabled={atLimit}
+            title={atLimit ? "Eng ko'pi bilan 3 ta kanal ulash mumkin" : ""}
+            className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
+          >
+            <Link2 className="h-3.5 w-3.5" /> Ulash
+          </button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+          </div>
+        ) : list.length === 0 ? (
+          <p className="text-slate-500 text-sm mt-5">
+            Hali Telegram kanal ulanmagan. Post qilishni boshlash uchun "Ulash"
+            tugmasini bosing.
+          </p>
+        ) : (
+          <div className="mt-5 divide-y divide-white/5">
+            {list.map((c: any) => (
+              <div
+                key={c.id}
+                className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="h-9 w-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                    <Radio className="h-4 w-4 text-emerald-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-white text-sm font-medium truncate">
+                      @{c.channelUsername}
+                    </p>
+                    <p className="text-slate-500 text-xs mt-0.5 truncate">
+                      Bot: @{c.botUsername}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  data-testid={`button-disconnect-${c.id}`}
+                  onClick={() => handleDisconnect(c.id)}
+                  disabled={removingId === c.id}
+                  className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
+                >
+                  {removingId === c.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Glass>
+
+      <p className="text-slate-500 text-xs px-1">
+        Boshqa ulanishlar tez orada qo'shiladi. Hozircha faqat Telegram
+        qo'llab-quvvatlanadi.
+      </p>
+
+      {showModal && (
+        <TelegramConnectModal
+          company={company}
+          onClose={() => setShowModal(false)}
+          onConnected={() => {
+            setShowModal(false);
+            refetch();
+            queryClient.invalidateQueries({
+              queryKey: channelsQueryKey,
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1459,14 +1632,13 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
     ? `${user.firstName} ${user.lastName}`.trim()
     : "Aziz Karimov";
   const initial = (user?.firstName?.[0] || "A").toUpperCase();
-  const subLabel = user?.channelUsername
-    ? `@${user.channelUsername}`
-    : "Pro plan";
+  const subLabel = user?.company || "Pro plan";
 
   const items = [
     { key: "dashboard", label: "Dashboard", icon: Home },
     { key: "create", label: "Create Post", icon: PlusCircle },
     { key: "history", label: "History", icon: History },
+    { key: "connectors", label: "Connectors", icon: Send },
     { key: "settings", label: "Settings", icon: Settings },
     { key: "profile", label: "Profile", icon: User },
   ];
@@ -1524,7 +1696,7 @@ function BottomNav({ active, setActive }: any) {
     { key: "dashboard", label: "Home", icon: Home },
     { key: "create", label: "Create", icon: PlusCircle },
     { key: "history", label: "History", icon: History },
-    { key: "settings", label: "Settings", icon: Settings },
+    { key: "connectors", label: "Connect", icon: Send },
     { key: "profile", label: "Profile", icon: User },
   ];
 
@@ -1851,6 +2023,11 @@ function Results({
   selectedImages,
   onToggleImage,
   error,
+  channels,
+  channelsLoading,
+  selectedChannelId,
+  onSelectChannel,
+  onGoConnectors,
   onPreview,
   onApprove,
   onReject,
@@ -2099,6 +2276,58 @@ function Results({
         </div>
       </Glass>
 
+      {/* ── PUBLISH TO ── */}
+      <Glass className="p-6">
+        <h3 className="text-white font-semibold mb-1">
+          📤 Qayerga post qilamiz
+        </h3>
+        {channelsLoading ? (
+          <div className="flex items-center gap-2 text-slate-400 text-sm mt-3">
+            <Loader2 className="h-4 w-4 animate-spin" /> Ulangan kanallar
+            yuklanmoqda...
+          </div>
+        ) : !channels || channels.length === 0 ? (
+          <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-3 justify-between bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3.5">
+            <p className="text-amber-300 text-sm">
+              Hali birorta ham Telegram kanal ulanmagan. Post qilish uchun avval
+              kanal ulang.
+            </p>
+            <button
+              data-testid="button-goto-connectors"
+              onClick={onGoConnectors}
+              className="shrink-0 flex items-center justify-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium"
+            >
+              <Link2 className="h-3.5 w-3.5" /> Telegram ulash
+            </button>
+          </div>
+        ) : (
+          <div className="mt-3 grid gap-2">
+            {channels.map((c: any) => (
+              <button
+                key={c.id}
+                data-testid={`button-select-channel-${c.id}`}
+                onClick={() => onSelectChannel(c.id)}
+                className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition ${
+                  selectedChannelId === c.id
+                    ? "border-violet-400 bg-violet-500/10"
+                    : "border-white/10 bg-white/5 hover:border-white/20"
+                }`}
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <Send className="h-4 w-4 text-blue-400 shrink-0" />
+                  <span className="text-sm text-white truncate">
+                    @{c.channelUsername}
+                  </span>
+                </span>
+                {selectedChannelId === c.id && (
+                  <Check className="h-4 w-4 text-violet-400 shrink-0" />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </Glass>
+
       <div className="flex flex-wrap gap-3">
         <button
           data-testid="button-preview"
@@ -2110,6 +2339,7 @@ function Results({
         <button
           data-testid="button-approve"
           onClick={() => onApprove()}
+          disabled={!selectedChannelId}
           className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <ThumbsUp className="h-4 w-4" /> Approve & Publish
@@ -2253,6 +2483,7 @@ function TelegramPreviewModal({
 
 function Publishing({
   user,
+  channelId,
   form,
   enrichData,
   selectedImages,
@@ -2264,6 +2495,10 @@ function Publishing({
 
   useEffect(() => {
     async function run() {
+      if (!channelId) {
+        onError?.("Post qilish uchun avval Telegram kanal tanlang.");
+        return;
+      }
       const postText =
         enrichData?.postText || `${form.name} — ${form.price} UZS`;
       const imageUrls = (selectedImages || []).map((img: any) => img.url);
@@ -2271,6 +2506,7 @@ function Publishing({
         await publishPost.mutateAsync({
           data: {
             userId: user?.id || 1,
+            channelId,
             text: postText,
             ...(imageUrls.length ? { imageUrls } : {}),
           },
@@ -2439,7 +2675,7 @@ function Toggle({ checked, onChange }: any) {
   );
 }
 
-function SettingsPage() {
+function SettingsPage({ onOpenConnectors }: any) {
   const [s, setS] = useState({
     autoPublish: false,
     skipPreview: false,
@@ -2474,6 +2710,26 @@ function SettingsPage() {
   ];
   return (
     <div className="p-6 md:p-10 max-w-2xl space-y-4">
+      <button
+        data-testid="button-settings-connectors"
+        onClick={onOpenConnectors}
+        className="w-full"
+      >
+        <Glass className="p-6 flex items-center justify-between hover:border-white/20 transition">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-white/5 flex items-center justify-center">
+              <Send className="h-4 w-4 text-blue-400" />
+            </div>
+            <div className="text-left">
+              <p className="text-white text-sm font-medium">Connectors</p>
+              <p className="text-slate-500 text-xs mt-0.5">
+                Manage connected Telegram channels
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500" />
+        </Glass>
+      </button>
       <Glass className="p-6 divide-y divide-white/5">
         {rows.map((r) => {
           const Icon = r.icon;
@@ -2523,7 +2779,7 @@ function SettingsPage() {
 // PROFILE
 // ---------------------------------------------------------------------------
 
-function ProfilePage({ user, onLogout }: any) {
+function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
   const { data: stats } = useGetUserStats(
     { userId: user?.id },
     {
@@ -2546,9 +2802,8 @@ function ProfilePage({ user, onLogout }: any) {
     ? `${user.firstName} ${user.lastName}`.trim()
     : "Aziz Karimov";
   const initial = (user?.firstName?.[0] || "A").toUpperCase();
-  const subLabel = user
-    ? `@${user.telegramUsername} · ${user.company}`
-    : "aziz@onestore.uz · OneStore LLC";
+  const subLabel = user?.company || "OneStore LLC";
+  const channelList = channels || [];
 
   return (
     <div className="p-6 md:p-10 max-w-2xl space-y-6">
@@ -2586,26 +2841,35 @@ function ProfilePage({ user, onLogout }: any) {
           accent="bg-emerald-600"
         />
       </div>
-      {user?.channelUsername && (
-        <Glass className="p-6 flex items-center justify-between gap-3">
+
+      <button
+        data-testid="button-profile-connectors"
+        onClick={onOpenConnectors}
+        className="w-full"
+      >
+        <Glass className="p-6 flex items-center justify-between gap-3 hover:border-white/20 transition">
           <div className="flex items-center gap-3 min-w-0">
             <div className="h-10 w-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
               <Send className="h-4 w-4 text-blue-400" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 text-left">
               <p className="text-white text-sm font-medium truncate">
-                @{user.channelUsername}
+                {channelList.length > 0
+                  ? `${channelList.length} ta Telegram kanal ulangan`
+                  : "Hali Telegram ulanmagan"}
               </p>
               <p className="text-slate-500 text-xs mt-0.5 truncate">
-                Ulangan Telegram kanal
+                {channelList.length > 0
+                  ? channelList
+                      .map((c: any) => `@${c.channelUsername}`)
+                      .join(", ")
+                  : "Ulash uchun bosing"}
               </p>
             </div>
           </div>
-          <div className="h-7 w-7 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
-          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
         </Glass>
-      )}
+      </button>
 
       <button
         data-testid="button-profile-signout"
@@ -2659,6 +2923,24 @@ function AppShell() {
     enabled: !!firebaseUser,
   });
 
+  // Connected Telegram channels — fetched once a profile exists. Post
+  // creation reads from this (via `channels` below) to let the person pick
+  // which channel to publish to; Connectors/Profile/Sidebar all share the
+  // same query so connecting or disconnecting a channel anywhere updates
+  // everywhere at once. Scoped by firebase uid so a sign-out/sign-in with a
+  // different account in the same tab can never show (or publish to) a
+  // channel cached from the previous account.
+  const {
+    data: channels,
+    isLoading: channelsLoading,
+    refetch: refetchChannels,
+  } = useListTelegramChannels({
+    query: {
+      queryKey: [...getListTelegramChannelsQueryKey(), firebaseUser?.uid],
+      enabled: !!profile,
+    },
+  });
+
   const [navView, setNavView] = useState("dashboard");
   const [flow, setFlow] = useState("form");
   const [form, setForm] = useState({
@@ -2669,14 +2951,32 @@ function AppShell() {
   });
   const [enrichData, setEnrichData] = useState<any>(null);
   const [selectedImages, setSelectedImages] = useState<any[]>([]);
+  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(
+    null,
+  );
   const [showPreview, setShowPreview] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [generateError, setGenerateError] = useState("");
+
+  // Default the channel picker to whichever channel is currently connected
+  // (or the first one, if there are several) so the common single-channel
+  // case needs zero taps.
+  useEffect(() => {
+    if (!channels || channels.length === 0) {
+      setSelectedChannelId(null);
+      return;
+    }
+    if (!channels.some((c: any) => c.id === selectedChannelId)) {
+      setSelectedChannelId(channels[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channels]);
 
   const titles: Record<string, string> = {
     dashboard: "Dashboard",
     create: "Create Post",
     history: "History",
+    connectors: "Connectors",
     settings: "Settings",
     profile: "Profile",
   };
@@ -2710,6 +3010,11 @@ function AppShell() {
   }
 
   function handleApprove() {
+    if (!selectedChannelId) {
+      setShowPreview(false);
+      setPublishError("Post qilishdan oldin Telegram kanal tanlang.");
+      return;
+    }
     setShowPreview(false);
     setPublishError("");
     setFlow("publishing");
@@ -2737,11 +3042,17 @@ function AppShell() {
     signOut();
   }
 
+  function goToConnectors() {
+    setNavView("connectors");
+  }
+
   if (profileLoading) return <FullscreenLoader />;
 
+  // Only ever happens if the POST /api/profile call right after sign-up
+  // failed — a lightweight fallback, no Telegram involved.
   if (!profile) {
     return (
-      <OnboardingWizard
+      <ProfileFallbackForm
         firebaseUser={firebaseUser}
         onDone={() => {
           clearOnboarding();
@@ -2752,6 +3063,7 @@ function AppShell() {
   }
 
   const user = profile;
+  const channelList = channels || [];
 
   return (
     <div className="min-h-screen bg-slate-950 flex">
@@ -2796,6 +3108,7 @@ function AppShell() {
                 setForm={setForm}
                 onGenerate={() => {
                   setGenerateError("");
+                  setPublishError("");
                   setFlow("generating");
                 }}
               />
@@ -2814,6 +3127,11 @@ function AppShell() {
                 selectedImages={selectedImages}
                 onToggleImage={toggleImage}
                 error={publishError || generateError}
+                channels={channelList}
+                channelsLoading={channelsLoading}
+                selectedChannelId={selectedChannelId}
+                onSelectChannel={setSelectedChannelId}
+                onGoConnectors={goToConnectors}
                 onPreview={() => setShowPreview(true)}
                 onApprove={handleApprove}
                 onReject={resetCreate}
@@ -2822,6 +3140,7 @@ function AppShell() {
             {flow === "publishing" && (
               <Publishing
                 user={user}
+                channelId={selectedChannelId}
                 form={form}
                 enrichData={enrichData}
                 selectedImages={selectedImages}
@@ -2842,9 +3161,17 @@ function AppShell() {
         )}
 
         {navView === "history" && <HistoryPage user={user} />}
-        {navView === "settings" && <SettingsPage />}
+        {navView === "connectors" && <ConnectorsPage company={user?.company} />}
+        {navView === "settings" && (
+          <SettingsPage onOpenConnectors={goToConnectors} />
+        )}
         {navView === "profile" && (
-          <ProfilePage user={user} onLogout={handleLogout} />
+          <ProfilePage
+            user={user}
+            channels={channelList}
+            onLogout={handleLogout}
+            onOpenConnectors={goToConnectors}
+          />
         )}
       </div>
 

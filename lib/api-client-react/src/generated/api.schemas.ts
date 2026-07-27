@@ -24,11 +24,39 @@ export interface ConnectResult {
   botUsername: string;
 }
 
+export interface CreateProfileInput {
+  firstName: string;
+  lastName: string;
+  company: string;
+}
+
+export interface Profile {
+  id: number;
+  firstName: string;
+  lastName: string;
+  company: string;
+}
+
+export interface TelegramChannel {
+  id: number;
+  channelUsername: string;
+  channelId: string;
+  botUsername: string;
+}
+
+export interface ConnectTelegramChannelInput {
+  channelUsername: string;
+  botToken: string;
+}
+
 export interface PublishInput {
   userId: number;
+  /** id of the connected Telegram channel (from /api/connectors/telegram) to publish to */
+  channelId: number;
   text: string;
   /** @nullable */
   imageUrl?: string | null;
+  imageUrls?: string[];
 }
 
 export interface PublishResult {

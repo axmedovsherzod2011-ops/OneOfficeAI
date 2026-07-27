@@ -11,12 +11,7 @@ export const usersTable = pgTable("users", {
   firebaseUid: text("firebase_uid").notNull().unique(),
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
-  telegramUsername: text("telegram_username").notNull(),
   company: text("company").notNull(),
-  channelUsername: text("channel_username").notNull(),
-  channelId: text("channel_id").notNull(),
-  botToken: text("bot_token").notNull(),
-  botUsername: text("bot_username").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

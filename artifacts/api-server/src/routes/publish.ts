@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, postsTable } from "@workspace/db/schema";
-import { eq } from "drizzle-orm";
+import {
+  usersTable,
+  postsTable,
+  telegramChannelsTable,
+} from "@workspace/db/schema";
+import { and, eq } from "drizzle-orm";
 
 const router = Router();
 
@@ -32,6 +36,7 @@ function extFromContentType(contentType: string): string {
 
 type PublishBody = {
   userId: number;
+  channelId: number;
   text: string;
   imageUrl?: string;
   imageUrls?: string[];
@@ -45,6 +50,12 @@ function parsePublishBody(body: unknown): PublishBody | { error: string } {
 
   if (typeof b.userId !== "number") {
     return { error: "userId (number) is required" };
+  }
+  if (typeof b.channelId !== "number") {
+    return {
+      error:
+        "channelId (number) is required — pick which connected Telegram channel to publish to",
+    };
   }
   if (typeof b.text !== "string" || !b.text.trim()) {
     return { error: "text (non-empty string) is required" };
@@ -69,7 +80,13 @@ function parsePublishBody(body: unknown): PublishBody | { error: string } {
     imageUrl = b.imageUrl;
   }
 
-  return { userId: b.userId, text: b.text, imageUrl, imageUrls };
+  return {
+    userId: b.userId,
+    channelId: b.channelId,
+    text: b.text,
+    imageUrl,
+    imageUrls,
+  };
 }
 
 // Resolves a single image URL (either a data: URL from an upload, or an
@@ -253,7 +270,13 @@ router.post("/publish", async (req, res) => {
     return;
   }
 
-  const { userId, text, imageUrl, imageUrls } = parsed;
+  const {
+    userId,
+    channelId: telegramChannelRowId,
+    text,
+    imageUrl,
+    imageUrls,
+  } = parsed;
 
   // imageUrls (multi-select) takes precedence when present; otherwise fall
   // back to the single legacy imageUrl. Telegram albums cap out at 10 items.
@@ -261,9 +284,12 @@ router.post("/publish", async (req, res) => {
     imageUrls && imageUrls.length > 0 ? imageUrls : imageUrl ? [imageUrl] : []
   ).slice(0, 10);
 
-  // Retrieve user and their bot token from DB
+  // Retrieve user (for existence check) and the specific connected Telegram
+  // channel they picked to publish to. Scoping the channel lookup by
+  // userId too means one user can never publish through another user's
+  // connected channel, even if they somehow guessed its id.
   const [user] = await db
-    .select()
+    .select({ id: usersTable.id })
     .from(usersTable)
     .where(eq(usersTable.id, userId))
     .limit(1);
@@ -274,8 +300,26 @@ router.post("/publish", async (req, res) => {
     return;
   }
 
-  const channelId = user.channelId;
-  const botToken = user.botToken;
+  const [channel] = await db
+    .select()
+    .from(telegramChannelsTable)
+    .where(
+      and(
+        eq(telegramChannelsTable.id, telegramChannelRowId),
+        eq(telegramChannelsTable.userId, userId),
+      ),
+    )
+    .limit(1);
+  if (!channel) {
+    res.status(404).json({
+      error:
+        "Ulangan Telegram kanal topilmadi. Iltimos, Connectors bo'limidan kanal tanlang.",
+    });
+    return;
+  }
+
+  const channelId = channel.channelId;
+  const botToken = channel.botToken;
 
   let telegramMessageId: number | undefined;
 
@@ -325,6 +369,7 @@ router.post("/publish", async (req, res) => {
     .insert(postsTable)
     .values({
       userId,
+      telegramChannelId: channel.id,
       name,
       price,
       category: "General",
