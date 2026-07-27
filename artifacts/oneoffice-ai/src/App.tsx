@@ -2025,8 +2025,8 @@ function Results({
   error,
   channels,
   channelsLoading,
-  selectedChannelId,
-  onSelectChannel,
+  selectedChannelIds,
+  onToggleChannel,
   onGoConnectors,
   onPreview,
   onApprove,
@@ -2281,6 +2281,12 @@ function Results({
         <h3 className="text-white font-semibold mb-1">
           📤 Qayerga post qilamiz
         </h3>
+        {!channelsLoading && channels && channels.length > 0 && (
+          <p className="text-xs text-slate-400 mb-1">
+            Bir nechta kanal tanlashingiz mumkin — AI hammasiga bir vaqtda
+            post qiladi.
+          </p>
+        )}
         {channelsLoading ? (
           <div className="flex items-center gap-2 text-slate-400 text-sm mt-3">
             <Loader2 className="h-4 w-4 animate-spin" /> Ulangan kanallar
@@ -2302,28 +2308,43 @@ function Results({
           </div>
         ) : (
           <div className="mt-3 grid gap-2">
-            {channels.map((c: any) => (
-              <button
-                key={c.id}
-                data-testid={`button-select-channel-${c.id}`}
-                onClick={() => onSelectChannel(c.id)}
-                className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition ${
-                  selectedChannelId === c.id
-                    ? "border-violet-400 bg-violet-500/10"
-                    : "border-white/10 bg-white/5 hover:border-white/20"
-                }`}
-              >
-                <span className="flex items-center gap-2.5 min-w-0">
-                  <Send className="h-4 w-4 text-blue-400 shrink-0" />
-                  <span className="text-sm text-white truncate">
-                    @{c.channelUsername}
+            {channels.map((c: any) => {
+              const isSelected = (selectedChannelIds || []).includes(c.id);
+              return (
+                <button
+                  key={c.id}
+                  data-testid={`button-select-channel-${c.id}`}
+                  onClick={() => onToggleChannel(c.id)}
+                  className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition ${
+                    isSelected
+                      ? "border-violet-400 bg-violet-500/10"
+                      : "border-white/10 bg-white/5 hover:border-white/20"
+                  }`}
+                >
+                  <span className="flex items-center gap-2.5 min-w-0">
+                    <Send className="h-4 w-4 text-blue-400 shrink-0" />
+                    <span className="text-sm text-white truncate">
+                      @{c.channelUsername}
+                    </span>
                   </span>
-                </span>
-                {selectedChannelId === c.id && (
-                  <Check className="h-4 w-4 text-violet-400 shrink-0" />
-                )}
-              </button>
-            ))}
+                  <span
+                    className={`flex items-center justify-center h-5 w-5 rounded-md border shrink-0 ${
+                      isSelected
+                        ? "bg-violet-500 border-violet-400"
+                        : "border-white/20"
+                    }`}
+                  >
+                    {isSelected && <Check className="h-3.5 w-3.5 text-white" />}
+                  </span>
+                </button>
+              );
+            })}
+            {selectedChannelIds && selectedChannelIds.length > 1 && (
+              <p className="text-xs text-violet-300 mt-1">
+                {selectedChannelIds.length} ta kanalga bir vaqtda post
+                qilinadi.
+              </p>
+            )}
           </div>
         )}
       </Glass>
@@ -2339,7 +2360,7 @@ function Results({
         <button
           data-testid="button-approve"
           onClick={() => onApprove()}
-          disabled={!selectedChannelId}
+          disabled={!selectedChannelIds || selectedChannelIds.length === 0}
           className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <ThumbsUp className="h-4 w-4" /> Approve & Publish
@@ -2483,7 +2504,7 @@ function TelegramPreviewModal({
 
 function Publishing({
   user,
-  channelId,
+  channelIds,
   form,
   enrichData,
   selectedImages,
@@ -2495,30 +2516,65 @@ function Publishing({
 
   useEffect(() => {
     async function run() {
-      if (!channelId) {
+      const ids: number[] = channelIds || [];
+      if (ids.length === 0) {
         onError?.("Post qilish uchun avval Telegram kanal tanlang.");
         return;
       }
       const postText =
         enrichData?.postText || `${form.name} — ${form.price} UZS`;
       const imageUrls = (selectedImages || []).map((img: any) => img.url);
-      try {
-        await publishPost.mutateAsync({
-          data: {
-            userId: user?.id || 1,
-            channelId,
-            text: postText,
-            ...(imageUrls.length ? { imageUrls } : {}),
-          },
-        });
-        if (mounted.current) onDone();
-      } catch (err: any) {
-        if (mounted.current)
-          onError?.(
-            (err as any)?.data?.error ||
-              err?.message ||
+
+      // Publish to every selected channel at the same time — AI posts the
+      // same content to all of them in parallel rather than one-by-one.
+      const results = await Promise.allSettled(
+        ids.map((channelId) =>
+          publishPost.mutateAsync({
+            data: {
+              userId: user?.id || 1,
+              channelId,
+              text: postText,
+              ...(imageUrls.length ? { imageUrls } : {}),
+            },
+          }),
+        ),
+      );
+
+      if (!mounted.current) return;
+
+      const failures = results.filter(
+        (r) => r.status === "rejected",
+      ) as PromiseRejectedResult[];
+
+      if (failures.length === 0) {
+        // All channels published successfully.
+        onDone();
+      } else if (failures.length < ids.length) {
+        // Partial success — at least one channel got the post, but not all.
+        // Still take the person to the success screen (their post is live),
+        // and surface which channels failed so nothing is silently dropped.
+        const messages = failures
+          .map(
+            (f) =>
+              (f.reason as any)?.data?.error ||
+              f.reason?.message ||
+              "Noma'lum xatolik",
+          )
+          .join("; ");
+        onDone(
+          `${failures.length}/${ids.length} kanalga post qilinmadi: ${messages}`,
+        );
+      } else {
+        // Every channel failed.
+        const messages = failures
+          .map(
+            (f) =>
+              (f.reason as any)?.data?.error ||
+              f.reason?.message ||
               "Failed to publish to Telegram.",
-          );
+          )
+          .join("; ");
+        onError?.(messages);
       }
     }
     run();
@@ -2545,7 +2601,7 @@ function Publishing({
   );
 }
 
-function SuccessScreen({ form, onDone }: any) {
+function SuccessScreen({ form, onDone, warning }: any) {
   return (
     <div className="p-6 md:p-10 max-w-md">
       <Glass className="p-10 text-center">
@@ -2556,8 +2612,13 @@ function SuccessScreen({ form, onDone }: any) {
           Post Published Successfully
         </h3>
         <p className="text-slate-400 text-sm mt-2">
-          "{form.name}" is now live on your Telegram channel.
+          "{form.name}" is now live on your Telegram channel(s).
         </p>
+        {warning && (
+          <p className="mt-3 text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2.5 text-left">
+            {warning}
+          </p>
+        )}
         <button
           data-testid="button-back-to-dashboard"
           onClick={onDone}
@@ -2951,26 +3012,35 @@ function AppShell() {
   });
   const [enrichData, setEnrichData] = useState<any>(null);
   const [selectedImages, setSelectedImages] = useState<any[]>([]);
-  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(
-    null,
-  );
+  const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
   const [showPreview, setShowPreview] = useState(false);
   const [publishError, setPublishError] = useState("");
+  const [publishWarning, setPublishWarning] = useState("");
   const [generateError, setGenerateError] = useState("");
 
-  // Default the channel picker to whichever channel is currently connected
-  // (or the first one, if there are several) so the common single-channel
-  // case needs zero taps.
+  // Default the channel picker to every currently connected channel (up to
+  // MAX_TELEGRAM_CHANNELS) so posting to all of them needs zero taps — the
+  // person can still deselect any they don't want this time.
   useEffect(() => {
     if (!channels || channels.length === 0) {
-      setSelectedChannelId(null);
+      setSelectedChannelIds([]);
       return;
     }
-    if (!channels.some((c: any) => c.id === selectedChannelId)) {
-      setSelectedChannelId(channels[0].id);
-    }
+    setSelectedChannelIds((prev) => {
+      const stillValid = prev.filter((id) =>
+        channels.some((c: any) => c.id === id),
+      );
+      if (stillValid.length > 0) return stillValid;
+      return channels.map((c: any) => c.id);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channels]);
+
+  function toggleChannel(id: number) {
+    setSelectedChannelIds((prev) =>
+      prev.includes(id) ? prev.filter((cid) => cid !== id) : [...prev, id],
+    );
+  }
 
   const titles: Record<string, string> = {
     dashboard: "Dashboard",
@@ -2988,6 +3058,7 @@ function AppShell() {
     setSelectedImages([]);
     setShowPreview(false);
     setPublishError("");
+    setPublishWarning("");
     setGenerateError("");
   }
 
@@ -3010,9 +3081,9 @@ function AppShell() {
   }
 
   function handleApprove() {
-    if (!selectedChannelId) {
+    if (selectedChannelIds.length === 0) {
       setShowPreview(false);
-      setPublishError("Post qilishdan oldin Telegram kanal tanlang.");
+      setPublishError("Post qilishdan oldin kamida bitta Telegram kanal tanlang.");
       return;
     }
     setShowPreview(false);
@@ -3020,7 +3091,7 @@ function AppShell() {
     setFlow("publishing");
   }
 
-  function handlePublishDone() {
+  function handlePublishDone(warning?: string) {
     if (profile?.id) {
       appQueryClient.invalidateQueries({
         queryKey: getListPostsQueryKey({ userId: profile.id }),
@@ -3029,6 +3100,7 @@ function AppShell() {
         queryKey: getGetUserStatsQueryKey({ userId: profile.id }),
       });
     }
+    setPublishWarning(warning || "");
     setFlow("success");
   }
 
@@ -3129,8 +3201,8 @@ function AppShell() {
                 error={publishError || generateError}
                 channels={channelList}
                 channelsLoading={channelsLoading}
-                selectedChannelId={selectedChannelId}
-                onSelectChannel={setSelectedChannelId}
+                selectedChannelIds={selectedChannelIds}
+                onToggleChannel={toggleChannel}
                 onGoConnectors={goToConnectors}
                 onPreview={() => setShowPreview(true)}
                 onApprove={handleApprove}
@@ -3140,7 +3212,7 @@ function AppShell() {
             {flow === "publishing" && (
               <Publishing
                 user={user}
-                channelId={selectedChannelId}
+                channelIds={selectedChannelIds}
                 form={form}
                 enrichData={enrichData}
                 selectedImages={selectedImages}
@@ -3151,6 +3223,7 @@ function AppShell() {
             {flow === "success" && (
               <SuccessScreen
                 form={form}
+                warning={publishWarning}
                 onDone={() => {
                   setNavView("dashboard");
                   resetCreate();
