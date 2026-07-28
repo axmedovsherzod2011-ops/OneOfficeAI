@@ -10,7 +10,13 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Neon (and most managed Postgres providers reached over the public
+// internet) require TLS. `rejectUnauthorized: true` validates against
+// Neon's publicly-trusted certificate chain.
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: true },
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";

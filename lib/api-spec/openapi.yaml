@@ -87,46 +87,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /posts:
-    get:
-      operationId: listPosts
-      tags: [posts]
-      summary: List posts for a user
-      parameters:
-        - name: userId
-          in: query
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: List of posts
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Post"
-
-  /stats:
-    get:
-      operationId: getUserStats
-      tags: [posts]
-      summary: Get user stats
-      parameters:
-        - name: userId
-          in: query
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: User statistics
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UserStats"
-
   /enrich:
     post:
       operationId: enrichProduct
@@ -246,46 +206,6 @@ components:
         success:
           type: boolean
         messageId:
-          type: integer
-
-    Post:
-      type: object
-      required:
-        - id
-        - name
-        - price
-        - category
-        - status
-        - createdAt
-      properties:
-        id:
-          type: integer
-        name:
-          type: string
-        price:
-          type: string
-        category:
-          type: string
-        status:
-          type: string
-        createdAt:
-          type: string
-
-    UserStats:
-      type: object
-      required:
-        - total
-        - published
-        - pending
-        - rejected
-      properties:
-        total:
-          type: integer
-        published:
-          type: integer
-        pending:
-          type: integer
-        rejected:
           type: integer
 
     EnrichInput:

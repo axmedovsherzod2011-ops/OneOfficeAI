@@ -10,7 +10,7 @@ AI-powered SaaS platform for Uzbek e-commerce sellers to auto-generate and publi
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string (pre-provisioned by Replit)
+- Required env: `DATABASE_URL` — Neon PostgreSQL connection string, set as a Replit Secret (no longer Replit's built-in DB)
 
 ## Stack
 

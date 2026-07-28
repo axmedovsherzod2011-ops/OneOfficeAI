@@ -27,17 +27,13 @@ import type {
   EnrichInput,
   EnrichResult,
   ErrorResponse,
-  GetUserStatsParams,
   HealthStatus,
   ImageSearchResult,
-  ListPostsParams,
-  Post,
   Profile,
   PublishInput,
   PublishResult,
   SearchImagesParams,
-  TelegramChannel,
-  UserStats
+  TelegramChannel
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -521,174 +517,6 @@ export const usePublishPost = <TError = ErrorType<ErrorResponse>,
       > => {
       return useMutation(getPublishPostMutationOptions(options));
     }
-
-export const getListPostsUrl = (params: ListPostsParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/api/posts?${stringifiedParams}` : `/api/posts`
-}
-
-/**
- * @summary List posts for a user
- */
-export const listPosts = async (params: ListPostsParams, options?: RequestInit): Promise<Post[]> => {
-
-  return customFetch<Post[]>(getListPostsUrl(params),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getListPostsQueryKey = (params?: ListPostsParams,) => {
-    return [
-    `/api/posts`, ...(params ? [params] : [])
-    ] as const;
-    }
-
-
-export const getListPostsQueryOptions = <TData = Awaited<ReturnType<typeof listPosts>>, TError = ErrorType<unknown>>(params: ListPostsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listPosts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getListPostsQueryKey(params);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listPosts>>> = ({ signal }) => listPosts(params, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listPosts>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type ListPostsQueryResult = NonNullable<Awaited<ReturnType<typeof listPosts>>>
-export type ListPostsQueryError = ErrorType<unknown>
-
-
-/**
- * @summary List posts for a user
- */
-
-export function useListPosts<TData = Awaited<ReturnType<typeof listPosts>>, TError = ErrorType<unknown>>(
- params: ListPostsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listPosts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getListPostsQueryOptions(params,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
-
-export const getGetUserStatsUrl = (params: GetUserStatsParams,) => {
-  const normalizedParams = new URLSearchParams();
-
-  Object.entries(params || {}).forEach(([key, value]) => {
-
-    if (value !== undefined) {
-      normalizedParams.append(key, value === null ? 'null' : String(value))
-    }
-  });
-
-  const stringifiedParams = normalizedParams.toString();
-
-  return stringifiedParams.length > 0 ? `/api/stats?${stringifiedParams}` : `/api/stats`
-}
-
-/**
- * @summary Get user stats
- */
-export const getUserStats = async (params: GetUserStatsParams, options?: RequestInit): Promise<UserStats> => {
-
-  return customFetch<UserStats>(getGetUserStatsUrl(params),
-  {
-    ...options,
-    method: 'GET'
-
-
-  }
-);}
-
-
-
-
-
-export const getGetUserStatsQueryKey = (params?: GetUserStatsParams,) => {
-    return [
-    `/api/stats`, ...(params ? [params] : [])
-    ] as const;
-    }
-
-
-export const getGetUserStatsQueryOptions = <TData = Awaited<ReturnType<typeof getUserStats>>, TError = ErrorType<unknown>>(params: GetUserStatsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getUserStats>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-) => {
-
-const {query: queryOptions, request: requestOptions} = options ?? {};
-
-  const queryKey =  queryOptions?.queryKey ?? getGetUserStatsQueryKey(params);
-
-
-
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getUserStats>>> = ({ signal }) => getUserStats(params, { signal, ...requestOptions });
-
-
-
-
-
-   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getUserStats>>, TError, TData> & { queryKey: QueryKey }
-}
-
-export type GetUserStatsQueryResult = NonNullable<Awaited<ReturnType<typeof getUserStats>>>
-export type GetUserStatsQueryError = ErrorType<unknown>
-
-
-/**
- * @summary Get user stats
- */
-
-export function useGetUserStats<TData = Awaited<ReturnType<typeof getUserStats>>, TError = ErrorType<unknown>>(
- params: GetUserStatsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getUserStats>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
-
- ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-
-  const queryOptions = getGetUserStatsQueryOptions(params,options)
-
-  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  return withQueryKey(query, queryOptions.queryKey);
-}
-
-
-
-
-
-
 
 export const getEnrichProductUrl = () => {
 

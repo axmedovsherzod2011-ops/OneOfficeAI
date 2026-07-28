@@ -64,22 +64,6 @@ export interface PublishResult {
   messageId: number;
 }
 
-export interface Post {
-  id: number;
-  name: string;
-  price: string;
-  category: string;
-  status: string;
-  createdAt: string;
-}
-
-export interface UserStats {
-  total: number;
-  published: number;
-  pending: number;
-  rejected: number;
-}
-
 export interface EnrichInput {
   name: string;
   price: string;
@@ -119,14 +103,6 @@ export interface ImageSearchResult {
 export interface ErrorResponse {
   error: string;
 }
-
-export type ListPostsParams = {
-userId: number;
-};
-
-export type GetUserStatsParams = {
-userId: number;
-};
 
 export type SearchImagesParams = {
 q: string;

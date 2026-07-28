@@ -21,7 +21,6 @@ import {
   Sparkles,
   Home,
   PlusCircle,
-  History,
   Settings,
   User,
   Bell,
@@ -39,7 +38,6 @@ import {
   ArrowRight,
   Play,
   Loader2,
-  ShieldCheck,
   Send,
   Eye,
   ThumbsUp,
@@ -76,11 +74,7 @@ import {
   useDisconnectTelegramChannel,
   getListTelegramChannelsQueryKey,
   usePublishPost,
-  useListPosts,
-  useGetUserStats,
   useEnrichProduct,
-  getListPostsQueryKey,
-  getGetUserStatsQueryKey,
 } from "@workspace/api-client-react";
 
 import {
@@ -144,49 +138,6 @@ const IMAGE_STYLES = [
     to: "to-indigo-950",
     text: "text-white",
     accent: "bg-violet-500",
-  },
-];
-
-const seedHistory = [
-  {
-    id: 1,
-    name: "AeroSound Pro Earbuds",
-    price: "349,000",
-    category: "Electronics",
-    status: "Published",
-    date: "Jul 14",
-  },
-  {
-    id: 2,
-    name: "Velour Oversized Hoodie",
-    price: "219,000",
-    category: "Fashion",
-    status: "Published",
-    date: "Jul 12",
-  },
-  {
-    id: 3,
-    name: "Nimbus Ceramic Vase Set",
-    price: "128,000",
-    category: "Home & Living",
-    status: "Pending",
-    date: "Jul 11",
-  },
-  {
-    id: 4,
-    name: "GlowLux Serum 30ml",
-    price: "97,000",
-    category: "Beauty",
-    status: "Rejected",
-    date: "Jul 9",
-  },
-  {
-    id: 5,
-    name: "TrailBlaze Running Shoes",
-    price: "412,000",
-    category: "Sports",
-    status: "Published",
-    date: "Jul 6",
   },
 ];
 
@@ -335,42 +286,6 @@ function Glass({
     >
       {children}
     </div>
-  );
-}
-
-function StatCard({ icon: Icon, label, value, sub, accent }: any) {
-  return (
-    <Glass className="p-6 flex-1 min-w-0">
-      <div className="flex items-center justify-between mb-4">
-        <div
-          className={`h-11 w-11 rounded-2xl flex items-center justify-center ${accent}`}
-        >
-          <Icon className="h-5 w-5 text-white" />
-        </div>
-        {sub && (
-          <span className="text-xs text-emerald-400 font-medium">{sub}</span>
-        )}
-      </div>
-      <p className="text-2xl md:text-3xl font-semibold text-white tracking-tight truncate">
-        {value}
-      </p>
-      <p className="text-sm text-slate-400 mt-1 truncate">{label}</p>
-    </Glass>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    Published: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-    Pending: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-    Rejected: "bg-rose-500/15 text-rose-400 border-rose-500/30",
-  };
-  return (
-    <span
-      className={`text-xs px-2.5 py-1 rounded-full border font-medium ${map[status] || map.Pending}`}
-    >
-      {status}
-    </span>
   );
 }
 
@@ -596,6 +511,83 @@ function Landing({
       <div className="relative z-10 text-center text-xs text-slate-600 pb-6">
         OneOffice AI — MVP preview. All AI output shown is simulated for
         demonstration.
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WELCOME SCREEN — the very first thing a person sees on a device that has
+// never had an account created on it. Once an account is created (or the
+// person signs in) on this device, ONBOARDING_KEY is persisted to
+// localStorage and this screen is skipped on every future visit — see
+// AppRoutes below. If the person navigates away without finishing sign-up
+// (e.g. refreshes), nothing is persisted, so Welcome shows again.
+// ---------------------------------------------------------------------------
+
+const WELCOME_FEATURES = [
+  { icon: Wand2, text: "Mahsulot nomi va narxini kiriting — AI qolganini bajaradi" },
+  { icon: ImageIcon, text: "Professional rasm va dizayn avtomatik tayyorlanadi" },
+  { icon: Send, text: "Bir tegining bilan Telegram kanal(lar)ingizga post qiling" },
+];
+
+function WelcomeScreen({
+  onGetStarted,
+  onSignIn,
+}: {
+  onGetStarted: () => void;
+  onSignIn: () => void;
+}) {
+  return (
+    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center px-6 py-10">
+      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
+      <GradientBlob className="h-96 w-96 bg-blue-600 top-1/3 -right-32" />
+      <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 left-1/3" />
+
+      <div className="relative z-10 flex flex-col items-center text-center max-w-md w-full">
+        <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center mb-6 shadow-lg shadow-violet-900/40">
+          <Sparkles className="h-8 w-8 text-white" />
+        </div>
+        <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">
+          OneOffice AI'ga xush kelibsiz
+        </h1>
+        <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+          Telegram do'koningiz uchun sun'iy intellekt yordamida bir necha
+          soniyada professional postlar yarating.
+        </p>
+
+        <Glass className="w-full p-6 mb-8 text-left">
+          <div className="space-y-4">
+            {WELCOME_FEATURES.map((f, i) => {
+              const Icon = f.icon;
+              return (
+                <div key={i} className="flex items-start gap-3">
+                  <div className="h-9 w-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
+                    <Icon className="h-4 w-4 text-violet-300" />
+                  </div>
+                  <p className="text-sm text-slate-300 leading-relaxed mt-1.5">
+                    {f.text}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </Glass>
+
+        <button
+          data-testid="button-welcome-get-started"
+          onClick={onGetStarted}
+          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/40 hover:shadow-violet-700/40 transition mb-3"
+        >
+          Boshlash <ArrowRight className="h-4 w-4" />
+        </button>
+        <button
+          data-testid="button-welcome-signin"
+          onClick={onSignIn}
+          className="text-sm text-slate-400 hover:text-white transition"
+        >
+          Hisobingiz bormi? Kirish
+        </button>
       </div>
     </div>
   );
@@ -1637,7 +1629,6 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
   const items = [
     { key: "dashboard", label: "Dashboard", icon: Home },
     { key: "create", label: "Create Post", icon: PlusCircle },
-    { key: "history", label: "History", icon: History },
     { key: "connectors", label: "Connectors", icon: Send },
     { key: "settings", label: "Settings", icon: Settings },
     { key: "profile", label: "Profile", icon: User },
@@ -1695,7 +1686,6 @@ function BottomNav({ active, setActive }: any) {
   const items = [
     { key: "dashboard", label: "Home", icon: Home },
     { key: "create", label: "Create", icon: PlusCircle },
-    { key: "history", label: "History", icon: History },
     { key: "connectors", label: "Connect", icon: Send },
     { key: "profile", label: "Profile", icon: User },
   ];
@@ -1760,17 +1750,8 @@ function Topbar({ title, onNewPost }: any) {
 // ---------------------------------------------------------------------------
 
 function Dashboard({ goCreate, user }: any) {
-  const { data: stats } = useGetUserStats(
-    { userId: user?.id },
-    {
-      query: {
-        enabled: !!user?.id,
-        queryKey: getGetUserStatsQueryKey({ userId: user?.id }),
-      },
-    },
-  );
-
-  void stats; // reserved for future stat cards
+  void goCreate;
+  void user;
 
   return (
     <div className="p-6 md:p-10 space-y-8">
@@ -2278,13 +2259,20 @@ function Results({
 
       {/* ── PUBLISH TO ── */}
       <Glass className="p-6">
-        <h3 className="text-white font-semibold mb-1">
-          📤 Qayerga post qilamiz
-        </h3>
-        {!channelsLoading && channels && channels.length > 0 && (
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-white font-semibold">
+            📤 Qayerga post qilamiz
+          </h3>
+          {channels && channels.length > 0 && (
+            <span className="text-xs text-slate-500">
+              {selectedChannelIds.length}/{channels.length} tanlandi
+            </span>
+          )}
+        </div>
+        {channels && channels.length > 1 && (
           <p className="text-xs text-slate-400 mb-1">
-            Bir nechta kanal tanlashingiz mumkin — AI hammasiga bir vaqtda
-            post qiladi.
+            Bir nechta kanalni belgilashingiz mumkin — post barchasiga
+            yuboriladi.
           </p>
         )}
         {channelsLoading ? (
@@ -2309,14 +2297,15 @@ function Results({
         ) : (
           <div className="mt-3 grid gap-2">
             {channels.map((c: any) => {
-              const isSelected = (selectedChannelIds || []).includes(c.id);
+              const checked = selectedChannelIds.includes(c.id);
               return (
                 <button
                   key={c.id}
                   data-testid={`button-select-channel-${c.id}`}
                   onClick={() => onToggleChannel(c.id)}
+                  aria-pressed={checked}
                   className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition ${
-                    isSelected
+                    checked
                       ? "border-violet-400 bg-violet-500/10"
                       : "border-white/10 bg-white/5 hover:border-white/20"
                   }`}
@@ -2328,23 +2317,17 @@ function Results({
                     </span>
                   </span>
                   <span
-                    className={`flex items-center justify-center h-5 w-5 rounded-md border shrink-0 ${
-                      isSelected
-                        ? "bg-violet-500 border-violet-400"
+                    className={`h-5 w-5 rounded-md border flex items-center justify-center shrink-0 transition ${
+                      checked
+                        ? "bg-violet-500 border-violet-500"
                         : "border-white/20"
                     }`}
                   >
-                    {isSelected && <Check className="h-3.5 w-3.5 text-white" />}
+                    {checked && <Check className="h-3.5 w-3.5 text-white" />}
                   </span>
                 </button>
               );
             })}
-            {selectedChannelIds && selectedChannelIds.length > 1 && (
-              <p className="text-xs text-violet-300 mt-1">
-                {selectedChannelIds.length} ta kanalga bir vaqtda post
-                qilinadi.
-              </p>
-            )}
           </div>
         )}
       </Glass>
@@ -2360,7 +2343,7 @@ function Results({
         <button
           data-testid="button-approve"
           onClick={() => onApprove()}
-          disabled={!selectedChannelIds || selectedChannelIds.length === 0}
+          disabled={selectedChannelIds.length === 0}
           className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <ThumbsUp className="h-4 w-4" /> Approve & Publish
@@ -2513,74 +2496,56 @@ function Publishing({
 }: any) {
   const publishPost = usePublishPost();
   const mounted = useRef(true);
+  const [doneCount, setDoneCount] = useState(0);
+  const ids: number[] = channelIds || [];
 
   useEffect(() => {
     async function run() {
-      const ids: number[] = channelIds || [];
-      if (ids.length === 0) {
-        onError?.("Post qilish uchun avval Telegram kanal tanlang.");
+      if (!ids.length) {
+        onError?.("Post qilish uchun avval kamida bitta Telegram kanal tanlang.");
         return;
       }
       const postText =
         enrichData?.postText || `${form.name} — ${form.price} UZS`;
       const imageUrls = (selectedImages || []).map((img: any) => img.url);
 
-      // Publish to every selected channel at the same time — AI posts the
-      // same content to all of them in parallel rather than one-by-one.
-      const results = await Promise.allSettled(
-        ids.map((channelId) =>
-          publishPost.mutateAsync({
+      // Publish to each selected channel; keep going even if one fails so a
+      // problem with one channel doesn't block the others.
+      const failures: string[] = [];
+      for (const channelId of ids) {
+        try {
+          await publishPost.mutateAsync({
             data: {
               userId: user?.id || 1,
               channelId,
               text: postText,
               ...(imageUrls.length ? { imageUrls } : {}),
             },
-          }),
-        ),
-      );
+          });
+          if (mounted.current) setDoneCount((n) => n + 1);
+        } catch (err: any) {
+          failures.push(
+            (err as any)?.data?.error || err?.message || `Kanal #${channelId}`,
+          );
+        }
+      }
 
       if (!mounted.current) return;
-
-      const failures = results.filter(
-        (r) => r.status === "rejected",
-      ) as PromiseRejectedResult[];
-
-      if (failures.length === 0) {
-        // All channels published successfully.
-        onDone();
-      } else if (failures.length < ids.length) {
-        // Partial success — at least one channel got the post, but not all.
-        // Still take the person to the success screen (their post is live),
-        // and surface which channels failed so nothing is silently dropped.
-        const messages = failures
-          .map(
-            (f) =>
-              (f.reason as any)?.data?.error ||
-              f.reason?.message ||
-              "Noma'lum xatolik",
-          )
-          .join("; ");
-        onDone(
-          `${failures.length}/${ids.length} kanalga post qilinmadi: ${messages}`,
+      if (failures.length === ids.length) {
+        onError?.(`Telegram'ga post qilishda xatolik: ${failures.join(", ")}`);
+      } else if (failures.length > 0) {
+        onError?.(
+          `Ba'zi kanallarga post qilinmadi: ${failures.join(", ")}. Qolganlariga muvaffaqiyatli joylandi.`,
         );
       } else {
-        // Every channel failed.
-        const messages = failures
-          .map(
-            (f) =>
-              (f.reason as any)?.data?.error ||
-              f.reason?.message ||
-              "Failed to publish to Telegram.",
-          )
-          .join("; ");
-        onError?.(messages);
+        onDone();
       }
     }
     run();
     return () => {
       mounted.current = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -2595,13 +2560,17 @@ function Publishing({
         <h3 className="text-white font-semibold text-lg">
           Publishing to Telegram...
         </h3>
-        <p className="text-slate-400 text-sm mt-1">Please wait a moment.</p>
+        <p className="text-slate-400 text-sm mt-1">
+          {ids.length > 1
+            ? `${doneCount}/${ids.length} kanalga joylandi...`
+            : "Please wait a moment."}
+        </p>
       </Glass>
     </div>
   );
 }
 
-function SuccessScreen({ form, onDone, warning }: any) {
+function SuccessScreen({ form, onDone }: any) {
   return (
     <div className="p-6 md:p-10 max-w-md">
       <Glass className="p-10 text-center">
@@ -2612,13 +2581,8 @@ function SuccessScreen({ form, onDone, warning }: any) {
           Post Published Successfully
         </h3>
         <p className="text-slate-400 text-sm mt-2">
-          "{form.name}" is now live on your Telegram channel(s).
+          "{form.name}" is now live on your Telegram channel.
         </p>
-        {warning && (
-          <p className="mt-3 text-amber-300 text-xs bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2.5 text-left">
-            {warning}
-          </p>
-        )}
         <button
           data-testid="button-back-to-dashboard"
           onClick={onDone}
@@ -2627,94 +2591,6 @@ function SuccessScreen({ form, onDone, warning }: any) {
           Back to Dashboard
         </button>
       </Glass>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// HISTORY
-// ---------------------------------------------------------------------------
-
-function HistoryPage({ user }: any) {
-  const { data: posts } = useListPosts(
-    { userId: user?.id },
-    {
-      query: {
-        enabled: !!user?.id,
-        queryKey: getListPostsQueryKey({ userId: user?.id }),
-      },
-    },
-  );
-
-  const displayPosts = posts || seedHistory;
-
-  const [q, setQ] = useState("");
-  const [filter, setFilter] = useState("All");
-
-  const filtered = displayPosts.filter(
-    (h: any) =>
-      (filter === "All" || h.status === filter) &&
-      h.name.toLowerCase().includes(q.toLowerCase()),
-  );
-
-  return (
-    <div className="p-6 md:p-10 space-y-6">
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="h-4 w-4 text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search posts..."
-            className="w-full bg-white/5 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-          />
-        </div>
-        <div className="flex gap-2">
-          {["All", "Published", "Pending", "Rejected"].map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-4 py-2 rounded-xl text-xs font-medium border transition ${filter === f ? "bg-violet-500/20 border-violet-400/40 text-white" : "border-white/10 text-slate-400 hover:text-white"}`}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        {filtered.map((h: any) => (
-          <Glass
-            key={h.id}
-            className="p-5 flex items-center justify-between min-w-0"
-          >
-            <div className="flex items-center gap-4 min-w-0">
-              <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-violet-500/30 to-blue-500/30 flex items-center justify-center shrink-0">
-                <Package className="h-5 w-5 text-violet-300" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-white text-sm font-medium truncate">
-                  {h.name}
-                </p>
-                <p className="text-slate-500 text-xs mt-0.5 truncate">
-                  {h.category} · {h.createdAt || h.date}
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-col items-end gap-2 shrink-0">
-              <span className="text-sm text-slate-300">
-                {h.price} {String(h.price).includes("UZS") ? "" : "UZS"}
-              </span>
-              <StatusPill status={h.status} />
-            </div>
-          </Glass>
-        ))}
-        {filtered.length === 0 && (
-          <p className="text-slate-500 text-sm col-span-2 text-center py-10">
-            No posts match your search.
-          </p>
-        )}
-      </div>
     </div>
   );
 }
@@ -2841,24 +2717,6 @@ function SettingsPage({ onOpenConnectors }: any) {
 // ---------------------------------------------------------------------------
 
 function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
-  const { data: stats } = useGetUserStats(
-    { userId: user?.id },
-    {
-      query: {
-        enabled: !!user?.id,
-        queryKey: getGetUserStatsQueryKey({ userId: user?.id }),
-      },
-    },
-  );
-
-  const displayStats = stats || {
-    total: 128,
-    published: 109,
-    pending: 4,
-    rejected: 0,
-  };
-  const accuracy = "98.7%";
-
   const displayName = user
     ? `${user.firstName} ${user.lastName}`.trim()
     : "Aziz Karimov";
@@ -2879,29 +2737,6 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
           <p className="text-slate-400 text-sm truncate">{subLabel}</p>
         </div>
       </Glass>
-      <div className="grid grid-cols-3 gap-4">
-        <StatCard
-          icon={FileText}
-          label="Total Posts"
-          value={displayStats.total}
-          sub=""
-          accent="bg-violet-600"
-        />
-        <StatCard
-          icon={Rocket}
-          label="Published"
-          value={displayStats.published}
-          sub=""
-          accent="bg-blue-600"
-        />
-        <StatCard
-          icon={ShieldCheck}
-          label="Accuracy"
-          value={accuracy}
-          sub=""
-          accent="bg-emerald-600"
-        />
-      </div>
 
       <button
         data-testid="button-profile-connectors"
@@ -2964,7 +2799,6 @@ function FullscreenLoader() {
 
 function AppShell() {
   const { user: firebaseUser, signOut } = useAuth();
-  const appQueryClient = useQueryClient();
 
   const {
     data: profile,
@@ -3015,12 +2849,12 @@ function AppShell() {
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([]);
   const [showPreview, setShowPreview] = useState(false);
   const [publishError, setPublishError] = useState("");
-  const [publishWarning, setPublishWarning] = useState("");
   const [generateError, setGenerateError] = useState("");
 
-  // Default the channel picker to every currently connected channel (up to
-  // MAX_TELEGRAM_CHANNELS) so posting to all of them needs zero taps — the
-  // person can still deselect any they don't want this time.
+  // Default the channel picker to whichever channel is currently connected
+  // (or the first one, if there are several) so the common single-channel
+  // case needs zero taps. Multiple channels are supported — the person can
+  // tap to add or remove any of them before publishing.
   useEffect(() => {
     if (!channels || channels.length === 0) {
       setSelectedChannelIds([]);
@@ -3031,9 +2865,8 @@ function AppShell() {
         channels.some((c: any) => c.id === id),
       );
       if (stillValid.length > 0) return stillValid;
-      return channels.map((c: any) => c.id);
+      return [channels[0].id];
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channels]);
 
   function toggleChannel(id: number) {
@@ -3045,7 +2878,6 @@ function AppShell() {
   const titles: Record<string, string> = {
     dashboard: "Dashboard",
     create: "Create Post",
-    history: "History",
     connectors: "Connectors",
     settings: "Settings",
     profile: "Profile",
@@ -3058,7 +2890,6 @@ function AppShell() {
     setSelectedImages([]);
     setShowPreview(false);
     setPublishError("");
-    setPublishWarning("");
     setGenerateError("");
   }
 
@@ -3091,16 +2922,7 @@ function AppShell() {
     setFlow("publishing");
   }
 
-  function handlePublishDone(warning?: string) {
-    if (profile?.id) {
-      appQueryClient.invalidateQueries({
-        queryKey: getListPostsQueryKey({ userId: profile.id }),
-      });
-      appQueryClient.invalidateQueries({
-        queryKey: getGetUserStatsQueryKey({ userId: profile.id }),
-      });
-    }
-    setPublishWarning(warning || "");
+  function handlePublishDone() {
     setFlow("success");
   }
 
@@ -3223,7 +3045,6 @@ function AppShell() {
             {flow === "success" && (
               <SuccessScreen
                 form={form}
-                warning={publishWarning}
                 onDone={() => {
                   setNavView("dashboard");
                   resetCreate();
@@ -3233,7 +3054,6 @@ function AppShell() {
           </>
         )}
 
-        {navView === "history" && <HistoryPage user={user} />}
         {navView === "connectors" && <ConnectorsPage company={user?.company} />}
         {navView === "settings" && (
           <SettingsPage onOpenConnectors={goToConnectors} />
@@ -3278,6 +3098,25 @@ function AppShell() {
 function AppRoutes() {
   const [, setLocation] = useLocation();
   const { user, isLoaded } = useAuth();
+  // Whether an account has ever been created/signed-into on THIS device.
+  // Read once from localStorage; only ever flips true (never reset here) —
+  // it flips as soon as sign-up/sign-in actually succeeds, via the effect
+  // below, not just from tapping "Boshlash".
+  const [accountOnDevice, setAccountOnDevice] = useState<boolean>(
+    () => !!loadOnboarding(),
+  );
+  // Local-only override so tapping "Boshlash" moves past Welcome to the
+  // Landing/sign-up screen for this render; nothing is persisted until the
+  // person actually finishes creating (or signing into) an account, so a
+  // reload before that point shows Welcome again.
+  const [pastWelcome, setPastWelcome] = useState(false);
+
+  useEffect(() => {
+    if (user) {
+      saveOnboarding({ completed: true });
+      setAccountOnDevice(true);
+    }
+  }, [user]);
 
   return (
     <Switch>
@@ -3288,10 +3127,21 @@ function AppRoutes() {
           <FullscreenLoader />
         ) : user ? (
           <AppShell />
-        ) : (
+        ) : accountOnDevice || pastWelcome ? (
           <Landing
             onStart={() => setLocation("/sign-up")}
             onSignIn={() => setLocation("/sign-in")}
+          />
+        ) : (
+          <WelcomeScreen
+            onGetStarted={() => {
+              setPastWelcome(true);
+              setLocation("/sign-up");
+            }}
+            onSignIn={() => {
+              setPastWelcome(true);
+              setLocation("/sign-in");
+            }}
           />
         )}
       </Route>

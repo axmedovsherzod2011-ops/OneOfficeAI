@@ -2,7 +2,6 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   usersTable,
-  postsTable,
   telegramChannelsTable,
 } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
@@ -185,7 +184,7 @@ async function sendSinglePhoto(
   form.append("caption", caption);
   form.append(
     "photo",
-    new Blob([image.buffer], { type: image.contentType }),
+    new Blob([new Uint8Array(image.buffer)], { type: image.contentType }),
     `photo.${image.ext}`,
   );
 
@@ -229,7 +228,7 @@ async function sendPhotoAlbum(
     const fieldName = `file${i}`;
     form.append(
       fieldName,
-      new Blob([image.buffer], { type: image.contentType }),
+      new Blob([new Uint8Array(image.buffer)], { type: image.contentType }),
       `photo${i}.${image.ext}`,
     );
     return i === 0
@@ -359,26 +358,7 @@ router.post("/publish", async (req, res) => {
     return;
   }
 
-  // Extract product name/price from text for DB record
-  const parts = text.split(" — ");
-  const name = parts[0]?.trim() ?? text.substring(0, 50);
-  const price = parts[1]?.trim() ?? "";
-
-  // Save post record to DB
-  const [post] = await db
-    .insert(postsTable)
-    .values({
-      userId,
-      telegramChannelId: channel.id,
-      name,
-      price,
-      category: "General",
-      status: "Published",
-      telegramMessageId: telegramMessageId ?? null,
-    })
-    .returning({ id: postsTable.id });
-
-  res.json({ success: true, messageId: post.id });
+  res.json({ success: true, messageId: telegramMessageId ?? 0 });
 });
 
 export default router;

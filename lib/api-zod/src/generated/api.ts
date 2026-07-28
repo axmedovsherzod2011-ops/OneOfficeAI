@@ -82,39 +82,6 @@ export const PublishPostResponse = zod.object({
 
 
 /**
- * @summary List posts for a user
- */
-export const ListPostsQueryParams = zod.object({
-  "userId": zod.coerce.number()
-})
-
-export const ListPostsResponseItem = zod.object({
-  "id": zod.number(),
-  "name": zod.string(),
-  "price": zod.string(),
-  "category": zod.string(),
-  "status": zod.string(),
-  "createdAt": zod.string()
-})
-export const ListPostsResponse = zod.array(ListPostsResponseItem)
-
-
-/**
- * @summary Get user stats
- */
-export const GetUserStatsQueryParams = zod.object({
-  "userId": zod.coerce.number()
-})
-
-export const GetUserStatsResponse = zod.object({
-  "total": zod.number(),
-  "published": zod.number(),
-  "pending": zod.number(),
-  "rejected": zod.number()
-})
-
-
-/**
  * Uses AI to generate premium post text, specs, market price analysis, lifehacks, and finds real product images
  * @summary AI-enrich a product and find images
  */
