@@ -1628,7 +1628,7 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
 
   const items = [
     { key: "dashboard", label: "Dashboard", icon: Home },
-    { key: "create", label: "Create Post", icon: PlusCircle },
+    { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connectors", icon: Send },
     { key: "settings", label: "Settings", icon: Settings },
     { key: "profile", label: "Profile", icon: User },
@@ -1685,7 +1685,7 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
 function BottomNav({ active, setActive }: any) {
   const items = [
     { key: "dashboard", label: "Home", icon: Home },
-    { key: "create", label: "Create", icon: PlusCircle },
+    { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connect", icon: Send },
     { key: "profile", label: "Profile", icon: User },
   ];
@@ -1742,6 +1742,25 @@ function Topbar({ title, onNewPost }: any) {
         </button>
       )}
     </header>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// INVENTORY (placeholder — to'liq funksionallik keyingi bosqichda qo'shiladi)
+// ---------------------------------------------------------------------------
+
+function InventoryPage({ user }: any) {
+  return (
+    <div className="px-6 md:px-10 py-8">
+      <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-10 text-center">
+        <Package className="h-8 w-8 text-violet-400 mx-auto mb-3" />
+        <p className="text-white font-medium">Inventory tez orada</p>
+        <p className="text-slate-400 text-sm mt-1">
+          Mahsulotlar ro'yxati, + New Product va draftlar shu yerda
+          ko'rinadi (keyingi bosqichda qo'shiladi).
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -2878,6 +2897,7 @@ function AppShell() {
   const titles: Record<string, string> = {
     dashboard: "Dashboard",
     create: "Create Post",
+    inventory: "Inventory",
     connectors: "Connectors",
     settings: "Settings",
     profile: "Profile",
@@ -3053,6 +3073,8 @@ function AppShell() {
             )}
           </>
         )}
+
+        {navView === "inventory" && <InventoryPage user={user} />}
 
         {navView === "connectors" && <ConnectorsPage company={user?.company} />}
         {navView === "settings" && (

@@ -3,6 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
 import { telegramChannelsTable } from "./telegramChannels";
+import { productsTable } from "./products";
 
 export const postsTable = pgTable("posts", {
   id: serial("id").primaryKey(),
@@ -12,6 +13,11 @@ export const postsTable = pgTable("posts", {
   telegramChannelId: integer("telegram_channel_id").references(
     () => telegramChannelsTable.id,
   ),
+  // Which inventory product this post was generated from. Nullable —
+  // older posts predate the Inventory feature.
+  productId: integer("product_id").references(() => productsTable.id, {
+    onDelete: "set null",
+  }),
   name: text("name").notNull(),
   price: text("price").notNull(),
   category: text("category").notNull().default("Electronics"),
