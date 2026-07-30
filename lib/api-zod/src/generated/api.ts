@@ -132,3 +132,67 @@ export const SearchImagesResponse = zod.object({
 })
 
 
+// ---------------------------------------------------------------------------
+// Products (Inventory) — hand-written to match the openapi.yaml spec above.
+// Regenerate via `pnpm --filter @workspace/api-spec run codegen` once the
+// dev environment can run orval; this keeps the same shape it would produce.
+// ---------------------------------------------------------------------------
+
+export const ProductStatus = zod.enum(['draft', 'active'])
+
+/**
+ * @summary List the signed-in user's inventory products
+ */
+export const ListProductsQueryParams = zod.object({
+  "status": ProductStatus.optional()
+})
+
+export const ProductItem = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "category": zod.string(),
+  "costPrice": zod.string(),
+  "sellPrice": zod.string(),
+  "description": zod.string(),
+  "images": zod.array(zod.string()),
+  "status": ProductStatus,
+  "createdAt": zod.string()
+})
+
+export const ListProductsResponse = zod.array(ProductItem)
+
+/**
+ * @summary Create a new inventory product (or draft)
+ */
+export const CreateProductBody = zod.object({
+  "name": zod.string().max(200).optional(),
+  "category": zod.string().max(50).optional(),
+  "costPrice": zod.string().max(50).optional(),
+  "sellPrice": zod.string().max(50).optional(),
+  "description": zod.string().max(2000).optional(),
+  "images": zod.array(zod.string()).max(10).optional(),
+  "status": ProductStatus.optional()
+})
+
+export const CreateProductResponse = ProductItem
+
+/**
+ * @summary Edit or update the status (e.g. publish a draft) of a product
+ */
+export const UpdateProductBody = zod.object({
+  "name": zod.string().max(200).optional(),
+  "category": zod.string().max(50).optional(),
+  "costPrice": zod.string().max(50).optional(),
+  "sellPrice": zod.string().max(50).optional(),
+  "description": zod.string().max(2000).optional(),
+  "images": zod.array(zod.string()).max(10).optional(),
+  "status": ProductStatus.optional()
+})
+
+export const UpdateProductResponse = ProductItem
+
+export const DeleteProductResponse = zod.object({
+  "success": zod.boolean()
+})
+
+

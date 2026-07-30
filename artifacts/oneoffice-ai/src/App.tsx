@@ -65,6 +65,7 @@ import {
   Trash2,
   Link2,
   Radio,
+  Pencil,
 } from "lucide-react";
 
 import {
@@ -75,6 +76,12 @@ import {
   getListTelegramChannelsQueryKey,
   usePublishPost,
   useEnrichProduct,
+  useListProducts,
+  useCreateProduct,
+  useUpdateProduct,
+  useDeleteProduct,
+  getListProductsQueryKey,
+  type ProductItem,
 } from "@workspace/api-client-react";
 
 import {
@@ -259,6 +266,48 @@ function mapFirebaseError(err: any): string {
 function proxyImage(url: string): string {
   if (!url || url.startsWith("data:")) return url;
   return `/api/images/proxy?url=${encodeURIComponent(url)}`;
+}
+
+// Reads an uploaded photo, downsizes it (long edge capped at 1600px) and
+// re-encodes as JPEG before turning it into a base64 data URL. Phone
+// camera photos are routinely 3-8MB — without this, selecting a handful of
+// them for a product would blow past the request body limit and take
+// forever to upload on a slow connection.
+function resizeImageFile(file: File, maxDim = 1600, quality = 0.82): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          // Canvas unsupported for some reason — fall back to the
+          // original, un-resized data URL rather than failing outright.
+          resolve(reader.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1726,7 +1775,7 @@ function BottomNav({ active, setActive }: any) {
   );
 }
 
-function Topbar({ title, onNewPost }: any) {
+function Topbar({ title, onNewPost, newButtonLabel = "+ New Post" }: any) {
   return (
     <header className="flex items-center justify-between gap-3 px-6 md:px-10 py-5 border-b border-white/10">
       <h1 className="text-lg md:text-xl font-semibold text-white tracking-tight truncate">
@@ -1738,7 +1787,7 @@ function Topbar({ title, onNewPost }: any) {
           onClick={onNewPost}
           className="flex items-center gap-1 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2 md:px-5 md:py-2.5 rounded-full font-semibold text-sm shadow-lg shadow-violet-900/50 ring-2 ring-violet-400/40 hover:shadow-violet-600/60 hover:scale-105 transition-all whitespace-nowrap shrink-0"
         >
-          + New Post
+          {newButtonLabel}
         </button>
       )}
     </header>
@@ -1746,20 +1795,485 @@ function Topbar({ title, onNewPost }: any) {
 }
 
 // ---------------------------------------------------------------------------
-// INVENTORY (placeholder — to'liq funksionallik keyingi bosqichda qo'shiladi)
+// INVENTORY
 // ---------------------------------------------------------------------------
 
-function InventoryPage({ user }: any) {
+// Camera/gallery multi-select image picker, reused by the New/Edit Product
+// form. Mirrors the picker already used on the create-post Results screen,
+// but supports selecting several gallery photos at once and keeps every
+// photo (no select/deselect step — whatever's added here becomes one of the
+// product's own images).
+function ProductImagePicker({
+  images,
+  setImages,
+}: {
+  images: string[];
+  setImages: React.Dispatch<React.SetStateAction<string[]>>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    setBusy(true);
+    try {
+      const files = Array.from(fileList);
+      const resized = await Promise.all(files.map((f) => resizeImageFile(f)));
+      setImages((prev) => [...prev, ...resized]);
+    } catch {
+      // A single bad file shouldn't block the rest — whatever resized
+      // successfully above is still added; nothing else to do here.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function removeAt(index: number) {
+    setImages((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  return (
+    <div>
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => {
+          handleFiles(e.target.files);
+          e.target.value = "";
+        }}
+        className="hidden"
+      />
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        onChange={(e) => {
+          handleFiles(e.target.files);
+          e.target.value = "";
+        }}
+        className="hidden"
+      />
+
+      <div className="grid grid-cols-2 gap-2.5 mb-4">
+        <button
+          type="button"
+          onClick={() => cameraInputRef.current?.click()}
+          className="flex flex-col items-center justify-center gap-1.5 rounded-2xl px-3 py-4 border border-white/10 bg-white/5 hover:bg-white/10 transition text-center"
+        >
+          <Camera className="h-5 w-5 text-slate-300" />
+          <span className="text-xs font-medium text-white">Kamera</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => galleryInputRef.current?.click()}
+          className="flex flex-col items-center justify-center gap-1.5 rounded-2xl px-3 py-4 border border-white/10 bg-white/5 hover:bg-white/10 transition text-center"
+        >
+          <ImageIcon className="h-5 w-5 text-slate-300" />
+          <span className="text-xs font-medium text-white">
+            Galereya (bir nechtasini tanlash mumkin)
+          </span>
+        </button>
+      </div>
+
+      {busy && (
+        <p className="text-xs text-slate-400 flex items-center gap-1.5 mb-3">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Rasmlar
+          tayyorlanmoqda…
+        </p>
+      )}
+
+      {images.length > 0 ? (
+        <div className="flex gap-3 overflow-x-auto pb-2 snap-x scrollbar-thin">
+          {images.map((src, i) => (
+            <div
+              key={i}
+              className="shrink-0 relative rounded-2xl overflow-hidden snap-start"
+              style={{ width: 110, height: 110 }}
+            >
+              <img
+                src={src}
+                alt={`Rasm ${i + 1}`}
+                className="w-full h-full object-cover"
+              />
+              <button
+                type="button"
+                onClick={() => removeAt(i)}
+                className="absolute top-1.5 right-1.5 h-6 w-6 rounded-full bg-black/60 hover:bg-rose-500 flex items-center justify-center transition"
+              >
+                <X className="h-3.5 w-3.5 text-white" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-slate-500 text-sm">Hali rasm qo'shilmadi.</p>
+      )}
+    </div>
+  );
+}
+
+function ProductForm({
+  initial,
+  onCancel,
+  onSaved,
+}: {
+  initial?: ProductItem | null;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = !!initial;
+  const [name, setName] = useState(initial?.name ?? "");
+  const [category, setCategory] = useState(initial?.category ?? CATEGORIES[0]);
+  const [costPrice, setCostPrice] = useState(initial?.costPrice ?? "");
+  const [sellPrice, setSellPrice] = useState(initial?.sellPrice ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [images, setImages] = useState<string[]>(initial?.images ?? []);
+  const [error, setError] = useState("");
+
+  const queryClient = useQueryClient();
+  const createProduct = useCreateProduct();
+  const updateProduct = useUpdateProduct();
+  const saving = createProduct.isPending || updateProduct.isPending;
+
+  async function save(status: "draft" | "active") {
+    setError("");
+    if (status === "active" && !name.trim()) {
+      setError("Mahsulot nomini kiriting.");
+      return;
+    }
+    const data = {
+      name: name.trim(),
+      category,
+      costPrice: costPrice.trim(),
+      sellPrice: sellPrice.trim(),
+      description: description.trim(),
+      images,
+      status,
+    };
+    try {
+      if (isEdit && initial) {
+        await updateProduct.mutateAsync({ id: initial.id, data });
+      } else {
+        await createProduct.mutateAsync({ data });
+      }
+      queryClient.invalidateQueries({ queryKey: getListProductsQueryKey() });
+      onSaved();
+    } catch (err: any) {
+      setError(
+        err?.data?.error || err?.message || "Saqlashda xatolik yuz berdi.",
+      );
+    }
+  }
+
+  return (
+    <div className="p-6 md:p-10 max-w-2xl">
+      <Glass className="p-8">
+        <h3 className="text-white text-xl font-semibold mb-1">
+          {isEdit ? "Mahsulotni tahrirlash" : "Yangi mahsulot"}
+        </h3>
+        <p className="text-slate-400 text-sm mb-6">
+          Rasm(lar), nom, narxlar va tavsifni to'ldiring.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+              <ImageIcon className="h-3 w-3" /> Mahsulot rasmlari
+            </label>
+            <ProductImagePicker images={images} setImages={setImages} />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+              <Package className="h-3 w-3" /> Mahsulot nomi
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="masalan: AeroSound Pro Earbuds"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+              <Tag className="h-3 w-3" /> Kategoriya
+            </label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-400 transition"
+            >
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c} className="bg-slate-900">
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+                <DollarSign className="h-3 w-3" /> Kelish narxi
+              </label>
+              <input
+                value={costPrice}
+                onChange={(e) => setCostPrice(e.target.value)}
+                placeholder="masalan: 250,000"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+                <DollarSign className="h-3 w-3" /> Sotish narxi
+              </label>
+              <input
+                value={sellPrice}
+                onChange={(e) => setSellPrice(e.target.value)}
+                placeholder="masalan: 349,000"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+              <FileText className="h-3 w-3" /> Qisqa tavsif
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Mahsulot haqida bir necha jumla..."
+              rows={3}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
+            />
+          </div>
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-rose-400 text-sm bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 mt-5">
+            <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row gap-2.5 mt-7">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 bg-white/5 border border-white/10 disabled:opacity-40 text-white py-3.5 rounded-xl font-medium hover:bg-white/10 transition"
+          >
+            Bekor qilish
+          </button>
+
+          {!isEdit && (
+            <button
+              onClick={() => save("draft")}
+              disabled={saving}
+              className="flex-1 flex items-center justify-center gap-2 bg-white/5 border border-white/10 disabled:opacity-40 text-white py-3.5 rounded-xl font-medium hover:bg-white/10 transition"
+            >
+              {saving && createProduct.isPending && (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              )}
+              Draft sifatida saqlash
+            </button>
+          )}
+
+          {isEdit && initial?.status === "draft" && (
+            <button
+              onClick={() => save("active")}
+              disabled={saving}
+              className="flex-1 flex items-center justify-center gap-2 bg-white/5 border border-emerald-400/40 disabled:opacity-40 text-emerald-300 py-3.5 rounded-xl font-medium hover:bg-emerald-500/10 transition"
+            >
+              Nashr qilish (Faol)
+            </button>
+          )}
+
+          <button
+            onClick={() => save(isEdit ? (initial!.status as "draft" | "active") : "active")}
+            disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
+          >
+            {saving && (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            )}
+            {isEdit ? "O'zgarishlarni saqlash" : "Mahsulot yaratish"}
+          </button>
+        </div>
+      </Glass>
+    </div>
+  );
+}
+
+function ProductCard({
+  product,
+  onEdit,
+  onDelete,
+  deleting,
+}: {
+  product: ProductItem;
+  onEdit: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  const thumb = product.images?.[0];
+  return (
+    <Glass className="p-2.5 sm:p-4 flex flex-col">
+      <div className="relative rounded-lg sm:rounded-xl overflow-hidden bg-white/5 aspect-square mb-2 sm:mb-3 flex items-center justify-center">
+        {thumb ? (
+          <img src={thumb} alt={product.name} className="w-full h-full object-cover" />
+        ) : (
+          <Package className="h-6 w-6 sm:h-8 sm:w-8 text-slate-600" />
+        )}
+        <span
+          className={`absolute top-1.5 left-1.5 sm:top-2 sm:left-2 text-[9px] sm:text-[10px] font-semibold px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full ${
+            product.status === "active"
+              ? "bg-emerald-500/90 text-white"
+              : "bg-slate-700/90 text-slate-200"
+          }`}
+        >
+          {product.status === "active" ? "Faol" : "Draft"}
+        </span>
+      </div>
+
+      <h4 className="text-white text-xs sm:text-sm font-semibold truncate">
+        {product.name || "Nomsiz mahsulot"}
+      </h4>
+      <p className="text-violet-300 text-xs sm:text-sm font-medium mt-0.5 truncate">
+        {product.sellPrice ? `${product.sellPrice} UZS` : "Narx kiritilmagan"}
+      </p>
+
+      <div className="flex gap-1.5 sm:gap-2 mt-2 sm:mt-3">
+        <button
+          onClick={onEdit}
+          className="flex-1 flex items-center justify-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-medium bg-white/5 border border-white/10 text-white py-1.5 sm:py-2 rounded-lg hover:bg-white/10 transition"
+        >
+          <Pencil className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+          <span className="hidden sm:inline">Tahrirlash</span>
+        </button>
+        <button
+          onClick={onDelete}
+          disabled={deleting}
+          className="flex items-center justify-center gap-1.5 text-xs font-medium bg-rose-500/10 border border-rose-500/30 text-rose-300 py-1.5 sm:py-2 px-2.5 sm:px-3 rounded-lg hover:bg-rose-500/20 disabled:opacity-40 transition"
+        >
+          {deleting ? (
+            <Loader2 className="h-3 w-3 sm:h-3.5 sm:w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+          )}
+        </button>
+      </div>
+    </Glass>
+  );
+}
+
+const INVENTORY_TABS: Array<{ key: "all" | "draft" | "active"; label: string }> = [
+  { key: "all", label: "Hammasi" },
+  { key: "active", label: "Faol" },
+  { key: "draft", label: "Draftlar" },
+];
+
+function InventoryPage({
+  formOpen,
+  editingProduct,
+  onCloseForm,
+  onEditProduct,
+}: {
+  formOpen: boolean;
+  editingProduct: ProductItem | null;
+  onCloseForm: () => void;
+  onEditProduct: (p: ProductItem) => void;
+}) {
+  const [tab, setTab] = useState<"all" | "draft" | "active">("all");
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
+
+  const { data: products, isLoading } = useListProducts();
+  const deleteProduct = useDeleteProduct();
+
+  if (formOpen) {
+    return (
+      <ProductForm
+        initial={editingProduct}
+        onCancel={onCloseForm}
+        onSaved={onCloseForm}
+      />
+    );
+  }
+
+  const all = products ?? [];
+  const counts = {
+    all: all.length,
+    active: all.filter((p) => p.status === "active").length,
+    draft: all.filter((p) => p.status === "draft").length,
+  };
+  const filtered = tab === "all" ? all : all.filter((p) => p.status === tab);
+
+  async function handleDelete(id: number) {
+    if (!window.confirm("Bu mahsulotni o'chirishni tasdiqlaysizmi?")) return;
+    setDeletingId(id);
+    try {
+      await deleteProduct.mutateAsync({ id });
+      queryClient.invalidateQueries({ queryKey: getListProductsQueryKey() });
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <div className="px-6 md:px-10 py-8">
-      <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-10 text-center">
-        <Package className="h-8 w-8 text-violet-400 mx-auto mb-3" />
-        <p className="text-white font-medium">Inventory tez orada</p>
-        <p className="text-slate-400 text-sm mt-1">
-          Mahsulotlar ro'yxati, + New Product va draftlar shu yerda
-          ko'rinadi (keyingi bosqichda qo'shiladi).
-        </p>
+      <div className="flex gap-2 mb-6">
+        {INVENTORY_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition ${
+              tab === t.key
+                ? "bg-gradient-to-r from-violet-500 to-blue-500 text-white"
+                : "bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10"
+            }`}
+          >
+            {t.label} ({counts[t.key]})
+          </button>
+        ))}
       </div>
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-slate-400 text-sm">
+          <Loader2 className="h-4 w-4 animate-spin" /> Yuklanmoqda…
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-10 text-center">
+          <Package className="h-8 w-8 text-violet-400 mx-auto mb-3" />
+          <p className="text-white font-medium">
+            {tab === "draft"
+              ? "Draftlar yo'q"
+              : tab === "active"
+                ? "Faol mahsulotlar yo'q"
+                : "Hali mahsulot qo'shilmagan"}
+          </p>
+          <p className="text-slate-400 text-sm mt-1">
+            Yuqoridagi "+ New Product" tugmasi orqali birinchi mahsulotingizni
+            qo'shing.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4">
+          {filtered.map((p) => (
+            <ProductCard
+              key={p.id}
+              product={p}
+              onEdit={() => onEditProduct(p)}
+              onDelete={() => handleDelete(p.id)}
+              deleting={deletingId === p.id}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1786,7 +2300,131 @@ function Dashboard({ goCreate, user }: any) {
 // CREATE POST FLOW
 // ---------------------------------------------------------------------------
 
-function CreateForm({ form, setForm, onGenerate }: any) {
+// First screen of Create Post: pick which inventory product this post is
+// for. AI writes the copy for that specific product and the post goes out
+// with that product's own photos — no more re-typing name/price or
+// re-uploading photos you already added in Inventory. "Mahsulotsiz davom
+// etish" keeps the old freeform path available for one-off posts that
+// aren't tied to any inventory item.
+function ProductPicker({
+  onPick,
+  onSkip,
+  onAddProduct,
+}: {
+  onPick: (p: ProductItem) => void;
+  onSkip: () => void;
+  onAddProduct: () => void;
+}) {
+  const { data: products, isLoading } = useListProducts();
+  const list = products ?? [];
+  const [search, setSearch] = useState("");
+
+  const query = search.trim().toLowerCase();
+  // No search yet: just the 2 most recently added products (list already
+  // comes back newest-first from the API) — the common case is posting
+  // about something you just added. Typing a search reveals everything
+  // matching, regardless of how old it is.
+  const visible = query
+    ? list.filter((p) => (p.name || "").toLowerCase().includes(query))
+    : list.slice(0, 2);
+
+  function ProductTile({ p }: { p: ProductItem }) {
+    const thumb = p.images?.[0];
+    return (
+      <button
+        onClick={() => onPick(p)}
+        className="text-left rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 hover:border-violet-400/40 transition p-3"
+      >
+        <div className="relative rounded-xl overflow-hidden bg-white/5 aspect-square mb-2.5 flex items-center justify-center">
+          {thumb ? (
+            <img src={thumb} alt={p.name} className="w-full h-full object-cover" />
+          ) : (
+            <Package className="h-7 w-7 text-slate-600" />
+          )}
+          {p.status === "draft" && (
+            <span className="absolute top-1.5 left-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-700/90 text-slate-200">
+              Draft
+            </span>
+          )}
+        </div>
+        <p className="text-white text-sm font-medium truncate">
+          {p.name || "Nomsiz mahsulot"}
+        </p>
+        {p.sellPrice && (
+          <p className="text-violet-300 text-xs font-medium mt-0.5">
+            {p.sellPrice} UZS
+          </p>
+        )}
+      </button>
+    );
+  }
+
+  return (
+    <div className="p-6 md:p-10 max-w-3xl">
+      <Glass className="p-8">
+        <h3 className="text-white text-xl font-semibold mb-1">
+          Qaysi mahsulot uchun post yozamiz?
+        </h3>
+        <p className="text-slate-400 text-sm mb-6">
+          Mahsulotni tanlang — AI aynan shu mahsulot uchun matn yozadi va
+          uning o'z rasmlari post bilan birga yuboriladi.
+        </p>
+
+        {!isLoading && list.length > 0 && (
+          <div className="relative mb-5">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Boshqa mahsulotni qidirish…"
+              className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+            />
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-slate-400 text-sm py-6">
+            <Loader2 className="h-4 w-4 animate-spin" /> Yuklanmoqda…
+          </div>
+        ) : list.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-8 text-center mb-6">
+            <Package className="h-8 w-8 text-violet-400 mx-auto mb-3" />
+            <p className="text-white font-medium">Hali mahsulot qo'shilmagan</p>
+            <p className="text-slate-400 text-sm mt-1 mb-4">
+              Avval Inventory'ga mahsulot qo'shing, keyin undan post
+              yaratishingiz mumkin bo'ladi.
+            </p>
+            <button
+              onClick={onAddProduct}
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-5 py-2.5 rounded-xl font-medium text-sm shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
+            >
+              <Package className="h-4 w-4" /> Mahsulot qo'shish
+            </button>
+          </div>
+        ) : visible.length === 0 ? (
+          <p className="text-slate-500 text-sm py-6 text-center">
+            "{search}" bo'yicha mahsulot topilmadi.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
+            {visible.map((p) => (
+              <ProductTile key={p.id} p={p} />
+            ))}
+          </div>
+        )}
+
+        <button
+          onClick={onSkip}
+          className="w-full flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-slate-300 py-3 rounded-xl font-medium text-sm hover:bg-white/10 hover:text-white transition"
+        >
+          Mahsulotsiz davom etish →
+        </button>
+      </Glass>
+    </div>
+  );
+}
+
+function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any) {
   const valid = form.name.trim() && form.price.trim();
   return (
     <div className="p-6 md:p-10 max-w-2xl">
@@ -1797,6 +2435,34 @@ function CreateForm({ form, setForm, onGenerate }: any) {
         <p className="text-slate-400 text-sm mb-6">
           Tell us what you're selling — AI will do the rest.
         </p>
+
+        {product && (
+          <div className="flex items-center gap-3 rounded-xl border border-violet-400/30 bg-violet-500/10 px-4 py-3 mb-5">
+            {product.images?.[0] ? (
+              <img
+                src={product.images[0]}
+                alt={product.name}
+                className="h-10 w-10 rounded-lg object-cover shrink-0"
+              />
+            ) : (
+              <div className="h-10 w-10 rounded-lg bg-white/10 flex items-center justify-center shrink-0">
+                <Package className="h-4 w-4 text-violet-300" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] text-violet-300 font-medium">
+                Tanlangan mahsulot
+              </p>
+              <p className="text-sm text-white truncate">{product.name}</p>
+            </div>
+            <button
+              onClick={onChangeProduct}
+              className="text-xs font-medium text-violet-300 hover:text-white shrink-0 transition"
+            >
+              O'zgartirish
+            </button>
+          </div>
+        )}
 
         <div className="space-y-4">
           <div>
@@ -1827,18 +2493,27 @@ function CreateForm({ form, setForm, onGenerate }: any) {
             <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
               <Tag className="h-3 w-3" /> Category
             </label>
-            <select
-              data-testid="select-product-category"
-              value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-400 transition"
-            >
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c} className="bg-slate-900">
-                  {c}
-                </option>
-              ))}
-            </select>
+            {product ? (
+              <div className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-slate-300 flex items-center justify-between">
+                <span>{form.category}</span>
+                <span className="text-[11px] text-slate-500">
+                  Mahsulot kategoriyasi
+                </span>
+              </div>
+            ) : (
+              <select
+                data-testid="select-product-category"
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-400 transition"
+              >
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c} className="bg-slate-900">
+                    {c}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div>
             <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
@@ -2022,6 +2697,7 @@ function Results({
   enrichData,
   selectedImages,
   onToggleImage,
+  productImages,
   error,
   channels,
   channelsLoading,
@@ -2041,6 +2717,27 @@ function Results({
   const [myImages, setMyImages] = useState<any[]>([]);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const seededProductImages = useRef(false);
+
+  // Product-linked posts start with that product's own photos already
+  // added and selected — the person doesn't have to re-upload anything
+  // they already put in Inventory. Runs once; camera/gallery uploads below
+  // can still add more on top of these.
+  useEffect(() => {
+    if (seededProductImages.current) return;
+    if (!productImages || productImages.length === 0) return;
+    seededProductImages.current = true;
+
+    const seeded = productImages.map((url: string, i: number) => ({
+      id: `product-${i}`,
+      url,
+      title: form.name || "Mahsulot rasmi",
+      generated: false,
+    }));
+    setMyImages((prev) => [...seeded, ...prev]);
+    seeded.forEach((entry: any) => onToggleImage(entry));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productImages]);
 
   function triggerCamera() {
     cameraInputRef.current?.click();
@@ -2856,7 +3553,14 @@ function AppShell() {
   });
 
   const [navView, setNavView] = useState("dashboard");
-  const [flow, setFlow] = useState("form");
+  const [flow, setFlow] = useState("product");
+  const [productFormOpen, setProductFormOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<ProductItem | null>(
+    null,
+  );
+  const [selectedProduct, setSelectedProduct] = useState<ProductItem | null>(
+    null,
+  );
   const [form, setForm] = useState({
     name: "",
     price: "",
@@ -2904,13 +3608,25 @@ function AppShell() {
   };
 
   function resetCreate() {
-    setFlow("form");
+    setFlow("product");
+    setSelectedProduct(null);
     setForm({ name: "", price: "", category: "Electronics", notes: "" });
     setEnrichData(null);
     setSelectedImages([]);
     setShowPreview(false);
     setPublishError("");
     setGenerateError("");
+  }
+
+  function pickProductForPost(p: ProductItem) {
+    setSelectedProduct(p);
+    setForm({
+      name: p.name,
+      price: p.sellPrice,
+      category: p.category,
+      notes: p.description,
+    });
+    setFlow("form");
   }
 
   function toggleImage(img: any) {
@@ -2987,6 +3703,10 @@ function AppShell() {
         setActive={(v: string) => {
           setNavView(v);
           if (v === "create") resetCreate();
+          if (v !== "inventory") {
+            setProductFormOpen(false);
+            setEditingProduct(null);
+          }
         }}
         onLogout={handleLogout}
       />
@@ -2994,13 +3714,19 @@ function AppShell() {
       <div className="flex-1 min-w-0 pb-20 md:pb-0">
         <Topbar
           title={titles[navView]}
+          newButtonLabel={navView === "inventory" ? "+ New Product" : "+ New Post"}
           onNewPost={
             navView === "dashboard"
               ? () => {
                   setNavView("create");
                   resetCreate();
                 }
-              : undefined
+              : navView === "inventory"
+                ? () => {
+                    setEditingProduct(null);
+                    setProductFormOpen(true);
+                  }
+                : undefined
           }
         />
 
@@ -3016,10 +3742,26 @@ function AppShell() {
 
         {navView === "create" && (
           <>
+            {flow === "product" && (
+              <ProductPicker
+                onPick={pickProductForPost}
+                onSkip={() => {
+                  setSelectedProduct(null);
+                  setFlow("form");
+                }}
+                onAddProduct={() => {
+                  setNavView("inventory");
+                  setEditingProduct(null);
+                  setProductFormOpen(true);
+                }}
+              />
+            )}
             {flow === "form" && (
               <CreateForm
                 form={form}
                 setForm={setForm}
+                product={selectedProduct}
+                onChangeProduct={() => setFlow("product")}
                 onGenerate={() => {
                   setGenerateError("");
                   setPublishError("");
@@ -3040,6 +3782,7 @@ function AppShell() {
                 enrichData={enrichData}
                 selectedImages={selectedImages}
                 onToggleImage={toggleImage}
+                productImages={selectedProduct?.images ?? []}
                 error={publishError || generateError}
                 channels={channelList}
                 channelsLoading={channelsLoading}
@@ -3074,7 +3817,20 @@ function AppShell() {
           </>
         )}
 
-        {navView === "inventory" && <InventoryPage user={user} />}
+        {navView === "inventory" && (
+          <InventoryPage
+            formOpen={productFormOpen}
+            editingProduct={editingProduct}
+            onCloseForm={() => {
+              setProductFormOpen(false);
+              setEditingProduct(null);
+            }}
+            onEditProduct={(p: ProductItem) => {
+              setEditingProduct(p);
+              setProductFormOpen(true);
+            }}
+          />
+        )}
 
         {navView === "connectors" && <ConnectorsPage company={user?.company} />}
         {navView === "settings" && (
@@ -3095,6 +3851,10 @@ function AppShell() {
         setActive={(v: string) => {
           setNavView(v);
           if (v === "create") resetCreate();
+          if (v !== "inventory") {
+            setProductFormOpen(false);
+            setEditingProduct(null);
+          }
         }}
       />
 

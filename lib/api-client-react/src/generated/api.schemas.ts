@@ -109,3 +109,44 @@ q: string;
 count?: number;
 };
 
+export type ProductStatus = 'draft' | 'active';
+
+export interface ProductItem {
+  id: number;
+  name: string;
+  category: string;
+  costPrice: string;
+  sellPrice: string;
+  description: string;
+  images: string[];
+  status: ProductStatus;
+  createdAt: string;
+}
+
+export type ListProductsParams = {
+status?: ProductStatus;
+};
+
+export interface CreateProductInput {
+  name?: string;
+  category?: string;
+  costPrice?: string;
+  sellPrice?: string;
+  description?: string;
+  images?: string[];
+  status?: ProductStatus;
+}
+
+export interface UpdateProductInput {
+  name?: string;
+  category?: string;
+  costPrice?: string;
+  sellPrice?: string;
+  description?: string;
+  images?: string[];
+  status?: ProductStatus;
+}
+
+export interface DeleteProductResult {
+  success: boolean;
+}
