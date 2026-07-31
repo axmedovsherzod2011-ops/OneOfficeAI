@@ -200,10 +200,17 @@ router.post(
       if (exchangeRes.ok && exchangeData.access_token) {
         longLivedToken = exchangeData.access_token;
         expiresInSeconds = exchangeData.expires_in ?? null;
+      } else {
+        console.error(
+          "[instagram] long-lived token exchange failed:",
+          exchangeRes.status,
+          exchangeData,
+        );
       }
       // If this step fails, we still proceed with the short-lived token —
       // the account connects, just with a token that expires sooner.
-    } catch {
+    } catch (err) {
+      console.error("[instagram] long-lived token exchange threw:", err);
       // Non-fatal — proceed with the short-lived token.
     }
 
@@ -225,12 +232,21 @@ router.post(
         name?: string;
         account_type?: string;
         profile_picture_url?: string;
+        error?: unknown;
       };
+      if (!profileRes.ok) {
+        console.error(
+          "[instagram] profile fetch failed:",
+          profileRes.status,
+          profileData,
+        );
+      }
       username = profileData.username ?? "";
       name = profileData.name ?? "";
       accountType = profileData.account_type ?? "";
       profilePictureUrl = profileData.profile_picture_url ?? "";
-    } catch {
+    } catch (err) {
+      console.error("[instagram] profile fetch threw:", err);
       // Non-fatal — the connection is still saved without profile details.
     }
 
