@@ -16,6 +16,8 @@ tags:
     description: Post management
   - name: products
     description: Inventory product management
+  - name: connectors
+    description: Social platform account connections
 paths:
   /healthz:
     get:
@@ -272,6 +274,98 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /connectors/instagram/config:
+    get:
+      operationId: getInstagramConfig
+      tags: [connectors]
+      summary: Public OAuth config the frontend needs to build the authorize URL
+      responses:
+        "200":
+          description: Config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstagramConfig"
+
+  /connectors/instagram:
+    get:
+      operationId: listInstagramAccounts
+      tags: [connectors]
+      summary: List the signed-in user's connected Instagram accounts (0-3)
+      responses:
+        "200":
+          description: List of connected accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InstagramAccountItem"
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /connectors/instagram/exchange:
+    post:
+      operationId: exchangeInstagramCode
+      tags: [connectors]
+      summary: Exchange an OAuth code for a token and store the connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExchangeInstagramCodeInput"
+      responses:
+        "200":
+          description: Connected account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstagramAccountItem"
+        "400":
+          description: Invalid code, or already at the 3-account limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /connectors/instagram/{id}:
+    delete:
+      operationId: disconnectInstagramAccount
+      tags: [connectors]
+      summary: Disconnect an Instagram account
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Disconnected
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -430,6 +524,53 @@ components:
       properties:
         error:
           type: string
+
+    InstagramConfig:
+      type: object
+      required:
+        - appId
+        - scope
+        - configured
+      properties:
+        appId:
+          type: string
+        scope:
+          type: string
+        configured:
+          type: boolean
+          description: False if INSTAGRAM_APP_ID/SECRET aren't set on the server yet.
+
+    InstagramAccountItem:
+      type: object
+      required:
+        - id
+        - username
+        - name
+        - accountType
+        - profilePictureUrl
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        name:
+          type: string
+        accountType:
+          type: string
+        profilePictureUrl:
+          type: string
+
+    ExchangeInstagramCodeInput:
+      type: object
+      required:
+        - code
+        - redirectUri
+      properties:
+        code:
+          type: string
+        redirectUri:
+          type: string
+          description: Must exactly match the redirect_uri used to build the authorize URL.
 
     ProductStatus:
       type: string

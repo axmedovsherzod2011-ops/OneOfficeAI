@@ -66,6 +66,7 @@ import {
   Link2,
   Radio,
   Pencil,
+  Instagram,
 } from "lucide-react";
 
 import {
@@ -74,6 +75,11 @@ import {
   useConnectTelegramChannel,
   useDisconnectTelegramChannel,
   getListTelegramChannelsQueryKey,
+  useGetInstagramConfig,
+  useListInstagramAccounts,
+  useExchangeInstagramCode,
+  useDisconnectInstagramAccount,
+  getListInstagramAccountsQueryKey,
   usePublishPost,
   useEnrichProduct,
   useListProducts,
@@ -1538,7 +1544,15 @@ function TelegramConnectModal({
   );
 }
 
-function ConnectorsPage({ company }: { company?: string }) {
+function ConnectorsPage({
+  company,
+  instagramNotice,
+  onDismissInstagramNotice,
+}: {
+  company?: string;
+  instagramNotice?: { type: "success" | "error"; message: string } | null;
+  onDismissInstagramNotice?: () => void;
+}) {
   const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
   const channelsQueryKey = [
@@ -1571,6 +1585,24 @@ function ConnectorsPage({ company }: { company?: string }) {
 
   return (
     <div className="p-6 md:p-10 max-w-2xl space-y-6">
+      {instagramNotice && (
+        <div
+          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
+            instagramNotice.type === "success"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+          }`}
+        >
+          <span>{instagramNotice.message}</span>
+          <button
+            onClick={onDismissInstagramNotice}
+            className="shrink-0 opacity-70 hover:opacity-100 transition"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <Glass className="p-6">
         <div className="flex items-start justify-between gap-4 mb-1">
           <div className="flex items-center gap-3">
@@ -1642,9 +1674,10 @@ function ConnectorsPage({ company }: { company?: string }) {
         )}
       </Glass>
 
+      <InstagramConnectorCard />
+
       <p className="text-slate-500 text-xs px-1">
-        Boshqa ulanishlar tez orada qo'shiladi. Hozircha faqat Telegram
-        qo'llab-quvvatlanadi.
+        Boshqa ulanishlar tez orada qo'shiladi.
       </p>
 
       {showModal && (
@@ -1661,6 +1694,154 @@ function ConnectorsPage({ company }: { company?: string }) {
         />
       )}
     </div>
+  );
+}
+
+// Instagram is connect-only for now (no posting yet) — OAuth via Meta's
+// "Instagram API with Instagram Login". Connecting just redirects the
+// whole page to Instagram and back; there's no in-app form since the
+// person authenticates on Instagram's own screen.
+function InstagramConnectorCard() {
+  const queryClient = useQueryClient();
+  const { data: config } = useGetInstagramConfig();
+  const {
+    data: accounts,
+    isLoading,
+  } = useListInstagramAccounts({
+    query: { queryKey: getListInstagramAccountsQueryKey() },
+  });
+  const disconnectAccount = useDisconnectInstagramAccount();
+  const [removingId, setRemovingId] = useState<number | null>(null);
+  const [connecting, setConnecting] = useState(false);
+
+  const list = accounts || [];
+  const atLimit = list.length >= 3;
+
+  function handleConnect() {
+    if (!config?.appId) return;
+    setConnecting(true);
+    sessionStorage.setItem("ig_oauth_pending", "1");
+    const redirectUri = `${window.location.origin}/`;
+    const authUrl =
+      "https://www.instagram.com/oauth/authorize?" +
+      new URLSearchParams({
+        client_id: config.appId,
+        redirect_uri: redirectUri,
+        scope: config.scope,
+        response_type: "code",
+      }).toString();
+    window.location.href = authUrl;
+  }
+
+  async function handleDisconnect(id: number) {
+    setRemovingId(id);
+    try {
+      await disconnectAccount.mutateAsync({ id });
+      queryClient.invalidateQueries({
+        queryKey: getListInstagramAccountsQueryKey(),
+      });
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-start justify-between gap-4 mb-1">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+            <Instagram className="h-5 w-5 text-pink-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold">Instagram</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              {list.length}/3 akkaunt ulangan
+            </p>
+          </div>
+        </div>
+        <button
+          data-testid="button-connect-instagram"
+          onClick={handleConnect}
+          disabled={atLimit || connecting || !config?.configured}
+          title={
+            atLimit
+              ? "Eng ko'pi bilan 3 ta akkaunt ulash mumkin"
+              : !config?.configured
+                ? "Instagram ulanishi hali sozlanmagan"
+                : ""
+          }
+          className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-pink-500 to-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-pink-900/30 transition"
+        >
+          {connecting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Link2 className="h-3.5 w-3.5" />
+          )}
+          Ulash
+        </button>
+      </div>
+
+      {config && !config.configured && (
+        <p className="text-amber-300/80 text-xs mt-3">
+          Instagram ulanishi hali serverda sozlanmagan (INSTAGRAM_APP_ID /
+          INSTAGRAM_APP_SECRET kerak).
+        </p>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+        </div>
+      ) : list.length === 0 ? (
+        <p className="text-slate-500 text-sm mt-5">
+          Hali Instagram akkaunt ulanmagan. Ulash uchun yuqoridagi tugmani
+          bosing va o'z Instagram akkauntingiz bilan tizimga kiring.
+        </p>
+      ) : (
+        <div className="mt-5 divide-y divide-white/5">
+          {list.map((a: any) => (
+            <div
+              key={a.id}
+              className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                {a.profilePictureUrl ? (
+                  <img
+                    src={a.profilePictureUrl}
+                    alt={a.username}
+                    className="h-9 w-9 rounded-xl object-cover shrink-0"
+                  />
+                ) : (
+                  <div className="h-9 w-9 rounded-xl bg-pink-500/10 border border-pink-500/30 flex items-center justify-center shrink-0">
+                    <Instagram className="h-4 w-4 text-pink-400" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-white text-sm font-medium truncate">
+                    @{a.username || "instagram_user"}
+                  </p>
+                  <p className="text-slate-500 text-xs mt-0.5 truncate">
+                    {a.name || a.accountType || "Ulangan"}
+                  </p>
+                </div>
+              </div>
+              <button
+                data-testid={`button-disconnect-ig-${a.id}`}
+                onClick={() => handleDisconnect(a.id)}
+                disabled={removingId === a.id}
+                className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
+              >
+                {removingId === a.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Glass>
   );
 }
 
@@ -3574,6 +3755,68 @@ function AppShell() {
   const [publishError, setPublishError] = useState("");
   const [generateError, setGenerateError] = useState("");
 
+  // Instagram OAuth redirects the browser back to our own root URL with a
+  // `?code=` (or `?error=`) query string — there's no separate callback
+  // route, "/" already renders AppShell for a signed-in user. The
+  // sessionStorage flag disambiguates this from any other query string
+  // that might land on "/", and is set right before we send the browser
+  // to Instagram (see ConnectorsPage below).
+  const queryClient = useQueryClient();
+  const exchangeInstagramCode = useExchangeInstagramCode();
+  const [instagramNotice, setInstagramNotice] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("ig_oauth_pending") !== "1") return;
+    sessionStorage.removeItem("ig_oauth_pending");
+
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const oauthErrorDescription =
+      params.get("error_description") || params.get("error");
+    // Clean the code/error out of the URL either way, so a page refresh
+    // doesn't try to redeem the same code twice.
+    window.history.replaceState({}, "", window.location.pathname);
+    setNavView("connectors");
+
+    if (oauthErrorDescription) {
+      setInstagramNotice({
+        type: "error",
+        message: oauthErrorDescription.replace(/\+/g, " "),
+      });
+      return;
+    }
+    if (!code) return;
+
+    exchangeInstagramCode.mutate(
+      { data: { code, redirectUri: `${window.location.origin}/` } },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({
+            queryKey: getListInstagramAccountsQueryKey(),
+          });
+          setInstagramNotice({
+            type: "success",
+            message: "Instagram akkaunt muvaffaqiyatli ulandi.",
+          });
+        },
+        onError: (err: any) => {
+          setInstagramNotice({
+            type: "error",
+            message:
+              err?.data?.error ||
+              err?.message ||
+              "Instagram ulanmadi. Qayta urinib ko'ring.",
+          });
+        },
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
   // Default the channel picker to whichever channel is currently connected
   // (or the first one, if there are several) so the common single-channel
   // case needs zero taps. Multiple channels are supported — the person can
@@ -3832,7 +4075,13 @@ function AppShell() {
           />
         )}
 
-        {navView === "connectors" && <ConnectorsPage company={user?.company} />}
+        {navView === "connectors" && (
+          <ConnectorsPage
+            company={user?.company}
+            instagramNotice={instagramNotice}
+            onDismissInstagramNotice={() => setInstagramNotice(null)}
+          />
+        )}
         {navView === "settings" && (
           <SettingsPage onOpenConnectors={goToConnectors} />
         )}

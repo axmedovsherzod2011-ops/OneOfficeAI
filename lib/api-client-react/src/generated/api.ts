@@ -29,8 +29,11 @@ import type {
   EnrichInput,
   EnrichResult,
   ErrorResponse,
+  ExchangeInstagramCodeInput,
   HealthStatus,
   ImageSearchResult,
+  InstagramAccountItem,
+  InstagramConfig,
   ListProductsParams,
   ProductItem,
   Profile,
@@ -449,6 +452,240 @@ export const useDisconnectTelegramChannel = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getDisconnectTelegramChannelMutationOptions(options));
+    }
+
+// ---------------------------------------------------------------------------
+// Instagram (connect-only for now — no publishing yet)
+// ---------------------------------------------------------------------------
+
+export const getGetInstagramConfigUrl = () => {
+
+
+
+
+  return `/api/connectors/instagram/config`
+}
+
+/**
+ * @summary Public OAuth config the frontend needs to build the authorize URL
+ */
+export const getInstagramConfig = async ( options?: RequestInit): Promise<InstagramConfig> => {
+
+  return customFetch<InstagramConfig>(getGetInstagramConfigUrl(),
+  {
+    ...options,
+    method: 'GET'
+  }
+);}
+
+export const getGetInstagramConfigQueryKey = () => {
+    return [
+    `/api/connectors/instagram/config`
+    ] as const;
+    }
+
+export const getGetInstagramConfigQueryOptions = <TData = Awaited<ReturnType<typeof getInstagramConfig>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getInstagramConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetInstagramConfigQueryKey();
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getInstagramConfig>>> = ({ signal }) => getInstagramConfig({ signal, ...requestOptions });
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getInstagramConfig>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetInstagramConfigQueryResult = NonNullable<Awaited<ReturnType<typeof getInstagramConfig>>>
+export type GetInstagramConfigQueryError = ErrorType<unknown>
+
+/**
+ * @summary Public OAuth config the frontend needs to build the authorize URL
+ */
+
+export function useGetInstagramConfig<TData = Awaited<ReturnType<typeof getInstagramConfig>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getInstagramConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetInstagramConfigQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getListInstagramAccountsUrl = () => {
+
+
+
+
+  return `/api/connectors/instagram`
+}
+
+/**
+ * @summary List the signed-in user's connected Instagram accounts (0-3)
+ */
+export const listInstagramAccounts = async ( options?: RequestInit): Promise<InstagramAccountItem[]> => {
+
+  return customFetch<InstagramAccountItem[]>(getListInstagramAccountsUrl(),
+  {
+    ...options,
+    method: 'GET'
+  }
+);}
+
+export const getListInstagramAccountsQueryKey = () => {
+    return [
+    `/api/connectors/instagram`
+    ] as const;
+    }
+
+export const getListInstagramAccountsQueryOptions = <TData = Awaited<ReturnType<typeof listInstagramAccounts>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listInstagramAccounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListInstagramAccountsQueryKey();
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listInstagramAccounts>>> = ({ signal }) => listInstagramAccounts({ signal, ...requestOptions });
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listInstagramAccounts>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListInstagramAccountsQueryResult = NonNullable<Awaited<ReturnType<typeof listInstagramAccounts>>>
+export type ListInstagramAccountsQueryError = ErrorType<unknown>
+
+/**
+ * @summary List the signed-in user's connected Instagram accounts (0-3)
+ */
+
+export function useListInstagramAccounts<TData = Awaited<ReturnType<typeof listInstagramAccounts>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listInstagramAccounts>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListInstagramAccountsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getExchangeInstagramCodeUrl = () => {
+
+
+
+
+  return `/api/connectors/instagram/exchange`
+}
+
+/**
+ * Exchanges the OAuth code for a long-lived token, fetches the profile, and stores the connection (max 3 per user)
+ * @summary Connect an Instagram account
+ */
+export const exchangeInstagramCode = async (exchangeInstagramCodeInput: ExchangeInstagramCodeInput, options?: RequestInit): Promise<InstagramAccountItem> => {
+
+  return customFetch<InstagramAccountItem>(getExchangeInstagramCodeUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(exchangeInstagramCodeInput)
+  }
+);}
+
+export const getExchangeInstagramCodeMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exchangeInstagramCode>>, TError,{data: BodyType<ExchangeInstagramCodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof exchangeInstagramCode>>, TError,{data: BodyType<ExchangeInstagramCodeInput>}, TContext> => {
+
+const mutationKey = ['exchangeInstagramCode'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof exchangeInstagramCode>>, {data: BodyType<ExchangeInstagramCodeInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  exchangeInstagramCode(data,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ExchangeInstagramCodeMutationResult = NonNullable<Awaited<ReturnType<typeof exchangeInstagramCode>>>
+    export type ExchangeInstagramCodeMutationBody = BodyType<ExchangeInstagramCodeInput>
+    export type ExchangeInstagramCodeMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Connect an Instagram account
+ */
+export const useExchangeInstagramCode = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exchangeInstagramCode>>, TError,{data: BodyType<ExchangeInstagramCodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof exchangeInstagramCode>>,
+        TError,
+        {data: BodyType<ExchangeInstagramCodeInput>},
+        TContext
+      > => {
+      return useMutation(getExchangeInstagramCodeMutationOptions(options));
+    }
+
+export const getDisconnectInstagramAccountUrl = (id: number,) => {
+
+
+
+
+  return `/api/connectors/instagram/${id}`
+}
+
+/**
+ * @summary Disconnect an Instagram account
+ */
+export const disconnectInstagramAccount = async (id: number, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getDisconnectInstagramAccountUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+  }
+);}
+
+export const getDisconnectInstagramAccountMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disconnectInstagramAccount>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof disconnectInstagramAccount>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['disconnectInstagramAccount'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof disconnectInstagramAccount>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  disconnectInstagramAccount(id,requestOptions)
+        }
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DisconnectInstagramAccountMutationResult = NonNullable<Awaited<ReturnType<typeof disconnectInstagramAccount>>>
+    export type DisconnectInstagramAccountMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Disconnect an Instagram account
+ */
+export const useDisconnectInstagramAccount = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disconnectInstagramAccount>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof disconnectInstagramAccount>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDisconnectInstagramAccountMutationOptions(options));
     }
 
 export const getPublishPostUrl = () => {

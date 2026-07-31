@@ -150,3 +150,22 @@ export interface UpdateProductInput {
 export interface DeleteProductResult {
   success: boolean;
 }
+
+export interface InstagramConfig {
+  appId: string;
+  scope: string;
+  configured: boolean;
+}
+
+export interface InstagramAccountItem {
+  id: number;
+  username: string;
+  name: string;
+  accountType: string;
+  profilePictureUrl: string;
+}
+
+export interface ExchangeInstagramCodeInput {
+  code: string;
+  redirectUri: string;
+}

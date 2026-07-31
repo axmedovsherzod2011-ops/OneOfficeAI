@@ -62,6 +62,40 @@ export const ConnectTelegramChannelBody = zod.object({
 export const ConnectTelegramChannelResponse = TelegramChannelItem
 
 
+// ---------------------------------------------------------------------------
+// Instagram (connect-only for now — no publishing yet)
+// ---------------------------------------------------------------------------
+
+export const InstagramAccountItem = zod.object({
+  "id": zod.number(),
+  "username": zod.string(),
+  "name": zod.string(),
+  "accountType": zod.string(),
+  "profilePictureUrl": zod.string()
+})
+
+export const ListInstagramAccountsResponse = zod.array(InstagramAccountItem)
+
+export const InstagramConfigResponse = zod.object({
+  "appId": zod.string(),
+  "scope": zod.string(),
+  "configured": zod.boolean()
+})
+
+/**
+ * Exchange the OAuth `code` Instagram redirected back with for a
+ * long-lived token, fetch the account's profile, and store the
+ * connection. Up to 3 accounts may be connected per user.
+ * @summary Connect an Instagram account
+ */
+export const ExchangeInstagramCodeBody = zod.object({
+  "code": zod.string().min(1),
+  "redirectUri": zod.string().min(1)
+})
+
+export const ExchangeInstagramCodeResponse = InstagramAccountItem
+
+
 /**
  * Sends a post to one of the user's connected Telegram channels using the
  * stored bot token for that channel.
