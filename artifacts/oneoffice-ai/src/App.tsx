@@ -666,7 +666,7 @@ function WelcomeScreen({
 
 function AuthCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl w-[440px] max-w-full overflow-hidden shadow-2xl shadow-black/30 p-8">
+    <div className="bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl w-full max-w-[440px] overflow-hidden shadow-2xl shadow-black/30 p-5 sm:p-8">
       {children}
     </div>
   );
@@ -800,10 +800,10 @@ function SignInPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center px-4 py-10">
+    <div className="min-h-screen bg-slate-950 relative overflow-x-hidden flex items-center justify-center px-4 py-6 sm:py-10">
       <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
       <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 right-1/4" />
-      <div className="relative z-10 flex flex-col items-center gap-6">
+      <div className="relative z-10 flex flex-col items-center gap-6 w-full max-w-[440px]">
         <AuthBrand />
 
         <AuthCard>
@@ -971,10 +971,10 @@ function SignUpPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center px-4 py-10">
+    <div className="min-h-screen bg-slate-950 relative overflow-x-hidden flex items-center justify-center px-4 py-6 sm:py-10">
       <GradientBlob className="h-96 w-96 bg-violet-600 -top-20 -left-20" />
       <GradientBlob className="h-96 w-96 bg-blue-600 bottom-0 -right-20" />
-      <div className="relative z-10 flex flex-col items-center gap-6">
+      <div className="relative z-10 flex flex-col items-center gap-6 w-full max-w-[440px]">
         <AuthBrand />
 
         <AuthCard>
@@ -1146,11 +1146,11 @@ function ProfileFallbackForm({
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center px-4 py-10">
+    <div className="min-h-screen bg-slate-950 relative overflow-x-hidden flex items-center justify-center px-4 py-6 sm:py-10">
       <GradientBlob className="h-96 w-96 bg-violet-600 -top-20 -left-20" />
       <GradientBlob className="h-96 w-96 bg-blue-600 bottom-0 -right-20" />
 
-      <Glass className="relative z-10 w-full max-w-md p-8">
+      <Glass className="relative z-10 w-full max-w-md p-5 sm:p-8">
         <div className="flex items-center gap-2 mb-6">
           <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
             <Sparkles className="h-5 w-5 text-white" />
