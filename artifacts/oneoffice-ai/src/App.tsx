@@ -4025,6 +4025,7 @@ function AppShell() {
   const {
     data: profile,
     isLoading: profileLoading,
+    isError: profileError,
     refetch: refetchProfile,
   } = useQuery({
     queryKey: ["me", firebaseUser?.uid],
@@ -4038,6 +4039,7 @@ function AppShell() {
       return res.json();
     },
     enabled: !!firebaseUser,
+    retry: 2,
   });
 
   // Connected Telegram channels — fetched once a profile exists. Post
@@ -4319,6 +4321,34 @@ function AppShell() {
   }
 
   if (profileLoading) return <FullscreenLoader />;
+
+  // A real server/network error (e.g. a DB hiccup) is NOT the same as "no
+  // profile yet" — showing the onboarding form here would be misleading
+  // for a returning user with a complete profile, and re-submitting it
+  // could overwrite their real name/company with placeholder text. Show a
+  // plain retry screen instead and never fall through to onboarding.
+  if (profileError) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
+        <div className="max-w-sm w-full text-center">
+          <AlertCircle className="h-8 w-8 text-rose-400 mx-auto mb-3" />
+          <p className="text-white font-medium">
+            Profilni yuklab bo'lmadi
+          </p>
+          <p className="text-slate-400 text-sm mt-1 mb-5">
+            Serverga ulanishda muammo yuz berdi. Internetni tekshirib, qayta
+            urinib ko'ring.
+          </p>
+          <button
+            onClick={() => refetchProfile()}
+            className="inline-flex items-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-5 py-2.5 rounded-xl font-medium text-sm shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
+          >
+            Qayta urinish
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Only ever happens if the POST /api/profile call right after sign-up
   // failed — a lightweight fallback, no Telegram involved.
