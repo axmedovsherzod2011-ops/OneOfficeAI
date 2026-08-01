@@ -12,6 +12,11 @@ export const usersTable = pgTable("users", {
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   company: text("company").notNull(),
+  // Public slug for this user's storefront page (/store/:slug — no login
+  // required to view it). Generated lazily the first time the person
+  // opens Connectors → Vitrina, not at sign-up, so existing users get one
+  // on demand instead of needing a backfill migration.
+  storeSlug: text("store_slug").unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

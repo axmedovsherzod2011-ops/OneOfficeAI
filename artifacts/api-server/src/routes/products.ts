@@ -34,6 +34,7 @@ function serializeProduct(p: typeof productsTable.$inferSelect) {
     category: p.category,
     costPrice: p.costPrice,
     sellPrice: p.sellPrice,
+    currency: p.currency,
     description: p.description,
     images: p.images,
     status: p.status,
@@ -93,7 +94,7 @@ router.post("/products", async (req, res) => {
     return;
   }
 
-  const { name, category, costPrice, sellPrice, description, images, status } =
+  const { name, category, costPrice, sellPrice, currency, description, images, status } =
     parsed.data;
 
   const [product] = await db
@@ -104,6 +105,7 @@ router.post("/products", async (req, res) => {
       category: category ?? "Electronics",
       costPrice: costPrice ?? "",
       sellPrice: sellPrice ?? "",
+      currency: currency ?? "UZS",
       description: description ?? "",
       images: images ?? [],
       status: status ?? "draft",

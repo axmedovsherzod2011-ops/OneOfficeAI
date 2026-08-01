@@ -10,6 +10,11 @@ import { usersTable } from "./users";
 // and publishes using the product's own images.
 export const PRODUCT_STATUSES = ["draft", "active"] as const;
 
+// Currency the product's prices are entered in. UZS stays the default so
+// existing products (created before this field existed) keep behaving the
+// same way.
+export const PRODUCT_CURRENCIES = ["USD", "UZS", "RUB"] as const;
+
 export const productsTable = pgTable("products", {
   id: serial("id").primaryKey(),
   userId: integer("user_id")
@@ -25,6 +30,9 @@ export const productsTable = pgTable("products", {
   // preserves whatever formatting the user typed, no currency parsing.
   costPrice: text("cost_price").notNull().default(""),
   sellPrice: text("sell_price").notNull().default(""),
+  currency: text("currency", { enum: PRODUCT_CURRENCIES })
+    .notNull()
+    .default("UZS"),
   description: text("description").notNull().default(""),
   // Uploaded image URLs, in display order. Empty until at least one image
   // is attached.

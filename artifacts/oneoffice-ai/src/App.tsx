@@ -127,6 +127,12 @@ const CATEGORIES = [
   "Toys",
 ];
 
+const CURRENCIES = [
+  { key: "UZS", label: "UZS" },
+  { key: "USD", label: "USD" },
+  { key: "RUB", label: "RUB" },
+];
+
 const IMAGE_STYLES = [
   {
     key: "minimal",
@@ -331,12 +337,15 @@ function GradientBlob({ className }: { className: string }) {
 function Glass({
   children,
   className = "",
+  onClick,
 }: {
   children: React.ReactNode;
   className?: string;
+  onClick?: (e: React.MouseEvent) => void;
 }) {
   return (
     <div
+      onClick={onClick}
       className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl shadow-black/30 ${className}`}
     >
       {children}
@@ -1548,10 +1557,14 @@ function ConnectorsPage({
   company,
   instagramNotice,
   onDismissInstagramNotice,
+  vkNotice,
+  onDismissVkNotice,
 }: {
   company?: string;
   instagramNotice?: { type: "success" | "error"; message: string } | null;
   onDismissInstagramNotice?: () => void;
+  vkNotice?: { type: "success" | "error"; message: string } | null;
+  onDismissVkNotice?: () => void;
 }) {
   const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
@@ -1596,6 +1609,24 @@ function ConnectorsPage({
           <span>{instagramNotice.message}</span>
           <button
             onClick={onDismissInstagramNotice}
+            className="shrink-0 opacity-70 hover:opacity-100 transition"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {vkNotice && (
+        <div
+          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
+            vkNotice.type === "success"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+          }`}
+        >
+          <span>{vkNotice.message}</span>
+          <button
+            onClick={onDismissVkNotice}
             className="shrink-0 opacity-70 hover:opacity-100 transition"
           >
             <X className="h-4 w-4" />
@@ -1676,9 +1707,9 @@ function ConnectorsPage({
 
       <InstagramConnectorCard />
 
-      <p className="text-slate-500 text-xs px-1">
-        Boshqa ulanishlar tez orada qo'shiladi.
-      </p>
+      <VkConnectorCard />
+
+      <StoreConnectorCard />
 
       {showModal && (
         <TelegramConnectModal
@@ -1762,14 +1793,8 @@ function InstagramConnectorCard() {
         <button
           data-testid="button-connect-instagram"
           onClick={handleConnect}
-          disabled={atLimit || connecting || !config?.configured}
-          title={
-            atLimit
-              ? "Eng ko'pi bilan 3 ta akkaunt ulash mumkin"
-              : !config?.configured
-                ? "Instagram ulanishi hali sozlanmagan"
-                : ""
-          }
+          disabled={true}
+          title="Hozircha bu xizmat profilaktikada"
           className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-pink-500 to-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-pink-900/30 transition"
         >
           {connecting ? (
@@ -1781,7 +1806,9 @@ function InstagramConnectorCard() {
         </button>
       </div>
 
-      {config && !config.configured && (
+      <p className="text-amber-300/80 text-xs mt-3">Hozircha bu xizmat profilaktikada</p>
+
+      {false && config && !config.configured && (
         <p className="text-amber-300/80 text-xs mt-3">
           Instagram ulanishi hali serverda sozlanmagan (INSTAGRAM_APP_ID /
           INSTAGRAM_APP_SECRET kerak).
@@ -1792,12 +1819,7 @@ function InstagramConnectorCard() {
         <div className="flex items-center justify-center py-8">
           <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
         </div>
-      ) : list.length === 0 ? (
-        <p className="text-slate-500 text-sm mt-5">
-          Hali Instagram akkaunt ulanmagan. Ulash uchun yuqoridagi tugmani
-          bosing va o'z Instagram akkauntingiz bilan tizimga kiring.
-        </p>
-      ) : (
+      ) : list.length === 0 ? null : (
         <div className="mt-5 divide-y divide-white/5">
           {list.map((a: any) => (
             <div
@@ -1841,6 +1863,282 @@ function InstagramConnectorCard() {
           ))}
         </div>
       )}
+    </Glass>
+  );
+}
+
+// VK (VKontakte) connector — full OAuth connect flow, mirroring
+// InstagramConnectorCard. Posting to a VK wall isn't implemented yet;
+// this only connects the account and stores it.
+function VkConnectorCard() {
+  const { user: firebaseUser } = useAuth();
+  const queryClient = useQueryClient();
+  const [connecting, setConnecting] = useState(false);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  async function authedFetch(path: string, init: RequestInit = {}) {
+    const token = await firebaseUser?.getIdToken();
+    const res = await fetch(path, {
+      ...init,
+      headers: {
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error || "So'rov muvaffaqiyatsiz tugadi.");
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  const { data: config } = useQuery({
+    queryKey: ["vk-config"],
+    queryFn: () => authedFetch("/api/connectors/vk/config"),
+    enabled: !!firebaseUser,
+  });
+
+  const {
+    data: accounts,
+    isLoading,
+  } = useQuery({
+    queryKey: ["vk-accounts"],
+    queryFn: () => authedFetch("/api/connectors/vk"),
+    enabled: !!firebaseUser,
+  });
+
+  const list = accounts || [];
+  const atLimit = list.length >= 3;
+
+  function base64UrlEncode(bytes: Uint8Array): string {
+    let str = "";
+    for (const b of bytes) str += String.fromCharCode(b);
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  function randomToken(byteLength: number): string {
+    const bytes = new Uint8Array(byteLength);
+    crypto.getRandomValues(bytes);
+    return base64UrlEncode(bytes);
+  }
+
+  async function sha256Base64Url(input: string): Promise<string> {
+    const data = new TextEncoder().encode(input);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return base64UrlEncode(new Uint8Array(digest));
+  }
+
+  // VK's old oauth.vk.com OAuth 2.0 flow stopped working on 2025-09-30.
+  // The current flow is "VK ID" (id.vk.com), OAuth 2.1 with PKCE — no
+  // client_secret needed on the browser side, just a code_verifier we
+  // generate here and a matching code_challenge sent in the authorize URL.
+  async function handleConnect() {
+    if (!config?.appId) return;
+    setConnecting(true);
+    const codeVerifier = randomToken(48);
+    const codeChallenge = await sha256Base64Url(codeVerifier);
+    const state = randomToken(16);
+    sessionStorage.setItem("vk_oauth_pending", "1");
+    sessionStorage.setItem("vk_code_verifier", codeVerifier);
+    sessionStorage.setItem("vk_oauth_state", state);
+    const redirectUri = `${window.location.origin}/`;
+    const authUrl =
+      "https://id.vk.com/authorize?" +
+      new URLSearchParams({
+        response_type: "code",
+        client_id: config.appId,
+        redirect_uri: redirectUri,
+        scope: config.scope || "",
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+      }).toString();
+    window.location.href = authUrl;
+  }
+
+
+  async function handleDisconnect(id: number) {
+    setRemovingId(id);
+    try {
+      await authedFetch(`/api/connectors/vk/${id}`, { method: "DELETE" });
+      queryClient.invalidateQueries({ queryKey: ["vk-accounts"] });
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-start justify-between gap-4 mb-1">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+            <Tag className="h-5 w-5 text-sky-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold">VK</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              {list.length}/3 akkaunt ulangan
+            </p>
+          </div>
+        </div>
+        <button
+          data-testid="button-connect-vk"
+          onClick={handleConnect}
+          disabled={true}
+          title="Hozircha bu xizmat profilaktikada"
+          className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-sky-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-sky-900/30 transition"
+        >
+          {connecting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Link2 className="h-3.5 w-3.5" />
+          )}
+          Ulash
+        </button>
+      </div>
+
+      <p className="text-amber-300/80 text-xs mt-3">Hozircha bu xizmat profilaktikada</p>
+
+      {false && config && !config.configured && (
+        <p className="text-amber-300/80 text-xs mt-3">
+          VK ulanishi hali serverda sozlanmagan (VK_APP_ID / VK_APP_SECRET
+          kerak).
+        </p>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+        </div>
+      ) : list.length === 0 ? null : (
+        <div className="mt-5 divide-y divide-white/5">
+          {list.map((a: any) => (
+            <div
+              key={a.id}
+              className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                {a.photoUrl ? (
+                  <img
+                    src={a.photoUrl}
+                    alt={a.firstName}
+                    className="h-9 w-9 rounded-xl object-cover shrink-0"
+                  />
+                ) : (
+                  <div className="h-9 w-9 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center shrink-0">
+                    <Tag className="h-4 w-4 text-sky-400" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-white text-sm font-medium truncate">
+                    {a.firstName || a.lastName
+                      ? `${a.firstName} ${a.lastName}`.trim()
+                      : "VK akkaunt"}
+                  </p>
+                  <p className="text-slate-500 text-xs mt-0.5 truncate">
+                    {a.screenName ? `vk.com/${a.screenName}` : "Ulangan"}
+                  </p>
+                </div>
+              </div>
+              <button
+                data-testid={`button-disconnect-vk-${a.id}`}
+                onClick={() => handleDisconnect(a.id)}
+                disabled={removingId === a.id}
+                className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
+              >
+                {removingId === a.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Glass>
+  );
+}
+
+// Public storefront ("vitrina") link — no external API, no third-party
+// account needed. Every user gets a shareable /store/:slug page listing
+// their active products; this card just surfaces that link.
+function StoreConnectorCard() {
+  const { user: firebaseUser } = useAuth();
+  const [copied, setCopied] = useState(false);
+
+  const { data: config, isLoading } = useQuery({
+    queryKey: ["store-config"],
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch("/api/connectors/store/config", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Failed to load store config");
+      return res.json();
+    },
+    enabled: !!firebaseUser,
+  });
+
+  const url = config?.slug ? `${window.location.origin}/store/${config.slug}` : "";
+
+  function handleCopy() {
+    if (!url) return;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-start justify-between gap-4 mb-1">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+            <Globe className="h-5 w-5 text-emerald-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold">Vitrina</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              Ochiq savdo sahifangiz &mdash; hech qanday ro'yxatdan o'tish
+              shart emas
+            </p>
+          </div>
+        </div>
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-emerald-500 to-teal-400 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30 transition"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Ochish
+          </a>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+        </div>
+      ) : url ? (
+        <div className="mt-4 flex items-center gap-2 bg-white/5 rounded-xl px-3 py-2.5">
+          <p className="text-slate-300 text-sm truncate flex-1">{url}</p>
+          <button
+            onClick={handleCopy}
+            className="shrink-0 flex items-center gap-1.5 text-slate-400 hover:text-white text-xs font-medium transition"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            {copied ? "Nusxalandi" : "Nusxalash"}
+          </button>
+        </div>
+      ) : null}
+
+      <p className="text-slate-500 text-xs mt-3">
+        Ushbu havolani mijozlaringizga (Telegram, Instagram bio, vizitka)
+        ulashing &mdash; ular tizimga kirmasdan turib faol (active)
+        mahsulotlaringizni ko'rishlari mumkin.
+      </p>
     </Glass>
   );
 }
@@ -2111,6 +2409,7 @@ function ProductForm({
   const [category, setCategory] = useState(initial?.category ?? CATEGORIES[0]);
   const [costPrice, setCostPrice] = useState(initial?.costPrice ?? "");
   const [sellPrice, setSellPrice] = useState(initial?.sellPrice ?? "");
+  const [currency, setCurrency] = useState(initial?.currency ?? "UZS");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [images, setImages] = useState<string[]>(initial?.images ?? []);
   const [error, setError] = useState("");
@@ -2131,6 +2430,7 @@ function ProductForm({
       category,
       costPrice: costPrice.trim(),
       sellPrice: sellPrice.trim(),
+      currency,
       description: description.trim(),
       images,
       status,
@@ -2219,6 +2519,28 @@ function ProductForm({
                 placeholder="masalan: 349,000"
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
               />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+              <DollarSign className="h-3 w-3" /> Valyuta
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {CURRENCIES.map((c) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => setCurrency(c.key)}
+                  className={`rounded-xl px-4 py-3 text-sm font-medium border transition ${
+                    currency === c.key
+                      ? "bg-gradient-to-r from-violet-500 to-blue-500 border-transparent text-white"
+                      : "bg-white/5 border-white/10 text-slate-300 hover:text-white"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -2325,7 +2647,9 @@ function ProductCard({
         {product.name || "Nomsiz mahsulot"}
       </h4>
       <p className="text-violet-300 text-xs sm:text-sm font-medium mt-0.5 truncate">
-        {product.sellPrice ? `${product.sellPrice} UZS` : "Narx kiritilmagan"}
+        {product.sellPrice
+          ? `${product.sellPrice} ${product.currency || "UZS"}`
+          : "Narx kiritilmagan"}
       </p>
 
       <div className="flex gap-1.5 sm:gap-2 mt-2 sm:mt-3">
@@ -2533,7 +2857,7 @@ function ProductPicker({
         </p>
         {p.sellPrice && (
           <p className="text-violet-300 text-xs font-medium mt-0.5">
-            {p.sellPrice} UZS
+            {p.sellPrice} {p.currency || "UZS"}
           </p>
         )}
       </button>
@@ -2660,7 +2984,7 @@ function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any
           </div>
           <div>
             <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
-              <DollarSign className="h-3 w-3" /> Price (UZS)
+              <DollarSign className="h-3 w-3" /> Price ({form.currency || "UZS"})
             </label>
             <input
               data-testid="input-product-price"
@@ -2891,7 +3215,7 @@ function Results({
 }: any) {
   const postText: string =
     enrichData?.postText ||
-    `✨ ${form.name}\n\n💰 ${form.price} UZS\n\n📲 Buyurtma uchun yozing!`;
+    `✨ ${form.name}\n\n💰 ${form.price} ${form.currency || "UZS"}\n\n📲 Buyurtma uchun yozing!`;
   const enriched = enrichData?.enriched || {};
   const priceDiffPercent: number = enriched.priceDiffPercent ?? 0;
 
@@ -3045,7 +3369,7 @@ function Results({
             <div className="bg-white/5 rounded-2xl p-4">
               <p className="text-xs text-slate-400 mb-1">Sizning narxingiz</p>
               <p className="text-white font-semibold text-lg">
-                {form.price} UZS
+                {form.price} {form.currency || "UZS"}
               </p>
             </div>
             <div className="bg-white/5 rounded-2xl p-4">
@@ -3266,7 +3590,7 @@ function TelegramPreviewModal({
 }: any) {
   const preview =
     postText ||
-    `✨ ${form.name}\n\n💰 ${form.price} UZS\n\n📲 Buyurtma uchun yozing!`;
+    `✨ ${form.name}\n\n💰 ${form.price} ${form.currency || "UZS"}\n\n📲 Buyurtma uchun yozing!`;
   const lines = preview.split("\n").filter(Boolean);
   const images: any[] = selectedImages || [];
 
@@ -3403,7 +3727,8 @@ function Publishing({
         return;
       }
       const postText =
-        enrichData?.postText || `${form.name} — ${form.price} UZS`;
+        enrichData?.postText ||
+        `${form.name} — ${form.price} ${form.currency || "UZS"}`;
       const imageUrls = (selectedImages || []).map((img: any) => img.url);
 
       // Publish to each selected channel; keep going even if one fails so a
@@ -3745,6 +4070,7 @@ function AppShell() {
   const [form, setForm] = useState({
     name: "",
     price: "",
+    currency: "UZS",
     category: "Electronics",
     notes: "",
   });
@@ -3816,6 +4142,78 @@ function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // VK OAuth redirects back to our own root URL with a `?code=` (or
+  // `?error=`) query string, same pattern as the Instagram flow above —
+  // the vk_oauth_pending flag (set in VkConnectorCard) disambiguates it.
+  const [vkNotice, setVkNotice] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("vk_oauth_pending") !== "1") return;
+    sessionStorage.removeItem("vk_oauth_pending");
+    const codeVerifier = sessionStorage.getItem("vk_code_verifier") || "";
+    const expectedState = sessionStorage.getItem("vk_oauth_state") || "";
+    sessionStorage.removeItem("vk_code_verifier");
+    sessionStorage.removeItem("vk_oauth_state");
+
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const deviceId = params.get("device_id");
+    const state = params.get("state");
+    const oauthError = params.get("error_description") || params.get("error");
+    window.history.replaceState({}, "", window.location.pathname);
+    setNavView("connectors");
+
+    if (oauthError) {
+      setVkNotice({ type: "error", message: oauthError.replace(/\+/g, " ") });
+      return;
+    }
+    if (!code || !deviceId) return;
+    if (expectedState && state !== expectedState) {
+      setVkNotice({
+        type: "error",
+        message: "VK ulanmadi: xavfsizlik tekshiruvi mos kelmadi. Qayta urinib ko'ring.",
+      });
+      return;
+    }
+
+    (async () => {
+      try {
+        const token = await firebaseUser?.getIdToken();
+        const res = await fetch("/api/connectors/vk/exchange", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            code,
+            deviceId,
+            codeVerifier,
+            redirectUri: `${window.location.origin}/`,
+          }),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(body?.error || "VK ulanmadi. Qayta urinib ko'ring.");
+        }
+        queryClient.invalidateQueries({ queryKey: ["vk-accounts"] });
+        setVkNotice({
+          type: "success",
+          message: "VK akkaunt muvaffaqiyatli ulandi.",
+        });
+      } catch (err: any) {
+        setVkNotice({
+          type: "error",
+          message: err?.message || "VK ulanmadi. Qayta urinib ko'ring.",
+        });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   // Default the channel picker to whichever channel is currently connected
   // (or the first one, if there are several) so the common single-channel
@@ -3853,7 +4251,7 @@ function AppShell() {
   function resetCreate() {
     setFlow("product");
     setSelectedProduct(null);
-    setForm({ name: "", price: "", category: "Electronics", notes: "" });
+    setForm({ name: "", price: "", currency: "UZS", category: "Electronics", notes: "" });
     setEnrichData(null);
     setSelectedImages([]);
     setShowPreview(false);
@@ -3866,6 +4264,7 @@ function AppShell() {
     setForm({
       name: p.name,
       price: p.sellPrice,
+      currency: p.currency || "UZS",
       category: p.category,
       notes: p.description,
     });
@@ -4080,6 +4479,8 @@ function AppShell() {
             company={user?.company}
             instagramNotice={instagramNotice}
             onDismissInstagramNotice={() => setInstagramNotice(null)}
+            vkNotice={vkNotice}
+            onDismissVkNotice={() => setVkNotice(null)}
           />
         )}
         {navView === "settings" && (
@@ -4121,6 +4522,392 @@ function AppShell() {
 }
 
 // ---------------------------------------------------------------------------
+// PUBLIC STOREFRONT ("PRO VITRINA") — /store/:slug. No sign-in required;
+// anyone with the link (shared from Connectors → Vitrina) sees the
+// business's active products. Deliberately outside AppShell — no
+// sidebar/bottom nav — but reuses the app's own dark violet/blue brand
+// language (GradientBlob, Glass, gradient badges) so it feels like part
+// of OneOffice AI rather than an unrelated storefront theme.
+// ---------------------------------------------------------------------------
+
+function StorefrontPage({ slug }: { slug: string }) {
+  const [search, setSearch] = useState("");
+  const [activeCategory, setActiveCategory] = useState<string>("all");
+  const [, setLocation] = useLocation();
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["storefront", slug],
+    queryFn: async () => {
+      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || "Do'kon topilmadi.");
+      }
+      return res.json();
+    },
+  });
+
+  const products = data?.products || [];
+
+  const categories = React.useMemo(() => {
+    const set = new Set<string>();
+    products.forEach((p: any) => {
+      if (p.category) set.add(p.category);
+    });
+    return Array.from(set);
+  }, [products]);
+
+  const filtered = products.filter((p: any) => {
+    const matchesCategory =
+      activeCategory === "all" || p.category === activeCategory;
+    const matchesSearch =
+      !search || (p.name || "").toLowerCase().includes(search.toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <Loader2 className="h-7 w-7 text-violet-400 animate-spin" />
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="min-h-screen bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center gap-3 px-6 text-center">
+        <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
+        <GradientBlob className="h-72 w-72 bg-blue-600 bottom-0 right-0" />
+        <div className="relative z-10 h-14 w-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+          <AlertCircle className="h-6 w-6 text-rose-400" />
+        </div>
+        <p className="relative z-10 text-white font-semibold text-lg">
+          Do'kon topilmadi
+        </p>
+        <p className="relative z-10 text-slate-500 text-sm max-w-xs">
+          Havola noto'g'ri yoki bu do'kon endi mavjud emas. Havolani
+          yuborgan kishidan qayta tekshirib berishini so'rang.
+        </p>
+      </div>
+    );
+  }
+
+  const brandInitial = (data.company || data.ownerName || "V")
+    .trim()
+    .charAt(0)
+    .toUpperCase();
+
+  return (
+    <div className="min-h-screen bg-slate-950 relative overflow-hidden">
+      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
+      <GradientBlob className="h-96 w-96 bg-blue-600 top-0 -right-32" />
+
+      <header className="sticky top-0 z-10 bg-slate-950/80 backdrop-blur-xl border-b border-white/10">
+        <div className="max-w-5xl mx-auto px-6 py-5 flex items-center gap-4">
+          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shrink-0 text-white text-lg font-semibold">
+            {brandInitial}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs tracking-[0.2em] uppercase text-violet-400">
+                Vitrina
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold font-mono bg-gradient-to-r from-violet-500 to-blue-500 text-white">
+                <Sparkles className="h-2.5 w-2.5" /> PRO
+              </span>
+            </div>
+            <h1 className="text-2xl font-semibold text-white truncate">
+              {data.company || data.ownerName || "Do'kon"}
+            </h1>
+            <p className="font-mono text-xs mt-0.5 text-slate-500">
+              {data.ownerName && data.company ? `${data.ownerName} · ` : ""}
+              {products.length} ta mahsulot
+            </p>
+          </div>
+        </div>
+
+        {products.length > 0 && (
+          <div className="max-w-5xl mx-auto px-6 pb-4 flex items-center gap-3">
+            <div className="relative flex-1 max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Mahsulot qidirish"
+                className="w-full rounded-full border border-white/10 bg-white/5 pl-9 pr-4 py-2 text-sm text-white placeholder:text-slate-500 outline-none focus:border-violet-400/50"
+              />
+            </div>
+            {categories.length > 1 && (
+              <div className="flex items-center gap-2 overflow-x-auto">
+                <button
+                  onClick={() => setActiveCategory("all")}
+                  className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium border transition ${
+                    activeCategory === "all"
+                      ? "bg-gradient-to-r from-violet-500 to-blue-500 border-transparent text-white"
+                      : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Hammasi
+                </button>
+                {categories.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setActiveCategory(c)}
+                    className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-medium border transition ${
+                      activeCategory === c
+                        ? "bg-gradient-to-r from-violet-500 to-blue-500 border-transparent text-white"
+                        : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </header>
+
+      <div className="relative z-10 max-w-5xl mx-auto px-6 py-8">
+        {products.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
+            <div className="h-14 w-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+              <Package className="h-6 w-6 text-violet-400" />
+            </div>
+            <p className="text-white font-semibold">
+              Hozircha faol mahsulotlar yo'q
+            </p>
+            <p className="text-slate-500 text-sm max-w-xs">
+              Egasi tez orada yangi mahsulotlar qo'shishi mumkin. Keyinroq
+              qayta tekshiring.
+            </p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
+            <div className="h-14 w-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+              <Search className="h-6 w-6 text-violet-400" />
+            </div>
+            <p className="text-white font-semibold">Hech narsa topilmadi</p>
+            <p className="text-slate-500 text-sm max-w-xs">
+              Boshqa nom bilan qidirib ko'ring yoki boshqa toifani tanlang.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+            {filtered.map((p: any) => (
+              <Glass
+                key={p.id}
+                onClick={() => setLocation(`/store/${slug}/product/${p.id}`)}
+                className="!rounded-2xl overflow-hidden group hover:border-white/20 transition cursor-pointer"
+              >
+                <div className="relative aspect-square overflow-hidden bg-white/5">
+                  {p.images?.[0] ? (
+                    <img
+                      src={p.images[0]}
+                      alt={p.name}
+                      className="w-full h-full object-cover transition duration-500 group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <ImageIcon className="h-6 w-6 text-slate-600" />
+                    </div>
+                  )}
+                  {p.images?.length > 1 && (
+                    <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium font-mono bg-black/50 backdrop-blur-sm text-white">
+                      <ImageIcon className="h-3 w-3" /> {p.images.length}
+                    </span>
+                  )}
+                  {p.sellPrice && (
+                    <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full pl-2 pr-3 py-1 text-xs font-semibold font-mono bg-gradient-to-r from-violet-500 to-blue-500 text-white shadow-lg shadow-violet-900/30">
+                      <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
+                      {p.sellPrice} {p.currency || "UZS"}
+                    </span>
+                  )}
+                </div>
+                <div className="p-3.5">
+                  {p.category && (
+                    <p className="font-mono text-xs uppercase tracking-wide mb-1 text-violet-400/80">
+                      {p.category}
+                    </p>
+                  )}
+                  <p className="text-sm font-medium text-white truncate">
+                    {p.name}
+                  </p>
+                  {p.description && (
+                    <p className="text-xs mt-1 text-slate-500 line-clamp-2">
+                      {p.description}
+                    </p>
+                  )}
+                </div>
+              </Glass>
+            ))}
+          </div>
+        )}
+
+        <p className="font-mono text-xs tracking-wide text-center mt-14 pb-4 text-slate-600">
+          Vitrina · OneOffice AI orqali yaratilgan
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PRODUCT DETAIL PAGE — its own full-screen route (like Uzum Market),
+// opened when a shopper taps a product card in the Vitrina storefront.
+// Shows a large image gallery (every photo, not just the cover) plus the
+// product's details, with a back arrow that returns to the storefront grid.
+// ---------------------------------------------------------------------------
+
+function ProductDetailPage({
+  slug,
+  productId,
+}: {
+  slug: string;
+  productId: string;
+}) {
+  const [, setLocation] = useLocation();
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["storefront", slug],
+    queryFn: async () => {
+      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || "Do'kon topilmadi.");
+      }
+      return res.json();
+    },
+  });
+
+  const product = (data?.products || []).find(
+    (p: any) => String(p.id) === productId,
+  );
+
+  const goBack = () => setLocation(`/store/${slug}`);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <Loader2 className="h-7 w-7 text-violet-400 animate-spin" />
+      </div>
+    );
+  }
+
+  if (error || !data || !product) {
+    return (
+      <div className="min-h-screen bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center gap-3 px-6 text-center">
+        <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
+        <GradientBlob className="h-72 w-72 bg-blue-600 bottom-0 right-0" />
+        <div className="relative z-10 h-14 w-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+          <AlertCircle className="h-6 w-6 text-rose-400" />
+        </div>
+        <p className="relative z-10 text-white font-semibold text-lg">
+          Mahsulot topilmadi
+        </p>
+        <p className="relative z-10 text-slate-500 text-sm max-w-xs">
+          Havola noto'g'ri yoki bu mahsulot endi mavjud emas.
+        </p>
+        <button
+          onClick={goBack}
+          className="relative z-10 mt-2 inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium bg-white/5 border border-white/10 text-slate-300 hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" /> Vitrinaga qaytish
+        </button>
+      </div>
+    );
+  }
+
+  const images: string[] =
+    Array.isArray(product.images) && product.images.length > 0
+      ? product.images
+      : [];
+
+  return (
+    <div className="min-h-screen bg-slate-950 relative">
+      <div className="sticky top-0 z-10 bg-slate-950/80 backdrop-blur-xl border-b border-white/10">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
+          <button
+            onClick={goBack}
+            className="h-9 w-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center shrink-0 text-slate-300 hover:text-white"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <p className="text-sm font-medium text-white truncate">
+            {product.name}
+          </p>
+        </div>
+      </div>
+
+      <div className="max-w-2xl mx-auto">
+        <div className="relative aspect-square bg-white/5">
+          {images.length > 0 ? (
+            <img
+              src={images[activeIndex]}
+              alt={product.name}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <ImageIcon className="h-8 w-8 text-slate-600" />
+            </div>
+          )}
+        </div>
+
+        {images.length > 1 && (
+          <div className="flex items-center gap-2 px-4 pt-4 overflow-x-auto">
+            {images.map((src, i) => (
+              <button
+                key={i}
+                onClick={() => setActiveIndex(i)}
+                className={`shrink-0 h-16 w-16 rounded-xl overflow-hidden border-2 transition ${
+                  i === activeIndex
+                    ? "border-violet-400"
+                    : "border-white/10 opacity-70 hover:opacity-100"
+                }`}
+              >
+                <img
+                  src={src}
+                  alt={`${product.name} ${i + 1}`}
+                  className="w-full h-full object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              {product.category && (
+                <p className="font-mono text-xs uppercase tracking-wide mb-1 text-violet-400/80">
+                  {product.category}
+                </p>
+              )}
+              <h1 className="text-xl font-semibold text-white">
+                {product.name}
+              </h1>
+            </div>
+            {product.sellPrice && (
+              <span className="shrink-0 inline-flex items-center gap-1.5 rounded-full pl-2 pr-3 py-1 text-xs font-semibold font-mono bg-gradient-to-r from-violet-500 to-blue-500 text-white">
+                <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
+                {product.sellPrice} {product.currency || "UZS"}
+              </span>
+            )}
+          </div>
+          {product.description && (
+            <p className="text-sm mt-3 text-slate-400 leading-relaxed">
+              {product.description}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ROUTES — "/" shows Landing when signed out and AppShell when signed in;
 // "/sign-in" and "/sign-up" are dedicated routes so Google/Apple OAuth
 // redirects and deep links land on a predictable browser path.
@@ -4153,6 +4940,17 @@ function AppRoutes() {
     <Switch>
       <Route path="/sign-in/*?" component={SignInPage} />
       <Route path="/sign-up/*?" component={SignUpPage} />
+      <Route path="/store/:slug/product/:productId">
+        {(params) => (
+          <ProductDetailPage
+            slug={params.slug || ""}
+            productId={params.productId || ""}
+          />
+        )}
+      </Route>
+      <Route path="/store/:slug">
+        {(params) => <StorefrontPage slug={params.slug || ""} />}
+      </Route>
       <Route path="/">
         {!isLoaded ? (
           <FullscreenLoader />

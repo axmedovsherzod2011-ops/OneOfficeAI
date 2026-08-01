@@ -576,6 +576,10 @@ components:
       type: string
       enum: [draft, active]
 
+    ProductCurrency:
+      type: string
+      enum: [USD, UZS, RUB]
+
     ProductItem:
       type: object
       required:
@@ -584,6 +588,7 @@ components:
         - category
         - costPrice
         - sellPrice
+        - currency
         - description
         - images
         - status
@@ -599,6 +604,8 @@ components:
           type: string
         sellPrice:
           type: string
+        currency:
+          $ref: "#/components/schemas/ProductCurrency"
         description:
           type: string
         images:
@@ -621,6 +628,8 @@ components:
           type: string
         sellPrice:
           type: string
+        currency:
+          $ref: "#/components/schemas/ProductCurrency"
         description:
           type: string
         images:
@@ -641,6 +650,8 @@ components:
           type: string
         sellPrice:
           type: string
+        currency:
+          $ref: "#/components/schemas/ProductCurrency"
         description:
           type: string
         images:

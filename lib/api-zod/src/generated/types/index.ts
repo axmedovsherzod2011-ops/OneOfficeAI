@@ -19,6 +19,7 @@ export * from './healthStatus';
 export * from './imageSearchResult';
 export * from './productImage';
 export * from './productStatus';
+export * from './productCurrency';
 export * from './productItem';
 export * from './listProductsParams';
 export * from './createProductInput';

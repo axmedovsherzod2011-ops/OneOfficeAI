@@ -111,12 +111,15 @@ count?: number;
 
 export type ProductStatus = 'draft' | 'active';
 
+export type ProductCurrency = 'USD' | 'UZS' | 'RUB';
+
 export interface ProductItem {
   id: number;
   name: string;
   category: string;
   costPrice: string;
   sellPrice: string;
+  currency: ProductCurrency;
   description: string;
   images: string[];
   status: ProductStatus;
@@ -132,6 +135,7 @@ export interface CreateProductInput {
   category?: string;
   costPrice?: string;
   sellPrice?: string;
+  currency?: ProductCurrency;
   description?: string;
   images?: string[];
   status?: ProductStatus;
@@ -142,6 +146,7 @@ export interface UpdateProductInput {
   category?: string;
   costPrice?: string;
   sellPrice?: string;
+  currency?: ProductCurrency;
   description?: string;
   images?: string[];
   status?: ProductStatus;

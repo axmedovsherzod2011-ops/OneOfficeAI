@@ -181,12 +181,15 @@ export const ListProductsQueryParams = zod.object({
   "status": ProductStatus.optional()
 })
 
+export const ProductCurrency = zod.enum(['USD', 'UZS', 'RUB'])
+
 export const ProductItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "category": zod.string(),
   "costPrice": zod.string(),
   "sellPrice": zod.string(),
+  "currency": ProductCurrency,
   "description": zod.string(),
   "images": zod.array(zod.string()),
   "status": ProductStatus,
@@ -203,6 +206,7 @@ export const CreateProductBody = zod.object({
   "category": zod.string().max(50).optional(),
   "costPrice": zod.string().max(50).optional(),
   "sellPrice": zod.string().max(50).optional(),
+  "currency": ProductCurrency.optional(),
   "description": zod.string().max(2000).optional(),
   "images": zod.array(zod.string()).max(10).optional(),
   "status": ProductStatus.optional()
@@ -218,6 +222,7 @@ export const UpdateProductBody = zod.object({
   "category": zod.string().max(50).optional(),
   "costPrice": zod.string().max(50).optional(),
   "sellPrice": zod.string().max(50).optional(),
+  "currency": ProductCurrency.optional(),
   "description": zod.string().max(2000).optional(),
   "images": zod.array(zod.string()).max(10).optional(),
   "status": ProductStatus.optional()
