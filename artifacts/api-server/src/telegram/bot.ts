@@ -1,4 +1,7 @@
 import crypto from "crypto";
+import { db } from "@workspace/db";
+import { telegramLinkTokensTable } from "@workspace/db/schema";
+import { eq, lt, isNull, and } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Single GLOBAL Telegram bot shared by every OneOffice AI user. The token
@@ -51,38 +54,41 @@ export async function getBotIdentity(): Promise<{
 }
 
 // ---------------------------------------------------------------------------
-// Account-linking tokens: short-lived, single-use, in-memory (this is a
-// ~10-minute handshake, not durable data — no schema/migration needed for
-// it, and it self-cleans on expiry). Maps a random token to the OneOffice
-// user id who requested it, so when the bot receives "/start <token>" it
-// knows which account to attach the sender's Telegram id to.
+// Account-linking tokens: short-lived, single-use, stored in Postgres (see
+// telegramLinkTokensTable). Maps a random token to the OneOffice user id
+// who requested it, so when the bot receives "/start <token>" it knows
+// which account to attach the sender's Telegram id to.
+//
+// This MUST be durable storage rather than in-process memory: the api
+// server deploys on Replit's "autoscale" target, which can run multiple
+// instances and cold-restart idle ones. A token created while handling the
+// "link" request on one instance needs to be readable by a webhook request
+// later handled by a completely different instance.
 // ---------------------------------------------------------------------------
 
 const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
-// A "used" token is kept around (not deleted) for a short grace window so a
-// double-tap on the deep link, or Telegram re-delivering the same update,
-// can be told apart from a token that never existed / was mistyped.
-const USED_TOKEN_RETENTION_MS = 10 * 60 * 1000;
+// Old rows (used or expired) are cleaned up opportunistically so the table
+// never grows unbounded — kept around briefly first so a double-tap or a
+// retried Telegram delivery can still be told apart from "never existed".
+const TOKEN_RETENTION_MS = 60 * 60 * 1000;
 
-type LinkTokenEntry = {
-  userId: number;
-  expiresAt: number;
-  usedAt: number | null;
-};
-
-const linkTokens = new Map<string, LinkTokenEntry>();
-
-export function createLinkToken(userId: number): string {
-  // Opportunistically sweep long-dead entries so this map never grows
-  // unbounded on a long-running process.
-  const now = Date.now();
-  for (const [t, v] of linkTokens) {
-    const deadSince = v.usedAt ?? v.expiresAt;
-    if (now - deadSince > USED_TOKEN_RETENTION_MS) linkTokens.delete(t);
+export async function createLinkToken(userId: number): Promise<string> {
+  // Opportunistic cleanup of old rows. Best-effort — never blocks issuing
+  // a fresh token if it fails for some reason.
+  try {
+    await db
+      .delete(telegramLinkTokensTable)
+      .where(lt(telegramLinkTokensTable.expiresAt, new Date(Date.now() - TOKEN_RETENTION_MS)));
+  } catch (err) {
+    console.error("[telegram] link token cleanup failed (non-fatal)", err);
   }
 
   const token = crypto.randomBytes(16).toString("hex");
-  linkTokens.set(token, { userId, expiresAt: now + LINK_TOKEN_TTL_MS, usedAt: null });
+  await db.insert(telegramLinkTokensTable).values({
+    token,
+    userId,
+    expiresAt: new Date(Date.now() + LINK_TOKEN_TTL_MS),
+  });
   return token;
 }
 
@@ -92,19 +98,38 @@ export type ConsumeLinkTokenResult =
   | { status: "expired" }
   | { status: "already_used" };
 
-export function consumeLinkToken(token: string): ConsumeLinkTokenResult {
-  const entry = linkTokens.get(token);
-  if (!entry) return { status: "not_found" };
+export async function consumeLinkToken(token: string): Promise<ConsumeLinkTokenResult> {
+  const [row] = await db
+    .select()
+    .from(telegramLinkTokensTable)
+    .where(eq(telegramLinkTokensTable.token, token))
+    .limit(1);
 
-  if (entry.usedAt !== null) return { status: "already_used" };
+  if (!row) return { status: "not_found" };
+  if (row.usedAt !== null) return { status: "already_used" };
 
-  if (entry.expiresAt < Date.now()) {
-    entry.usedAt = Date.now();
-    return { status: "expired" };
-  }
+  const now = new Date();
 
-  entry.usedAt = Date.now();
-  return { status: "ok", userId: entry.userId };
+  // Mark used atomically and only on the still-unused row, so two
+  // near-simultaneous requests for the same token (a double-tap, or
+  // Telegram redelivering an update) can't both read "ok" — whichever
+  // UPDATE lands second will affect zero rows.
+  const updated = await db
+    .update(telegramLinkTokensTable)
+    .set({ usedAt: now })
+    .where(
+      and(
+        eq(telegramLinkTokensTable.id, row.id),
+        isNull(telegramLinkTokensTable.usedAt),
+      ),
+    )
+    .returning({ id: telegramLinkTokensTable.id });
+
+  if (updated.length === 0) return { status: "already_used" };
+
+  if (row.expiresAt < now) return { status: "expired" };
+
+  return { status: "ok", userId: row.userId };
 }
 
 // ---------------------------------------------------------------------------

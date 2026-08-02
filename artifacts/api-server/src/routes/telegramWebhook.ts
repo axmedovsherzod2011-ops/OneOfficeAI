@@ -90,7 +90,7 @@ router.post("/telegram/webhook", async (req, res) => {
         return;
       }
 
-      const result = consumeLinkToken(token);
+      const result = await consumeLinkToken(token);
 
       if (result.status === "not_found") {
         await sendMessage(

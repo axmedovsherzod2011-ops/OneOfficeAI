@@ -88,7 +88,7 @@ router.get(
       return;
     }
 
-    const token = createLinkToken(user.id);
+    const token = await createLinkToken(user.id);
     res.json({
       deepLink: `https://t.me/${bot.username}?start=${token}`,
     });
