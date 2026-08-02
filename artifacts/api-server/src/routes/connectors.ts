@@ -1,15 +1,26 @@
 import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
-import {
-  usersTable,
-  telegramChannelsTable,
-  MAX_TELEGRAM_CHANNELS_PER_USER,
-} from "@workspace/db/schema";
-import { ConnectTelegramChannelBody } from "@workspace/api-zod";
+import { usersTable, telegramChannelsTable } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
+import { createLinkToken, getBotIdentity, isTelegramConfigured } from "../telegram/bot";
 
 const router = Router();
+
+// So a DB/driver error comes back as JSON, not a raw HTML 500 page.
+function handle(fn: (req: any, res: any) => Promise<void>) {
+  return async (req: any, res: any) => {
+    try {
+      await fn(req, res);
+    } catch (err) {
+      console.error("[connectors route]", err);
+      res.status(500).json({
+        error:
+          "Serverda xatolik yuz berdi. Ma'lumotlar bazasi so'nggi o'zgarishlar bilan sinxron emas bo'lishi mumkin (pnpm run push kerak bo'lishi mumkin).",
+      });
+    }
+  };
+}
 
 async function getProfileOr404(
   firebaseUid: string,
@@ -25,211 +36,140 @@ async function getProfileOr404(
 function toChannelResponse(c: typeof telegramChannelsTable.$inferSelect) {
   return {
     id: c.id,
-    channelUsername: c.channelUsername,
     channelId: c.channelId,
-    botUsername: c.botUsername,
+    channelUsername: c.channelUsername,
+    channelTitle: c.channelTitle,
+    connectedAt: c.connectedAt.toISOString(),
+    isActive: c.isActive,
   };
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/connectors/telegram — list channels connected by the signed-in
-// user (0-3).
+// GET /connectors/telegram/config — public info the frontend needs: the
+// global bot's own @username (to build the t.me deep link) and whether
+// Telegram is even configured on this server yet.
 // ---------------------------------------------------------------------------
-router.get("/connectors/telegram", async (req, res) => {
-  const { userId: firebaseUid } = getAuth(req);
-  if (!firebaseUid) {
-    res.status(401).json({ error: "Tizimga kirilmagan." });
-    return;
-  }
-
-  const user = await getProfileOr404(firebaseUid);
-  if (!user) {
-    res.status(404).json({ error: "Profil hali sozlanmagan." });
-    return;
-  }
-
-  const channels = await db
-    .select()
-    .from(telegramChannelsTable)
-    .where(eq(telegramChannelsTable.userId, user.id));
-
-  res.json(channels.map(toChannelResponse));
-});
-
-// ---------------------------------------------------------------------------
-// POST /api/connectors/telegram — verify the bot token + channel via
-// Telegram, then store the connection. Up to MAX_TELEGRAM_CHANNELS_PER_USER
-// channels may be connected at once; the person removes one first to add a
-// new one beyond that.
-// ---------------------------------------------------------------------------
-router.post("/connectors/telegram", async (req, res) => {
-  const { userId: firebaseUid } = getAuth(req);
-  if (!firebaseUid) {
-    res.status(401).json({ error: "Tizimga kirilmagan." });
-    return;
-  }
-
-  const user = await getProfileOr404(firebaseUid);
-  if (!user) {
-    res.status(404).json({ error: "Profil hali sozlanmagan." });
-    return;
-  }
-
-  const parsed = ConnectTelegramChannelBody.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid input" });
-    return;
-  }
-  const { channelUsername, botToken } = parsed.data;
-
-  const existing = await db
-    .select({ id: telegramChannelsTable.id })
-    .from(telegramChannelsTable)
-    .where(eq(telegramChannelsTable.userId, user.id));
-
-  if (existing.length >= MAX_TELEGRAM_CHANNELS_PER_USER) {
-    res.status(400).json({
-      error: `Siz eng ko'pi bilan ${MAX_TELEGRAM_CHANNELS_PER_USER} ta Telegram kanal ulashingiz mumkin. Yangisini ulash uchun avval birontasini o'chiring.`,
+router.get(
+  "/connectors/telegram/config",
+  handle(async (_req, res) => {
+    const bot = await getBotIdentity();
+    res.json({
+      botUsername: bot?.username ?? null,
+      configured: isTelegramConfigured() && !!bot,
     });
-    return;
-  }
+  }),
+);
 
-  // Verify bot token with Telegram getMe
-  let botUsername: string;
-  let botNumericId: number | undefined;
-  try {
-    const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
-    const meData = (await meRes.json()) as {
-      ok: boolean;
-      result?: { username?: string; id?: number };
-      description?: string;
-    };
-    if (!meData.ok) {
+// ---------------------------------------------------------------------------
+// GET /connectors/telegram/link — generates a one-time linking token for
+// the signed-in user and returns the t.me deep link that starts the bot
+// with it. Opening that link and pressing Start is the entire "sign in
+// with Telegram" step — no form, no token typed anywhere.
+// ---------------------------------------------------------------------------
+router.get(
+  "/connectors/telegram/link",
+  handle(async (req, res) => {
+    const { userId: firebaseUid } = getAuth(req);
+    if (!firebaseUid) {
+      res.status(401).json({ error: "Tizimga kirilmagan." });
+      return;
+    }
+    const user = await getProfileOr404(firebaseUid);
+    if (!user) {
+      res.status(404).json({ error: "Profil hali sozlanmagan." });
+      return;
+    }
+
+    const bot = await getBotIdentity();
+    if (!bot) {
       res.status(400).json({
-        error: `Invalid bot token: ${meData.description || "Telegram rejected the token"}`,
+        error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN).",
       });
       return;
     }
-    botUsername = meData.result?.username ?? "unknown_bot";
-    botNumericId = meData.result?.id;
-  } catch {
-    res.status(400).json({
-      error: "Failed to reach Telegram API. Check your internet connection.",
-    });
-    return;
-  }
 
-  // Resolve channel via getChat. The bot must already be added as admin to
-  // the channel, otherwise Telegram returns "chat not found" for private
-  // channels.
-  const channelHandle = channelUsername.startsWith("@")
-    ? channelUsername
-    : `@${channelUsername}`;
-  let channelId: string;
-  try {
-    const chatRes = await fetch(
-      `https://api.telegram.org/bot${botToken}/getChat?chat_id=${encodeURIComponent(channelHandle)}`,
-    );
-    const chatData = (await chatRes.json()) as {
-      ok: boolean;
-      result?: { id?: number };
-      description?: string;
-    };
-    if (!chatData.ok) {
-      res.status(400).json({
-        error: `Kanal topilmadi. Iltimos, botni kanalingizga admin sifatida qo'shib, keyin ulanishni bosing. (${chatData.description ?? "chat not found"})`,
-      });
+    const token = createLinkToken(user.id);
+    res.json({
+      deepLink: `https://t.me/${bot.username}?start=${token}`,
+    });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// GET /connectors/telegram — list the signed-in user's connected channels
+// (any number). Inactive channels (bot demoted/removed) are excluded —
+// they still exist for old posts to resolve against, just hidden here.
+// ---------------------------------------------------------------------------
+router.get(
+  "/connectors/telegram",
+  handle(async (req, res) => {
+    const { userId: firebaseUid } = getAuth(req);
+    if (!firebaseUid) {
+      res.status(401).json({ error: "Tizimga kirilmagan." });
       return;
     }
-    channelId = String(chatData.result?.id ?? "");
-  } catch {
-    res.status(400).json({
-      error:
-        "Telegram API bilan bog'lanib bo'lmadi. Internet aloqangizni tekshiring.",
-    });
-    return;
-  }
+    const user = await getProfileOr404(firebaseUid);
+    if (!user) {
+      res.status(404).json({ error: "Profil hali sozlanmagan." });
+      return;
+    }
 
-  // Verify the bot is an admin in the channel.
-  try {
-    if (botNumericId) {
-      const memberRes = await fetch(
-        `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${encodeURIComponent(channelId)}&user_id=${botNumericId}`,
+    const channels = await db
+      .select()
+      .from(telegramChannelsTable)
+      .where(
+        and(
+          eq(telegramChannelsTable.userId, user.id),
+          eq(telegramChannelsTable.isActive, true),
+        ),
       );
-      const memberData = (await memberRes.json()) as {
-        ok: boolean;
-        result?: { status?: string };
-      };
-      if (memberData.ok && memberData.result) {
-        const status = memberData.result.status;
-        if (status !== "administrator" && status !== "creator") {
-          res.status(400).json({
-            error:
-              "Bot kanalda admin emas. Botni kanalga admin sifatida qo'shing va 'Post Messages' ruxsatini bering.",
-          });
-          return;
-        }
-      }
+
+    res.json(channels.map(toChannelResponse));
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// DELETE /connectors/telegram/:id — disconnect a channel from OneOffice's
+// side. (This doesn't remove the bot from the channel itself — the person
+// can do that from Telegram if they also want the bot gone there.)
+// ---------------------------------------------------------------------------
+router.delete(
+  "/connectors/telegram/:id",
+  handle(async (req, res) => {
+    const { userId: firebaseUid } = getAuth(req);
+    if (!firebaseUid) {
+      res.status(401).json({ error: "Tizimga kirilmagan." });
+      return;
     }
-    // If getChatMember lookup fails, proceed — publish step will surface the real error
-  } catch {
-    // Non-fatal — proceed
-  }
+    const user = await getProfileOr404(firebaseUid);
+    if (!user) {
+      res.status(404).json({ error: "Profil hali sozlanmagan." });
+      return;
+    }
 
-  const [channel] = await db
-    .insert(telegramChannelsTable)
-    .values({
-      userId: user.id,
-      channelUsername,
-      channelId,
-      botToken,
-      botUsername,
-    })
-    .returning();
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Invalid channel id" });
+      return;
+    }
 
-  res.json(toChannelResponse(channel));
-});
+    const deleted = await db
+      .delete(telegramChannelsTable)
+      .where(
+        and(
+          eq(telegramChannelsTable.id, id),
+          eq(telegramChannelsTable.userId, user.id),
+        ),
+      )
+      .returning({ id: telegramChannelsTable.id });
 
-// ---------------------------------------------------------------------------
-// DELETE /api/connectors/telegram/:id — disconnect a channel. Scoped to the
-// signed-in user so nobody can remove someone else's connection by guessing
-// an id.
-// ---------------------------------------------------------------------------
-router.delete("/connectors/telegram/:id", async (req, res) => {
-  const { userId: firebaseUid } = getAuth(req);
-  if (!firebaseUid) {
-    res.status(401).json({ error: "Tizimga kirilmagan." });
-    return;
-  }
+    if (deleted.length === 0) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
+    }
 
-  const user = await getProfileOr404(firebaseUid);
-  if (!user) {
-    res.status(404).json({ error: "Profil hali sozlanmagan." });
-    return;
-  }
-
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) {
-    res.status(400).json({ error: "Invalid channel id" });
-    return;
-  }
-
-  const deleted = await db
-    .delete(telegramChannelsTable)
-    .where(
-      and(
-        eq(telegramChannelsTable.id, id),
-        eq(telegramChannelsTable.userId, user.id),
-      ),
-    )
-    .returning({ id: telegramChannelsTable.id });
-
-  if (deleted.length === 0) {
-    res.status(404).json({ error: "Channel not found" });
-    return;
-  }
-
-  res.status(204).end();
-});
+    res.status(204).end();
+  }),
+);
 
 export default router;

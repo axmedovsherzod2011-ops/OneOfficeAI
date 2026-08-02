@@ -6,7 +6,9 @@
 
 export interface TelegramChannel {
   id: number;
-  channelUsername: string;
   channelId: string;
-  botUsername: string;
+  channelUsername: string | null;
+  channelTitle: string;
+  connectedAt: string;
+  isActive: boolean;
 }

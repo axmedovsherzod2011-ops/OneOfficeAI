@@ -22,7 +22,6 @@ import type {
 import type {
   ConnectInput,
   ConnectResult,
-  ConnectTelegramChannelInput,
   CreateProductInput,
   CreateProfileInput,
   DeleteProductResult,
@@ -41,6 +40,8 @@ import type {
   PublishResult,
   SearchImagesParams,
   TelegramChannel,
+  TelegramConfig,
+  TelegramLinkResult,
   UpdateProductInput
 } from './api.schemas';
 
@@ -338,65 +339,123 @@ export function useListTelegramChannels<TData = Awaited<ReturnType<typeof listTe
   return withQueryKey(query, queryOptions.queryKey);
 }
 
-export const getConnectTelegramChannelUrl = () => {
+export const getGetTelegramConfigUrl = () => {
 
 
 
 
-  return `/api/connectors/telegram`
+  return `/api/connectors/telegram/config`
 }
 
 /**
- * Verifies the bot token + channel via Telegram, then stores the connection (max 3 per user)
- * @summary Connect a Telegram channel
+ * @summary Public info needed to build the Telegram deep link (bot username)
  */
-export const connectTelegramChannel = async (connectTelegramChannelInput: ConnectTelegramChannelInput, options?: RequestInit): Promise<TelegramChannel> => {
+export const getTelegramConfig = async ( options?: RequestInit): Promise<TelegramConfig> => {
 
-  return customFetch<TelegramChannel>(getConnectTelegramChannelUrl(),
+  return customFetch<TelegramConfig>(getGetTelegramConfigUrl(),
   {
     ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(connectTelegramChannelInput)
+    method: 'GET'
   }
 );}
 
-export const getConnectTelegramChannelMutationOptions = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof connectTelegramChannel>>, TError,{data: BodyType<ConnectTelegramChannelInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof connectTelegramChannel>>, TError,{data: BodyType<ConnectTelegramChannelInput>}, TContext> => {
-
-const mutationKey = ['connectTelegramChannel'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof connectTelegramChannel>>, {data: BodyType<ConnectTelegramChannelInput>}> = (props) => {
-          const {data} = props ?? {};
-
-          return  connectTelegramChannel(data,requestOptions)
-        }
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type ConnectTelegramChannelMutationResult = NonNullable<Awaited<ReturnType<typeof connectTelegramChannel>>>
-    export type ConnectTelegramChannelMutationBody = BodyType<ConnectTelegramChannelInput>
-    export type ConnectTelegramChannelMutationError = ErrorType<ErrorResponse>
-
-    /**
- * @summary Connect a Telegram channel
- */
-export const useConnectTelegramChannel = <TError = ErrorType<ErrorResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof connectTelegramChannel>>, TError,{data: BodyType<ConnectTelegramChannelInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
- ): UseMutationResult<
-        Awaited<ReturnType<typeof connectTelegramChannel>>,
-        TError,
-        {data: BodyType<ConnectTelegramChannelInput>},
-        TContext
-      > => {
-      return useMutation(getConnectTelegramChannelMutationOptions(options));
+export const getGetTelegramConfigQueryKey = () => {
+    return [
+    `/api/connectors/telegram/config`
+    ] as const;
     }
+
+export const getGetTelegramConfigQueryOptions = <TData = Awaited<ReturnType<typeof getTelegramConfig>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTelegramConfigQueryKey();
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTelegramConfig>>> = ({ signal }) => getTelegramConfig({ signal, ...requestOptions });
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTelegramConfig>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetTelegramConfigQueryResult = NonNullable<Awaited<ReturnType<typeof getTelegramConfig>>>
+export type GetTelegramConfigQueryError = ErrorType<unknown>
+
+/**
+ * @summary Public info needed to build the Telegram deep link (bot username)
+ */
+
+export function useGetTelegramConfig<TData = Awaited<ReturnType<typeof getTelegramConfig>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramConfig>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetTelegramConfigQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getGetTelegramLinkUrl = () => {
+
+
+
+
+  return `/api/connectors/telegram/link`
+}
+
+/**
+ * Generates a one-time token and returns the t.me deep link that starts the bot with it — opening it and pressing Start links the person's Telegram account, no form involved
+ * @summary Get a fresh Telegram account-linking deep link
+ */
+export const getTelegramLink = async ( options?: RequestInit): Promise<TelegramLinkResult> => {
+
+  return customFetch<TelegramLinkResult>(getGetTelegramLinkUrl(),
+  {
+    ...options,
+    method: 'GET'
+  }
+);}
+
+export const getGetTelegramLinkQueryKey = () => {
+    return [
+    `/api/connectors/telegram/link`
+    ] as const;
+    }
+
+export const getGetTelegramLinkQueryOptions = <TData = Awaited<ReturnType<typeof getTelegramLink>>, TError = ErrorType<ErrorResponse>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramLink>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTelegramLinkQueryKey();
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTelegramLink>>> = ({ signal }) => getTelegramLink({ signal, ...requestOptions });
+
+   return  { queryKey, queryFn, enabled: false, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTelegramLink>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetTelegramLinkQueryResult = NonNullable<Awaited<ReturnType<typeof getTelegramLink>>>
+export type GetTelegramLinkQueryError = ErrorType<ErrorResponse>
+
+/**
+ * Disabled by default (fetched fresh on demand via refetch() when the
+ * person clicks "Connect Telegram", since a stale link/expired token
+ * would otherwise sit in cache).
+ * @summary Get a fresh Telegram account-linking deep link
+ */
+
+export function useGetTelegramLink<TData = Awaited<ReturnType<typeof getTelegramLink>>, TError = ErrorType<ErrorResponse>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramLink>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetTelegramLinkQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getDisconnectTelegramChannelUrl = (id: number,) => {
 

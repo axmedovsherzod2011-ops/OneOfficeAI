@@ -39,14 +39,20 @@ export interface Profile {
 
 export interface TelegramChannel {
   id: number;
-  channelUsername: string;
   channelId: string;
-  botUsername: string;
+  channelUsername: string | null;
+  channelTitle: string;
+  connectedAt: string;
+  isActive: boolean;
 }
 
-export interface ConnectTelegramChannelInput {
-  channelUsername: string;
-  botToken: string;
+export interface TelegramConfig {
+  botUsername: string | null;
+  configured: boolean;
+}
+
+export interface TelegramLinkResult {
+  deepLink: string;
 }
 
 export interface PublishInput {

@@ -3,7 +3,7 @@ import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, telegramChannelsTable } from "@workspace/db/schema";
 import { CreateProfileBody } from "@workspace/api-zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 const router = Router();
 
@@ -60,7 +60,12 @@ router.get(
     const channels = await db
       .select()
       .from(telegramChannelsTable)
-      .where(eq(telegramChannelsTable.userId, user.id));
+      .where(
+        and(
+          eq(telegramChannelsTable.userId, user.id),
+          eq(telegramChannelsTable.isActive, true),
+        ),
+      );
 
     res.json({
       id: user.id,
@@ -69,9 +74,9 @@ router.get(
       company: user.company,
       telegramChannels: channels.map((c) => ({
         id: c.id,
-        channelUsername: c.channelUsername,
         channelId: c.channelId,
-        botUsername: c.botUsername,
+        channelUsername: c.channelUsername,
+        channelTitle: c.channelTitle,
       })),
     });
   }),

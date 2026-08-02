@@ -17,6 +17,11 @@ export const usersTable = pgTable("users", {
   // opens Connectors → Vitrina, not at sign-up, so existing users get one
   // on demand instead of needing a backfill migration.
   storeSlug: text("store_slug").unique(),
+  // The person's own Telegram account id (not the bot's), set once they
+  // link Telegram from Connectors by messaging the global OneOffice bot.
+  // This is how the bot's webhook knows which OneOffice account to attach
+  // a newly-admin'd channel to — no token or chat id ever entered by hand.
+  telegramUserId: text("telegram_user_id").unique(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

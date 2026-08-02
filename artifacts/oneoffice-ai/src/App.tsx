@@ -72,7 +72,8 @@ import {
 import {
   useCreateProfile,
   useListTelegramChannels,
-  useConnectTelegramChannel,
+  useGetTelegramConfig,
+  useGetTelegramLink,
   useDisconnectTelegramChannel,
   getListTelegramChannelsQueryKey,
   useGetInstagramConfig,
@@ -1309,301 +1310,167 @@ function CopyField({ value }: { value: string }) {
 
 // ---------------------------------------------------------------------------
 // CONNECTORS — Settings-adjacent screen where a person connects (or
-// disconnects) up to MAX_TELEGRAM_CHANNELS Telegram channels. Sign-up no
-// longer requires this; it's entirely opt-in, whenever they're ready.
+// disconnects) social accounts. Sign-up no longer requires this; it's
+// entirely opt-in, whenever they're ready.
 // ---------------------------------------------------------------------------
 
-const MAX_TELEGRAM_CHANNELS = 3;
-
-const CONNECT_STEPS = [
-  { key: "channel", label: "Create channel" },
-  { key: "bot", label: "Create bot" },
-  { key: "connect", label: "Connect" },
-];
-
-function TelegramConnectModal({
-  company,
-  onClose,
-  onConnected,
-}: {
-  company?: string;
-  onClose: () => void;
-  onConnected: () => void;
-}) {
-  const [step, setStep] = useState(0);
-  const [channelUsername, setChannelUsername] = useState("");
-  const [botToken, setBotToken] = useState("");
-  const [error, setError] = useState("");
-  const connectChannel = useConnectTelegramChannel();
-
-  const canNext = [!!channelUsername, true][step];
-
-  function goNext() {
-    if (!canNext) {
-      setError("Iltimos, kanal username kiriting.");
-      return;
-    }
-    setError("");
-    setStep((s) => Math.min(s + 1, CONNECT_STEPS.length - 1));
-  }
-
-  function goBack() {
-    setError("");
-    setStep((s) => Math.max(s - 1, 0));
-  }
-
-  async function handleConnect() {
-    if (!botToken.trim()) {
-      setError("Bot tokenini kiriting.");
-      return;
-    }
-    setError("");
-    try {
-      await connectChannel.mutateAsync({
-        data: { channelUsername, botToken },
-      });
-      onConnected();
-    } catch (err: any) {
-      setError(
-        (err as any)?.data?.error ||
-          err?.message ||
-          "Something went wrong while connecting. Please try again.",
-      );
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 overflow-y-auto">
-      <Glass className="relative w-full max-w-lg p-8 my-4">
-        <button
-          onClick={onClose}
-          className="absolute top-5 right-5 text-slate-400 hover:text-white"
-        >
-          <X className="h-5 w-5" />
-        </button>
-
-        <div className="flex items-center gap-3 mb-6">
-          <div className="h-9 w-9 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-            <Send className="h-4 w-4 text-blue-400" />
-          </div>
-          <span className="text-white font-semibold text-lg">
-            Telegram ulash
-          </span>
-        </div>
-
-        <StepRail step={step} steps={CONNECT_STEPS} />
-
-        {step === 0 && (
-          <div>
-            <h2 className="text-xl font-semibold text-white mb-1">
-              Telegram kanalingizni yarating
-            </h2>
-            <p className="text-sm text-slate-400 mb-5">
-              AI tomonidan yaratilgan postlar shu yerda e'lon qilinadi.
-            </p>
-            <InstructionList
-              items={[
-                <>
-                  Telegram'da yozish belgisini bosing va{" "}
-                  <b className="text-white">New Channel</b> ni tanlang.
-                </>,
-                <>
-                  Biznesingiz nomi bilan ataang — masalan{" "}
-                  <span className="text-slate-100">
-                    "{company || "Sizning biznesingiz"} Store"
-                  </span>
-                  .
-                </>,
-                <>
-                  Kanal sozlamalarida uni <b className="text-white">Public</b>{" "}
-                  qiling va username tanlang.
-                </>,
-                <>Shu username'ni pastga kiriting.</>,
-              ]}
-            />
-            <div className="relative mb-2">
-              <Hash className="h-4 w-4 text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
-              <input
-                data-testid="input-connect-channel-username"
-                value={channelUsername}
-                onChange={(e) => {
-                  setError("");
-                  setChannelUsername(e.target.value);
-                }}
-                placeholder="yourchannelname"
-                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-              />
-            </div>
-          </div>
-        )}
-
-        {step === 1 && (
-          <div>
-            <h2 className="text-xl font-semibold text-white mb-1">
-              Post qiluvchi botingizni yarating
-            </h2>
-            <p className="text-sm text-slate-400 mb-5">
-              Telegram botlar siz nomingizdan post qiladi — BotFather buni bir
-              necha soniyada yaratadi.
-            </p>
-            <InstructionList
-              items={[
-                <>
-                  Telegram'da <b className="text-white">@BotFather</b> ni
-                  oching.
-                </>,
-                <>Quyidagi buyruqni yuboring.</>,
-                <>
-                  Nom, keyin <span className="text-slate-100">"bot"</span> bilan
-                  tugaydigan username tanlang.
-                </>,
-                <>
-                  BotFather API token yuboradi — keyingi qadamda kerak bo'ladi.
-                </>,
-              ]}
-            />
-            <CopyField value="/newbot" />
-            <a
-              href="https://t.me/BotFather"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs text-violet-300 hover:text-violet-200 transition"
-            >
-              @BotFather'ni ochish <ExternalLink className="h-3 w-3" />
-            </a>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div>
-            <h2 className="text-xl font-semibold text-white mb-1">
-              Botni admin sifatida qo'shing
-            </h2>
-            <p className="text-sm text-slate-400 mb-5">
-              Botga kanalda post qilish huquqini bering, so'ng shu yerda ulang.
-            </p>
-            <InstructionList
-              items={[
-                <>
-                  Kanal →{" "}
-                  <b className="text-white">
-                    Settings → Administrators → Add Admin
-                  </b>
-                  .
-                </>,
-                <>Bot username'ini qidiring va tanlang.</>,
-                <>
-                  <b className="text-white">Post Messages</b> ruxsatini yoqing
-                  va saqlang.
-                </>,
-                <>BotFather bergan API tokenni pastga joylashtiring.</>,
-              ]}
-            />
-            <input
-              data-testid="input-connect-bot-token"
-              value={botToken}
-              onChange={(e) => {
-                setError("");
-                setBotToken(e.target.value);
-              }}
-              type="password"
-              placeholder="123456789:AAExampleTokenFromBotFather"
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition font-mono"
-            />
-          </div>
-        )}
-
-        {error && (
-          <div className="flex items-center gap-2 text-rose-400 text-xs mt-4">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {error}
-          </div>
-        )}
-
-        <div className="flex items-center gap-3 mt-7">
-          {step > 0 && (
-            <button
-              onClick={goBack}
-              disabled={connectChannel.isPending}
-              className="flex items-center gap-1.5 text-slate-400 hover:text-white px-4 py-3.5 rounded-xl border border-white/10 hover:border-white/20 transition text-sm font-medium disabled:opacity-40"
-            >
-              <ArrowLeft className="h-4 w-4" /> Orqaga
-            </button>
-          )}
-          {step < CONNECT_STEPS.length - 1 ? (
-            <button
-              data-testid="button-connect-continue"
-              onClick={goNext}
-              className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
-            >
-              Davom etish <ChevronRight className="h-4 w-4" />
-            </button>
-          ) : (
-            <button
-              data-testid="button-connect-finish"
-              onClick={handleConnect}
-              disabled={connectChannel.isPending}
-              className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 disabled:opacity-60 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-emerald-900/30 transition"
-            >
-              {connectChannel.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Tekshirilmoqda...
-                </>
-              ) : (
-                <>
-                  Ulash <Check className="h-4 w-4" />
-                </>
-              )}
-            </button>
-          )}
-        </div>
-      </Glass>
-    </div>
-  );
-}
-
-function ConnectorsPage({
-  company,
-  instagramNotice,
-  onDismissInstagramNotice,
-  vkNotice,
-  onDismissVkNotice,
-}: {
-  company?: string;
-  instagramNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissInstagramNotice?: () => void;
-  vkNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissVkNotice?: () => void;
-}) {
-  const { user: firebaseUser } = useAuth();
+// Telegram runs through ONE shared OneOffice bot for every user — nobody
+// creates their own bot or types in a token/chat id. Connecting a channel
+// is two taps, both inside Telegram itself:
+//   1) Open the bot via a one-time deep link and press Start — this links
+//      the person's Telegram account to their OneOffice account.
+//   2) Add the bot as administrator to any channel they own — Telegram
+//      notifies the bot the moment that happens, and the backend attaches
+//      the channel automatically. No limit on how many.
+function TelegramConnectorCard() {
   const queryClient = useQueryClient();
-  const channelsQueryKey = [
-    ...getListTelegramChannelsQueryKey(),
-    firebaseUser?.uid,
-  ] as const;
+  const { data: config } = useGetTelegramConfig();
   const {
     data: channels,
     isLoading,
-    refetch,
   } = useListTelegramChannels({
-    query: { queryKey: channelsQueryKey },
+    // Connecting a channel happens asynchronously (the person does it
+    // inside the Telegram app, then comes back) — a light poll picks it up
+    // without needing a manual refresh.
+    query: { refetchInterval: 5000 },
   });
+  const { refetch: fetchLink, isFetching: linking } = useGetTelegramLink();
   const disconnectChannel = useDisconnectTelegramChannel();
-  const [showModal, setShowModal] = useState(false);
   const [removingId, setRemovingId] = useState<number | null>(null);
+  const [linkError, setLinkError] = useState("");
 
   const list = channels || [];
-  const atLimit = list.length >= MAX_TELEGRAM_CHANNELS;
+
+  async function handleConnect() {
+    setLinkError("");
+    const result = await fetchLink();
+    if (result.data?.deepLink) {
+      window.open(result.data.deepLink, "_blank", "noopener,noreferrer");
+    } else {
+      setLinkError(
+        (result.error as any)?.data?.error ||
+          "Telegram hozircha ulanmayapti. Birozdan so'ng qayta urinib ko'ring.",
+      );
+    }
+  }
 
   async function handleDisconnect(id: number) {
     setRemovingId(id);
     try {
       await disconnectChannel.mutateAsync({ id });
-      refetch();
+      queryClient.invalidateQueries({
+        queryKey: getListTelegramChannelsQueryKey(),
+      });
     } finally {
       setRemovingId(null);
     }
   }
 
+  return (
+    <Glass className="p-6">
+      <div className="flex items-start justify-between gap-4 mb-1">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+            <Send className="h-5 w-5 text-blue-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold">Telegram</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              {list.length} ta kanal ulangan
+            </p>
+          </div>
+        </div>
+        <button
+          data-testid="button-connect-telegram"
+          onClick={handleConnect}
+          disabled={linking || !config?.configured}
+          title={!config?.configured ? "Telegram hali serverda sozlanmagan" : ""}
+          className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
+        >
+          {linking ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Link2 className="h-3.5 w-3.5" />
+          )}
+          Ulash
+        </button>
+      </div>
+
+      {config && !config.configured && (
+        <p className="text-amber-300/80 text-xs mt-3">
+          Telegram ulanishi hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN
+          kerak).
+        </p>
+      )}
+      {linkError && (
+        <p className="text-rose-300 text-xs mt-3">{linkError}</p>
+      )}
+
+      <p className="text-slate-500 text-xs mt-3 leading-relaxed">
+        "Ulash"ni bosib botni Telegram'da ishga tushiring (Start), so'ng
+        istalgan kanalingizga botni <strong className="text-slate-300">administrator</strong> sifatida
+        qo'shing — kanal shu yerda avtomatik paydo bo'ladi.
+      </p>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+        </div>
+      ) : list.length === 0 ? (
+        <p className="text-slate-500 text-sm mt-5">
+          Hali Telegram kanal ulanmagan.
+        </p>
+      ) : (
+        <div className="mt-5 divide-y divide-white/5">
+          {list.map((c: any) => (
+            <div
+              key={c.id}
+              className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                  <Radio className="h-4 w-4 text-emerald-400" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-white text-sm font-medium truncate">
+                    {c.channelTitle || "Nomsiz kanal"}
+                  </p>
+                  <p className="text-slate-500 text-xs mt-0.5 truncate">
+                    {c.channelUsername ? `@${c.channelUsername}` : "Shaxsiy kanal"}
+                  </p>
+                </div>
+              </div>
+              <button
+                data-testid={`button-disconnect-${c.id}`}
+                onClick={() => handleDisconnect(c.id)}
+                disabled={removingId === c.id}
+                className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
+              >
+                {removingId === c.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Glass>
+  );
+}
+
+function ConnectorsPage({
+  instagramNotice,
+  onDismissInstagramNotice,
+  vkNotice,
+  onDismissVkNotice,
+}: {
+  instagramNotice?: { type: "success" | "error"; message: string } | null;
+  onDismissInstagramNotice?: () => void;
+  vkNotice?: { type: "success" | "error"; message: string } | null;
+  onDismissVkNotice?: () => void;
+}) {
   return (
     <div className="p-6 md:p-10 max-w-2xl space-y-6">
       {instagramNotice && (
@@ -1642,96 +1509,13 @@ function ConnectorsPage({
         </div>
       )}
 
-      <Glass className="p-6">
-        <div className="flex items-start justify-between gap-4 mb-1">
-          <div className="flex items-center gap-3">
-            <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
-              <Send className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <h3 className="text-white font-semibold">Telegram</h3>
-              <p className="text-slate-500 text-xs mt-0.5">
-                {list.length}/{MAX_TELEGRAM_CHANNELS} kanal ulangan
-              </p>
-            </div>
-          </div>
-          <button
-            data-testid="button-connect-telegram"
-            onClick={() => setShowModal(true)}
-            disabled={atLimit}
-            title={atLimit ? "Eng ko'pi bilan 3 ta kanal ulash mumkin" : ""}
-            className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
-          >
-            <Link2 className="h-3.5 w-3.5" /> Ulash
-          </button>
-        </div>
-
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
-          </div>
-        ) : list.length === 0 ? (
-          <p className="text-slate-500 text-sm mt-5">
-            Hali Telegram kanal ulanmagan. Post qilishni boshlash uchun "Ulash"
-            tugmasini bosing.
-          </p>
-        ) : (
-          <div className="mt-5 divide-y divide-white/5">
-            {list.map((c: any) => (
-              <div
-                key={c.id}
-                className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-9 w-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                    <Radio className="h-4 w-4 text-emerald-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-white text-sm font-medium truncate">
-                      @{c.channelUsername}
-                    </p>
-                    <p className="text-slate-500 text-xs mt-0.5 truncate">
-                      Bot: @{c.botUsername}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  data-testid={`button-disconnect-${c.id}`}
-                  onClick={() => handleDisconnect(c.id)}
-                  disabled={removingId === c.id}
-                  className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
-                >
-                  {removingId === c.id ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Glass>
+      <TelegramConnectorCard />
 
       <InstagramConnectorCard />
 
       <VkConnectorCard />
 
       <StoreConnectorCard />
-
-      {showModal && (
-        <TelegramConnectModal
-          company={company}
-          onClose={() => setShowModal(false)}
-          onConnected={() => {
-            setShowModal(false);
-            refetch();
-            queryClient.invalidateQueries({
-              queryKey: channelsQueryKey,
-            });
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -3544,7 +3328,7 @@ function Results({
                   <span className="flex items-center gap-2.5 min-w-0">
                     <Send className="h-4 w-4 text-blue-400 shrink-0" />
                     <span className="text-sm text-white truncate">
-                      @{c.channelUsername}
+                      {c.channelUsername ? `@${c.channelUsername}` : c.channelTitle || "Kanal"}
                     </span>
                   </span>
                   <span
@@ -3989,7 +3773,11 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
               <p className="text-slate-500 text-xs mt-0.5 truncate">
                 {channelList.length > 0
                   ? channelList
-                      .map((c: any) => `@${c.channelUsername}`)
+                      .map((c: any) =>
+                        c.channelUsername
+                          ? `@${c.channelUsername}`
+                          : c.channelTitle || "Kanal",
+                      )
                       .join(", ")
                   : "Ulash uchun bosing"}
               </p>
@@ -4516,7 +4304,6 @@ function AppShell() {
 
         {navView === "connectors" && (
           <ConnectorsPage
-            company={user?.company}
             instagramNotice={instagramNotice}
             onDismissInstagramNotice={() => setInstagramNotice(null)}
             vkNotice={vkNotice}
@@ -4808,6 +4595,7 @@ function ProductDetailPage({
 }) {
   const [, setLocation] = useLocation();
   const [activeIndex, setActiveIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
@@ -4883,11 +4671,18 @@ function ProductDetailPage({
       <div className="max-w-2xl mx-auto">
         <div className="relative aspect-square bg-white/5">
           {images.length > 0 ? (
-            <img
-              src={images[activeIndex]}
-              alt={product.name}
-              className="w-full h-full object-cover"
-            />
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(true)}
+              className="w-full h-full cursor-zoom-in"
+              aria-label="Rasmni to'liq ekranda ochish"
+            >
+              <img
+                src={images[activeIndex]}
+                alt={product.name}
+                className="w-full h-full object-cover"
+              />
+            </button>
           ) : (
             <div className="w-full h-full flex items-center justify-center">
               <ImageIcon className="h-8 w-8 text-slate-600" />

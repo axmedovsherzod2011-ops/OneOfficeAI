@@ -8,9 +8,10 @@
 
 export * from './connectInput';
 export * from './connectResult';
-export * from './connectTelegramChannelInput';
 export * from './createProfileInput';
 export * from './telegramChannel';
+export * from './telegramConfig';
+export * from './telegramLinkResult';
 export * from './enrichedSpecs';
 export * from './enrichInput';
 export * from './enrichResult';

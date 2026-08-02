@@ -5,6 +5,7 @@ import {
   telegramChannelsTable,
 } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
+import { getBotToken } from "../telegram/bot";
 
 const router = Router();
 
@@ -306,6 +307,7 @@ router.post("/publish", async (req, res) => {
       and(
         eq(telegramChannelsTable.id, telegramChannelRowId),
         eq(telegramChannelsTable.userId, userId),
+        eq(telegramChannelsTable.isActive, true),
       ),
     )
     .limit(1);
@@ -318,7 +320,15 @@ router.post("/publish", async (req, res) => {
   }
 
   const channelId = channel.channelId;
-  const botToken = channel.botToken;
+  let botToken: string;
+  try {
+    botToken = getBotToken();
+  } catch {
+    res.status(400).json({
+      error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN).",
+    });
+    return;
+  }
 
   let telegramMessageId: number | undefined;
 
