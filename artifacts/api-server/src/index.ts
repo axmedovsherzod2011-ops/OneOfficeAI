@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { ensureTelegramWebhook } from "./telegram/bot";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,10 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Registers (or re-registers) this server's URL with Telegram so
+  // my_chat_member / message updates actually reach /api/telegram/webhook.
+  // Without this call, promoting the bot to admin in a channel is
+  // invisible to the server — Telegram has nowhere to send that event.
+  void ensureTelegramWebhook();
 });

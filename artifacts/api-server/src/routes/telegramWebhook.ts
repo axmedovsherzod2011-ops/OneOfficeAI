@@ -52,32 +52,96 @@ router.post("/telegram/webhook", async (req, res) => {
 
   try {
     if (update?.message?.text?.startsWith?.("/start")) {
+      const chat = update.message.chat;
+      const chatId = chat?.id;
+      const fromId = update.message.from?.id;
+
+      // /start only carries a meaningful token in a private 1:1 chat with
+      // the bot. If someone runs it inside a group/channel the bot is also
+      // in, say so explicitly rather than silently mismatching state.
+      if (chat?.type && chat.type !== "private") {
+        await sendMessage(
+          chatId,
+          "Hisobni ulash uchun bu buyruqni menga shaxsiy xabarda (guruh yoki kanalda emas) yuborishingiz kerak.",
+        );
+        return;
+      }
+
       const parts = String(update.message.text).trim().split(/\s+/);
       const token = parts[1];
-      const chatId = update.message.chat?.id;
-      const fromId = update.message.from?.id;
 
       if (!token) {
         await sendMessage(
           chatId,
-          "Salom! OneOffice AI hisobingizni ulash uchun ilovadagi \"Telegram orqali ulash\" tugmasini bosing.",
+          "Salom! Bu yerga ilovadagi \"Telegram orqali ulash\" tugmasi orqali kelishingiz kerak — u orqali ulanish havolasini generatsiya qiladi. To'g'ridan-to'g'ri /start yozish hisobni ulamaydi.",
         );
         return;
       }
 
-      const userId = consumeLinkToken(token);
-      if (!userId || !fromId) {
+      if (!fromId) {
+        // Telegram always sets `from` for a private-chat text message; if
+        // it's somehow missing we can't know who to link, so say that
+        // plainly instead of pretending it worked.
+        console.error("[telegram webhook] /start message with no from.id", update);
         await sendMessage(
           chatId,
-          "Havola muddati tugagan yoki noto'g'ri. Ilovaga qaytib, \"Telegram orqali ulash\"ni qayta bosing.",
+          "Kutilmagan xatolik: Telegram sizning foydalanuvchi ma'lumotingizni yubormadi, shuning uchun hisobni ulay olmadim. Birozdan so'ng qayta urinib ko'ring.",
         );
         return;
       }
 
-      await db
-        .update(usersTable)
-        .set({ telegramUserId: String(fromId) })
-        .where(eq(usersTable.id, userId));
+      const result = consumeLinkToken(token);
+
+      if (result.status === "not_found") {
+        await sendMessage(
+          chatId,
+          "Bu ulanish havolasi tanilmadi (noto'g'ri yoki eskirib, tizimdan o'chirilgan bo'lishi mumkin). Ilovaga qaytib, \"Telegram orqali ulash\"ni qaytadan bosing — yangi havola olasiz.",
+        );
+        return;
+      }
+
+      if (result.status === "expired") {
+        await sendMessage(
+          chatId,
+          "Bu havola muddati tugagan (10 daqiqadan keyin eskiradi). Ilovaga qaytib, \"Telegram orqali ulash\"ni qaytadan bosing.",
+        );
+        return;
+      }
+
+      if (result.status === "already_used") {
+        await sendMessage(
+          chatId,
+          "Bu havola allaqachon ishlatilgan. Agar hisobingiz allaqachon ulangan bo'lsa, hech narsa qilish shart emas — ilovadagi Connectors bo'limida tekshiring. Aks holda yangi havola oling.",
+        );
+        return;
+      }
+
+      // result.status === "ok" from here on.
+      try {
+        await db
+          .update(usersTable)
+          .set({ telegramUserId: String(fromId) })
+          .where(eq(usersTable.id, result.userId));
+      } catch (err: any) {
+        // telegramUserId is UNIQUE — this specific failure means this exact
+        // Telegram account is already linked to a *different* OneOffice
+        // account, which is the one case worth naming explicitly rather
+        // than dropping into the generic catch below with no user-facing
+        // message at all.
+        if (String(err?.code) === "23505" || /unique/i.test(String(err?.message))) {
+          await sendMessage(
+            chatId,
+            "Bu Telegram akkaunt allaqachon boshqa OneOffice hisobiga ulangan. Bitta Telegram akkauntni faqat bitta OneOffice hisobiga ulash mumkin — agar bu xato deb hisoblasangiz, avval o'sha hisobdan uzib, keyin qayta urinib ko'ring.",
+          );
+          return;
+        }
+        console.error("[telegram webhook] failed to save telegramUserId", err);
+        await sendMessage(
+          chatId,
+          "Hisobni ulashda kutilmagan server xatoligi yuz berdi. Birozdan so'ng qayta urinib ko'ring; davom etsa, texnik yordamga murojaat qiling.",
+        );
+        return;
+      }
 
       await sendMessage(
         chatId,
@@ -107,7 +171,19 @@ router.post("/telegram/webhook", async (req, res) => {
 
         // Bot was made admin by someone whose Telegram account isn't
         // linked to any OneOffice account yet — nothing to attach it to.
-        if (!owner) return;
+        // This is a common ordering mistake (promote-before-link), so we
+        // log it loudly instead of failing silently, and let the promoter
+        // know via a DM what to do next.
+        if (!owner) {
+          console.warn(
+            `[telegram webhook] channel "${chat.title}" (${chat.id}) was promoted by unlinked Telegram user ${promoterTelegramId} — ignoring until they link their account`,
+          );
+          await sendMessage(
+            promoterTelegramId,
+            `Meni "${chat.title ?? "kanal"}" kanalida administrator qildingiz, lekin hisobingiz hali OneOffice AI'ga ulanmagan. Ilovada "Telegram orqali ulash"ni bosing, so'ng meni kanaldan olib tashlab qaytadan admin qiling — shunda kanal avtomatik ulanadi.`,
+          );
+          return;
+        }
 
         const channelId = String(chat.id);
         const [existing] = await db

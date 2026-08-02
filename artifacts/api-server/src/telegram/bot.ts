@@ -59,27 +59,52 @@ export async function getBotIdentity(): Promise<{
 // ---------------------------------------------------------------------------
 
 const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
-const linkTokens = new Map<string, { userId: number; expiresAt: number }>();
+// A "used" token is kept around (not deleted) for a short grace window so a
+// double-tap on the deep link, or Telegram re-delivering the same update,
+// can be told apart from a token that never existed / was mistyped.
+const USED_TOKEN_RETENTION_MS = 10 * 60 * 1000;
+
+type LinkTokenEntry = {
+  userId: number;
+  expiresAt: number;
+  usedAt: number | null;
+};
+
+const linkTokens = new Map<string, LinkTokenEntry>();
 
 export function createLinkToken(userId: number): string {
-  // Opportunistically sweep expired tokens so this map never grows
+  // Opportunistically sweep long-dead entries so this map never grows
   // unbounded on a long-running process.
   const now = Date.now();
   for (const [t, v] of linkTokens) {
-    if (v.expiresAt < now) linkTokens.delete(t);
+    const deadSince = v.usedAt ?? v.expiresAt;
+    if (now - deadSince > USED_TOKEN_RETENTION_MS) linkTokens.delete(t);
   }
 
   const token = crypto.randomBytes(16).toString("hex");
-  linkTokens.set(token, { userId, expiresAt: now + LINK_TOKEN_TTL_MS });
+  linkTokens.set(token, { userId, expiresAt: now + LINK_TOKEN_TTL_MS, usedAt: null });
   return token;
 }
 
-export function consumeLinkToken(token: string): number | null {
+export type ConsumeLinkTokenResult =
+  | { status: "ok"; userId: number }
+  | { status: "not_found" }
+  | { status: "expired" }
+  | { status: "already_used" };
+
+export function consumeLinkToken(token: string): ConsumeLinkTokenResult {
   const entry = linkTokens.get(token);
-  if (!entry) return null;
-  linkTokens.delete(token);
-  if (entry.expiresAt < Date.now()) return null;
-  return entry.userId;
+  if (!entry) return { status: "not_found" };
+
+  if (entry.usedAt !== null) return { status: "already_used" };
+
+  if (entry.expiresAt < Date.now()) {
+    entry.usedAt = Date.now();
+    return { status: "expired" };
+  }
+
+  entry.usedAt = Date.now();
+  return { status: "ok", userId: entry.userId };
 }
 
 // ---------------------------------------------------------------------------
