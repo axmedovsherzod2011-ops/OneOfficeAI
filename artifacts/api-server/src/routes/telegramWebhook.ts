@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, telegramChannelsTable } from "@workspace/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { consumeLinkToken, getBotIdentity, getBotToken } from "../telegram/bot";
 
 const router = Router();
@@ -118,23 +118,31 @@ router.post("/telegram/webhook", async (req, res) => {
 
       // result.status === "ok" from here on.
       try {
-        await db
-          .update(usersTable)
-          .set({ telegramUserId: String(fromId) })
-          .where(eq(usersTable.id, result.userId));
+        await db.transaction(async (tx) => {
+          // A Telegram account can only be linked to one OneOffice account
+          // at a time (telegramUserId is UNIQUE). Re-linking — testing
+          // with the same Telegram account under a different OneOffice
+          // login, or genuinely switching which account owns it — is a
+          // normal thing to do, not an error: automatically detach it from
+          // whichever account had it before, then attach it here. Both
+          // updates run in one transaction so there's never a moment where
+          // the unique constraint is violated.
+          await tx
+            .update(usersTable)
+            .set({ telegramUserId: null })
+            .where(
+              and(
+                eq(usersTable.telegramUserId, String(fromId)),
+                ne(usersTable.id, result.userId),
+              ),
+            );
+
+          await tx
+            .update(usersTable)
+            .set({ telegramUserId: String(fromId) })
+            .where(eq(usersTable.id, result.userId));
+        });
       } catch (err: any) {
-        // telegramUserId is UNIQUE — this specific failure means this exact
-        // Telegram account is already linked to a *different* OneOffice
-        // account, which is the one case worth naming explicitly rather
-        // than dropping into the generic catch below with no user-facing
-        // message at all.
-        if (String(err?.code) === "23505" || /unique/i.test(String(err?.message))) {
-          await sendMessage(
-            chatId,
-            "Bu Telegram akkaunt allaqachon boshqa OneOffice hisobiga ulangan. Bitta Telegram akkauntni faqat bitta OneOffice hisobiga ulash mumkin — agar bu xato deb hisoblasangiz, avval o'sha hisobdan uzib, keyin qayta urinib ko'ring.",
-          );
-          return;
-        }
         console.error("[telegram webhook] failed to save telegramUserId", err);
         await sendMessage(
           chatId,
