@@ -67,6 +67,7 @@ import {
   Radio,
   Pencil,
   Instagram,
+  Youtube,
 } from "lucide-react";
 
 import {
@@ -1552,11 +1553,15 @@ function ConnectorsPage({
   onDismissInstagramNotice,
   vkNotice,
   onDismissVkNotice,
+  youtubeNotice,
+  onDismissYoutubeNotice,
 }: {
   instagramNotice?: { type: "success" | "error"; message: string } | null;
   onDismissInstagramNotice?: () => void;
   vkNotice?: { type: "success" | "error"; message: string } | null;
   onDismissVkNotice?: () => void;
+  youtubeNotice?: { type: "success" | "error"; message: string } | null;
+  onDismissYoutubeNotice?: () => void;
 }) {
   return (
     <div className="p-6 md:p-10 max-w-2xl space-y-6">
@@ -1596,13 +1601,31 @@ function ConnectorsPage({
         </div>
       )}
 
+      {youtubeNotice && (
+        <div
+          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
+            youtubeNotice.type === "success"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
+          }`}
+        >
+          <span>{youtubeNotice.message}</span>
+          <button
+            onClick={onDismissYoutubeNotice}
+            className="shrink-0 opacity-70 hover:opacity-100 transition"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <TelegramConnectorCard />
 
       <InstagramConnectorCard />
 
       <VkConnectorCard />
 
-      <StoreConnectorCard />
+      <YoutubeConnectorCard />
     </div>
   );
 }
@@ -1939,6 +1962,187 @@ function VkConnectorCard() {
   );
 }
 
+// YouTube connector — Google OAuth 2.0 (Authorization Code flow, no PKCE:
+// the code exchange happens server-side where the client_secret lives, same
+// shape as InstagramConnectorCard). Connecting only reads the channel's
+// basic info for now (title/thumbnail); actual video upload/publish comes
+// later once this card is wired to the backend.
+function YoutubeConnectorCard() {
+  const { user: firebaseUser } = useAuth();
+  const queryClient = useQueryClient();
+  const [connecting, setConnecting] = useState(false);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  async function authedFetch(path: string, init: RequestInit = {}) {
+    const token = await firebaseUser?.getIdToken();
+    const res = await fetch(path, {
+      ...init,
+      headers: {
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error || "So'rov muvaffaqiyatsiz tugadi.");
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  const { data: config } = useQuery({
+    queryKey: ["youtube-config"],
+    queryFn: () => authedFetch("/api/connectors/youtube/config"),
+    enabled: !!firebaseUser,
+  });
+
+  const {
+    data: accounts,
+    isLoading,
+  } = useQuery({
+    queryKey: ["youtube-accounts"],
+    queryFn: () => authedFetch("/api/connectors/youtube"),
+    enabled: !!firebaseUser,
+  });
+
+  const list = accounts || [];
+  const atLimit = list.length >= 3;
+
+  function randomToken(byteLength: number): string {
+    const bytes = new Uint8Array(byteLength);
+    crypto.getRandomValues(bytes);
+    let str = "";
+    for (const b of bytes) str += String.fromCharCode(b);
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  function handleConnect() {
+    if (!config?.clientId || atLimit) return;
+    setConnecting(true);
+    const state = randomToken(16);
+    sessionStorage.setItem("yt_oauth_pending", "1");
+    sessionStorage.setItem("yt_oauth_state", state);
+    const redirectUri = `${window.location.origin}/`;
+    const authUrl =
+      "https://accounts.google.com/o/oauth2/v2/auth?" +
+      new URLSearchParams({
+        client_id: config.clientId,
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope:
+          config.scope ||
+          "https://www.googleapis.com/auth/youtube.readonly",
+        access_type: "offline",
+        prompt: "consent",
+        include_granted_scopes: "true",
+        state,
+      }).toString();
+    window.location.href = authUrl;
+  }
+
+  async function handleDisconnect(id: number) {
+    setRemovingId(id);
+    try {
+      await authedFetch(`/api/connectors/youtube/${id}`, { method: "DELETE" });
+      queryClient.invalidateQueries({ queryKey: ["youtube-accounts"] });
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-start justify-between gap-4 mb-1">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+            <Youtube className="h-5 w-5 text-red-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold">YouTube</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              {list.length}/3 kanal ulangan
+            </p>
+          </div>
+        </div>
+        <button
+          data-testid="button-connect-youtube"
+          onClick={handleConnect}
+          disabled={connecting || atLimit || !config?.clientId}
+          className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-red-500 to-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-red-900/30 transition"
+        >
+          {connecting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Link2 className="h-3.5 w-3.5" />
+          )}
+          Ulash
+        </button>
+      </div>
+
+      {config && !config.configured && (
+        <p className="text-amber-300/80 text-xs mt-3">
+          YouTube ulanishi hali serverda sozlanmagan (GOOGLE_CLIENT_ID /
+          GOOGLE_CLIENT_SECRET kerak).
+        </p>
+      )}
+
+      {atLimit && (
+        <p className="text-slate-500 text-xs mt-3">
+          Maksimal 3 ta kanal ulash mumkin.
+        </p>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+        </div>
+      ) : list.length === 0 ? null : (
+        <div className="mt-5 divide-y divide-white/5">
+          {list.map((a: any) => (
+            <div
+              key={a.id}
+              className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                {a.thumbnailUrl ? (
+                  <img
+                    src={a.thumbnailUrl}
+                    alt={a.title}
+                    className="h-9 w-9 rounded-xl object-cover shrink-0"
+                  />
+                ) : (
+                  <div className="h-9 w-9 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center justify-center shrink-0">
+                    <Youtube className="h-4 w-4 text-red-400" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-white text-sm font-medium truncate">
+                    {a.title || "YouTube kanal"}
+                  </p>
+                  <p className="text-slate-500 text-xs mt-0.5 truncate">
+                    {a.customUrl || "Ulangan"}
+                  </p>
+                </div>
+              </div>
+              <button
+                data-testid={`button-disconnect-youtube-${a.id}`}
+                onClick={() => handleDisconnect(a.id)}
+                disabled={removingId === a.id}
+                className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
+              >
+                {removingId === a.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Glass>
+  );
+}
+
 // Public storefront ("vitrina") link — no external API, no third-party
 // account needed. Every user gets a shareable /store/:slug page listing
 // their active products; this card just surfaces that link.
@@ -2022,6 +2226,18 @@ function StoreConnectorCard() {
   );
 }
 
+// ShopFront — endi Connectors ichida emas, nav bar'da alohida katta bo'lim.
+// Hozircha ichida xuddi Connectors sahifasida ko'ringan Vitrina bo'limi
+// bilan bir xil ko'rinadi (vaqtincha); keyinchalik bu yerga to'liq
+// ShopFront funksionalligi (mahsulotlar, dizayn, sozlamalar) qo'shiladi.
+function ShopFrontPage() {
+  return (
+    <div className="p-6 md:p-10 max-w-2xl space-y-6">
+      <StoreConnectorCard />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // APP SHELL
 // ---------------------------------------------------------------------------
@@ -2037,6 +2253,7 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
     { key: "dashboard", label: "Dashboard", icon: Home },
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connectors", icon: Send },
+    { key: "shopfront", label: "ShopFront", icon: Globe },
     { key: "settings", label: "Settings", icon: Settings },
     { key: "profile", label: "Profile", icon: User },
   ];
@@ -2096,6 +2313,7 @@ function BottomNav({ active, setActive }: any) {
     { key: "dashboard", label: "Home", icon: Home },
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connect", icon: Send },
+    { key: "shopfront", label: "ShopFront", icon: Globe },
     { key: "profile", label: "Profile", icon: User },
   ];
 
@@ -4113,6 +4331,75 @@ function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // YouTube (Google) OAuth redirects back to our own root URL with a
+  // `?code=` (or `?error=`) query string, same pattern as Instagram/VK
+  // above — the yt_oauth_pending flag (set in YoutubeConnectorCard)
+  // disambiguates it. No PKCE here: the code exchange happens server-side
+  // where GOOGLE_CLIENT_SECRET lives.
+  const [youtubeNotice, setYoutubeNotice] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("yt_oauth_pending") !== "1") return;
+    sessionStorage.removeItem("yt_oauth_pending");
+    const expectedState = sessionStorage.getItem("yt_oauth_state") || "";
+    sessionStorage.removeItem("yt_oauth_state");
+
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    const oauthError = params.get("error_description") || params.get("error");
+    window.history.replaceState({}, "", window.location.pathname);
+    setNavView("connectors");
+
+    if (oauthError) {
+      setYoutubeNotice({ type: "error", message: oauthError.replace(/\+/g, " ") });
+      return;
+    }
+    if (!code) return;
+    if (expectedState && state !== expectedState) {
+      setYoutubeNotice({
+        type: "error",
+        message: "YouTube ulanmadi: xavfsizlik tekshiruvi mos kelmadi. Qayta urinib ko'ring.",
+      });
+      return;
+    }
+
+    (async () => {
+      try {
+        const token = await firebaseUser?.getIdToken();
+        const res = await fetch("/api/connectors/youtube/exchange", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            code,
+            redirectUri: `${window.location.origin}/`,
+          }),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(body?.error || "YouTube ulanmadi. Qayta urinib ko'ring.");
+        }
+        queryClient.invalidateQueries({ queryKey: ["youtube-accounts"] });
+        setYoutubeNotice({
+          type: "success",
+          message: "YouTube kanal muvaffaqiyatli ulandi.",
+        });
+      } catch (err: any) {
+        setYoutubeNotice({
+          type: "error",
+          message: err?.message || "YouTube ulanmadi. Qayta urinib ko'ring.",
+        });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   // Default the channel picker to whichever channel is currently connected
   // (or the first one, if there are several) so the common single-channel
@@ -4143,6 +4430,7 @@ function AppShell() {
     create: "Create Post",
     inventory: "Inventory",
     connectors: "Connectors",
+    shopfront: "ShopFront",
     settings: "Settings",
     profile: "Profile",
   };
@@ -4407,8 +4695,11 @@ function AppShell() {
             onDismissInstagramNotice={() => setInstagramNotice(null)}
             vkNotice={vkNotice}
             onDismissVkNotice={() => setVkNotice(null)}
+            youtubeNotice={youtubeNotice}
+            onDismissYoutubeNotice={() => setYoutubeNotice(null)}
           />
         )}
+        {navView === "shopfront" && <ShopFrontPage />}
         {navView === "settings" && (
           <SettingsPage onOpenConnectors={goToConnectors} />
         )}
