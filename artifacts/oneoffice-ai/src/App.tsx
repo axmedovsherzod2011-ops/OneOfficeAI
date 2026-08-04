@@ -77,6 +77,8 @@ import {
   useGetTelegramLink,
   useDisconnectTelegramChannel,
   useGetTelegramLiveStats,
+  useGetTelegramStatsHistory,
+  type SubscriberSnapshot,
   getListTelegramChannelsQueryKey,
   useGetInstagramConfig,
   useListInstagramAccounts,
@@ -433,18 +435,24 @@ function chartDataFor(
   metric: LiveMetric,
   period: PeriodKey,
   liveValue?: number,
+  snapshots?: SubscriberSnapshot[],
 ): { label: string; value: number }[] {
+  // Use real snapshot data for subscribers when available
+  if (metric === "subscribers" && snapshots && snapshots.length >= 2) {
+    return snapshots.map((s) => ({
+      label: s.date.slice(5), // "MM-DD"
+      value: s.subscribers,
+    }));
+  }
+
   const labels = periodLabels(period);
   const values = DEMO_SERIES[period][metric];
   const points = labels.map((label, i) => ({ label, value: values[i] }));
-  // Anchor the chart's latest point to the real live subscriber count when
-  // we have one, so the number on screen always matches the big number
-  // above the chart — only the shape leading up to it is demo.
+  // Anchor the latest demo point to the real live value so the headline
+  // number always matches. Once snapshots accumulate this path is replaced
+  // by the real history branch above.
   if (metric === "subscribers" && typeof liveValue === "number" && liveValue > 0) {
-    points[points.length - 1] = {
-      ...points[points.length - 1],
-      value: liveValue,
-    };
+    points[points.length - 1] = { ...points[points.length - 1], value: liveValue };
   }
   return points;
 }
@@ -454,17 +462,20 @@ function ChannelStatsChart({
   currentValue,
   isLive,
   isLoading,
+  snapshots,
 }: {
   metric: LiveMetric;
   currentValue?: number;
   isLive: boolean;
   isLoading: boolean;
+  snapshots?: SubscriberSnapshot[];
 }) {
   const [period, setPeriod] = useState<PeriodKey>("daily");
   const [pickerOpen, setPickerOpen] = useState(false);
   const cfg = LIVE_METRIC_CONFIG[metric];
   const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
-  const chartData = chartDataFor(metric, period, currentValue);
+  const hasRealHistory = metric === "subscribers" && !!snapshots && snapshots.length >= 2;
+  const chartData = chartDataFor(metric, period, currentValue, snapshots);
   const gradientId = `mountain-${metric}`;
   const headline =
     metric === "subscribers"
@@ -476,7 +487,7 @@ function ChannelStatsChart({
       <div className="flex items-center justify-between mb-1 gap-2">
         <h3 className="text-white font-semibold">{cfg.title}</h3>
         <div className="flex items-center gap-2 shrink-0">
-          {isLive ? (
+          {(isLive || hasRealHistory) ? (
             <span className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
               Jonli
@@ -2897,6 +2908,13 @@ function Dashboard({ goCreate, user }: any) {
     query: { refetchInterval: 30000 },
   });
 
+  // Fetch real subscriber history — triggers a fresh snapshot upsert on the
+  // backend each time the live stats are polled, so history accumulates
+  // automatically over time without any extra user action.
+  const { data: historyData } = useGetTelegramStatsHistory("daily", {
+    refetchInterval: 30000,
+  });
+
   return (
     <div className="p-6 md:p-10 space-y-8">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2906,6 +2924,7 @@ function Dashboard({ goCreate, user }: any) {
           currentValue={data?.totalSubscribers}
           isLive={Boolean(data)}
           isLoading={isLoading}
+          snapshots={historyData?.snapshots}
         />
       </div>
     </div>
