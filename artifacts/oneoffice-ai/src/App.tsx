@@ -75,6 +75,7 @@ import {
   useGetTelegramConfig,
   useGetTelegramLink,
   useDisconnectTelegramChannel,
+  useGetTelegramLiveStats,
   getListTelegramChannelsQueryKey,
   useGetInstagramConfig,
   useListInstagramAccounts,
@@ -159,45 +160,6 @@ const IMAGE_STYLES = [
     text: "text-white",
     accent: "bg-violet-500",
   },
-];
-
-// ---------------------------------------------------------------------------
-// CHANNEL PERFORMANCE (mock) — views & orders over recent periods
-// ---------------------------------------------------------------------------
-
-const PERFORMANCE_DATA: Record<
-  string,
-  { label: string; views: number; orders: number }[]
-> = {
-  daily: [
-    { label: "17/07", views: 1240, orders: 18 },
-    { label: "18/07", views: 1480, orders: 22 },
-    { label: "19/07", views: 2100, orders: 31 },
-    { label: "20/07", views: 1860, orders: 27 },
-    { label: "21/07", views: 1590, orders: 24 },
-    { label: "22/07", views: 1720, orders: 29 },
-    { label: "23/07", views: 1950, orders: 33 },
-  ],
-  weekly: [
-    { label: "1-hafta", views: 8900, orders: 132 },
-    { label: "2-hafta", views: 10200, orders: 151 },
-    { label: "3-hafta", views: 9600, orders: 140 },
-    { label: "4-hafta", views: 11800, orders: 176 },
-    { label: "5-hafta", views: 12400, orders: 189 },
-  ],
-  monthly: [
-    { label: "Mar", views: 34200, orders: 512 },
-    { label: "Apr", views: 38900, orders: 588 },
-    { label: "May", views: 41100, orders: 623 },
-    { label: "Iyun", views: 39800, orders: 601 },
-    { label: "Iyul", views: 46700, orders: 702 },
-  ],
-};
-
-const PERIOD_OPTIONS = [
-  { key: "daily", label: "Kunlar bo'yicha" },
-  { key: "weekly", label: "Haftalar bo'yicha" },
-  { key: "monthly", label: "Oylar bo'yicha" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -355,23 +317,40 @@ function Glass({
 }
 
 // ---------------------------------------------------------------------------
-// CHANNEL PERFORMANCE CHART
+// LIVE CHANNEL STATS CHART — realtime, not demo data. Polls
+// GET /connectors/telegram/stats/live (subscriber count + latest-post
+// views, read fresh from the Telegram Bot API on every call) and builds a
+// short rolling history in local component state only, for the current
+// browser session — nothing here is persisted to a database, per how this
+// feature was scoped.
 // ---------------------------------------------------------------------------
 
-const METRIC_CONFIG = {
+type LiveMetric = "views" | "subscribers";
+
+const LIVE_METRIC_CONFIG: Record<
+  LiveMetric,
+  { label: string; title: string; color: string }
+> = {
   views: {
     label: "Ko'rishlar",
-    title: "Kanal faolligi — ko'rishlar",
+    title: "Umumiy ko'rishlar",
     color: "#a78bfa",
-    dash: undefined as string | undefined,
   },
-  orders: {
-    label: "Sotuvlar",
-    title: "Kanal faolligi — sotuvlar",
+  subscribers: {
+    label: "Obunachilar",
+    title: "Obunachilar soni",
     color: "#22d3ee",
-    dash: "5 4",
   },
-} as const;
+};
+
+const LIVE_STATS_POLL_MS = 20000;
+const LIVE_HISTORY_MAX_POINTS = 30;
+
+type LiveHistoryPoint = {
+  time: string;
+  views: number;
+  subscribers: number;
+};
 
 function ChartTooltip({ active, payload, label, metricLabel }: any) {
   if (!active || !payload?.length) return null;
@@ -391,54 +370,69 @@ function ChartTooltip({ active, payload, label, metricLabel }: any) {
   );
 }
 
-function ChannelPerformanceChart({
-  metric = "views",
+// Fetches live totals on an interval and accumulates them into a
+// session-only rolling history (max LIVE_HISTORY_MAX_POINTS points) so the
+// two dashboard charts have something to draw a line through, without ever
+// writing that history anywhere durable.
+function useLiveTelegramHistory() {
+  const { data, isLoading } = useGetTelegramLiveStats({
+    query: { refetchInterval: LIVE_STATS_POLL_MS },
+  });
+  const [history, setHistory] = useState<LiveHistoryPoint[]>([]);
+
+  useEffect(() => {
+    if (!data) return;
+    setHistory((prev) => {
+      const point: LiveHistoryPoint = {
+        time: new Date(data.generatedAt).toLocaleTimeString("uz-UZ", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+        views: data.totalViews,
+        subscribers: data.totalSubscribers,
+      };
+      const next = [...prev, point];
+      return next.length > LIVE_HISTORY_MAX_POINTS
+        ? next.slice(next.length - LIVE_HISTORY_MAX_POINTS)
+        : next;
+    });
+  }, [data]);
+
+  return { data, history, isLoading };
+}
+
+function LiveChannelStatsChart({
+  metric,
+  currentValue,
+  history,
+  isLoading,
 }: {
-  metric?: "views" | "orders";
+  metric: LiveMetric;
+  currentValue: number | undefined;
+  history: LiveHistoryPoint[];
+  isLoading: boolean;
 }) {
-  const [period, setPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const data = PERFORMANCE_DATA[period];
-  const currentLabel =
-    PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
-  const cfg = METRIC_CONFIG[metric];
+  const cfg = LIVE_METRIC_CONFIG[metric];
 
   return (
     <Glass className="p-6">
       <div className="flex items-center justify-between mb-1">
         <h3 className="text-white font-semibold">{cfg.title}</h3>
-        <div className="relative shrink-0">
-          <button
-            data-testid={`button-performance-period-${metric}`}
-            onClick={() => setPickerOpen((v) => !v)}
-            className="flex items-center gap-1.5 text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 hover:border-white/20 transition"
-          >
-            {currentLabel}
-            <ChevronDown className="h-3 w-3" />
-          </button>
-          {pickerOpen && (
-            <div className="absolute right-0 mt-1.5 w-44 bg-slate-900 border border-white/10 rounded-xl shadow-2xl p-1 z-20">
-              {PERIOD_OPTIONS.map((o) => (
-                <button
-                  key={o.key}
-                  onClick={() => {
-                    setPeriod(o.key as any);
-                    setPickerOpen(false);
-                  }}
-                  className="w-full flex items-center justify-between text-xs text-slate-300 hover:bg-white/5 rounded-lg px-3 py-2 transition"
-                >
-                  {o.label}
-                  {period === o.key && (
-                    <Check className="h-3 w-3 text-violet-400" />
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <span className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1 shrink-0">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          Jonli
+        </span>
       </div>
 
-      <div className="flex items-center gap-4 mb-4">
+      <div className="flex items-baseline gap-2 mb-4">
+        <span className="text-2xl font-bold text-white">
+          {currentValue === undefined
+            ? isLoading
+              ? "…"
+              : "0"
+            : currentValue.toLocaleString()}
+        </span>
         <span className="flex items-center gap-1.5 text-xs text-slate-400">
           <span
             className="h-0.5 w-4 rounded-full inline-block"
@@ -448,44 +442,52 @@ function ChannelPerformanceChart({
         </span>
       </div>
 
-      <div className="h-64 -ml-2">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart
-            data={data}
-            margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
-          >
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="rgba(255,255,255,0.06)"
-            />
-            <XAxis
-              dataKey="label"
-              stroke="rgba(255,255,255,0.3)"
-              tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
-              axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
-              tickLine={false}
-            />
-            <YAxis
-              stroke="rgba(255,255,255,0.3)"
-              tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              width={40}
-            />
-            <RechartsTooltip
-              content={<ChartTooltip metricLabel={cfg.label} />}
-            />
-            <Line
-              type="monotone"
-              dataKey={metric}
-              stroke={cfg.color}
-              strokeWidth={2.5}
-              strokeDasharray={cfg.dash}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+      <div className="h-56 -ml-2">
+        {history.length < 2 ? (
+          <div className="h-full flex items-center justify-center text-slate-500 text-xs text-center px-6">
+            {isLoading
+              ? "Yuklanmoqda…"
+              : "Grafik uchun ma'lumot yig'ilmoqda — bir necha soniyadan so'ng yangilanadi."}
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              data={history}
+              margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
+            >
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="rgba(255,255,255,0.06)"
+              />
+              <XAxis
+                dataKey="time"
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }}
+                axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+                tickLine={false}
+              />
+              <YAxis
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                width={40}
+              />
+              <RechartsTooltip
+                content={<ChartTooltip metricLabel={cfg.label} />}
+              />
+              <Line
+                type="monotone"
+                dataKey={metric}
+                stroke={cfg.color}
+                strokeWidth={2.5}
+                dot={false}
+                activeDot={{ r: 4 }}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </Glass>
   );
@@ -2585,11 +2587,23 @@ function Dashboard({ goCreate, user }: any) {
   void goCreate;
   void user;
 
+  const { data, history, isLoading } = useLiveTelegramHistory();
+
   return (
     <div className="p-6 md:p-10 space-y-8">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChannelPerformanceChart metric="views" />
-        <ChannelPerformanceChart metric="orders" />
+        <LiveChannelStatsChart
+          metric="views"
+          currentValue={data?.totalViews}
+          history={history}
+          isLoading={isLoading}
+        />
+        <LiveChannelStatsChart
+          metric="subscribers"
+          currentValue={data?.totalSubscribers}
+          history={history}
+          isLoading={isLoading}
+        />
       </div>
     </div>
   );

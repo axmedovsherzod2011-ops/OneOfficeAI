@@ -55,6 +55,22 @@ export interface TelegramLinkResult {
   deepLink: string;
 }
 
+export interface TelegramChannelLiveStats {
+  id: number;
+  channelTitle: string;
+  /** @nullable */
+  subscribers: number | null;
+  /** @nullable */
+  views: number | null;
+}
+
+export interface TelegramLiveStats {
+  totalSubscribers: number;
+  totalViews: number;
+  channels: TelegramChannelLiveStats[];
+  generatedAt: string;
+}
+
 export interface PublishInput {
   userId: number;
   /** id of the connected Telegram channel (from /api/connectors/telegram) to publish to */

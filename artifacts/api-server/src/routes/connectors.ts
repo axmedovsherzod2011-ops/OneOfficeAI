@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import { usersTable, telegramChannelsTable } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
 import { createLinkToken, getBotIdentity, isTelegramConfigured } from "../telegram/bot";
+import { getSubscriberCount, getLatestPostViews } from "../telegram/liveStats";
 
 const router = Router();
 
@@ -27,6 +28,17 @@ async function getProfileOr404(
 ): Promise<{ id: number } | null> {
   const [user] = await db
     .select({ id: usersTable.id })
+    .from(usersTable)
+    .where(eq(usersTable.firebaseUid, firebaseUid))
+    .limit(1);
+  return user ?? null;
+}
+
+async function getProfileWithTelegramOr404(
+  firebaseUid: string,
+): Promise<{ id: number; telegramUserId: string | null } | null> {
+  const [user] = await db
+    .select({ id: usersTable.id, telegramUserId: usersTable.telegramUserId })
     .from(usersTable)
     .where(eq(usersTable.firebaseUid, firebaseUid))
     .limit(1);
@@ -169,6 +181,70 @@ router.delete(
     }
 
     res.status(204).end();
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// GET /connectors/telegram/stats/live — realtime dashboard numbers for the
+// signed-in user's connected channels: total subscribers and the views on
+// each channel's latest post. Computed fresh from the Telegram Bot API on
+// every request — nothing here is read from or written to the database, by
+// design (see telegram/postTracker.ts and telegram/liveStats.ts for why).
+// ---------------------------------------------------------------------------
+router.get(
+  "/connectors/telegram/stats/live",
+  handle(async (req, res) => {
+    const { userId: firebaseUid } = getAuth(req);
+    if (!firebaseUid) {
+      res.status(401).json({ error: "Tizimga kirilmagan." });
+      return;
+    }
+    const user = await getProfileWithTelegramOr404(firebaseUid);
+    if (!user) {
+      res.status(404).json({ error: "Profil hali sozlanmagan." });
+      return;
+    }
+
+    const channels = await db
+      .select()
+      .from(telegramChannelsTable)
+      .where(
+        and(
+          eq(telegramChannelsTable.userId, user.id),
+          eq(telegramChannelsTable.isActive, true),
+        ),
+      );
+
+    const perChannel = await Promise.all(
+      channels.map(async (c) => {
+        const [subscribers, views] = await Promise.all([
+          getSubscriberCount(c.channelId),
+          getLatestPostViews(c.id, c.channelId, user.telegramUserId),
+        ]);
+        return {
+          id: c.id,
+          channelTitle: c.channelTitle,
+          subscribers,
+          views,
+        };
+      }),
+    );
+
+    const totalSubscribers = perChannel.reduce(
+      (sum, c) => sum + (c.subscribers ?? 0),
+      0,
+    );
+    const totalViews = perChannel.reduce(
+      (sum, c) => sum + (c.views ?? 0),
+      0,
+    );
+
+    res.json({
+      totalSubscribers,
+      totalViews,
+      channels: perChannel,
+      generatedAt: new Date().toISOString(),
+    });
   }),
 );
 

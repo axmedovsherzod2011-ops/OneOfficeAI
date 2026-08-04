@@ -6,6 +6,7 @@ import {
 } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
 import { getBotToken } from "../telegram/bot";
+import { trackPublishedPost } from "../telegram/postTracker";
 
 const router = Router();
 
@@ -367,6 +368,10 @@ router.post("/publish", async (req, res) => {
     });
     return;
   }
+
+  // In-memory only (never the database) — lets the live stats endpoint
+  // read this post's current view count on demand. See telegram/postTracker.ts.
+  trackPublishedPost(telegramChannelRowId, telegramMessageId);
 
   res.json({ success: true, messageId: telegramMessageId ?? 0 });
 });

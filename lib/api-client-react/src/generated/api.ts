@@ -42,6 +42,7 @@ import type {
   TelegramChannel,
   TelegramConfig,
   TelegramLinkResult,
+  TelegramLiveStats,
   UpdateProductInput
 } from './api.schemas';
 
@@ -451,6 +452,66 @@ export function useGetTelegramLink<TData = Awaited<ReturnType<typeof getTelegram
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetTelegramLinkQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getGetTelegramLiveStatsUrl = () => {
+
+
+
+
+  return `/api/connectors/telegram/stats/live`
+}
+
+/**
+ * Fetched fresh from the Telegram Bot API on every call — subscriber count
+ * and latest-post views per connected channel, plus totals. Nothing here
+ * is ever read from or written to the database.
+ * @summary Realtime subscriber & view totals for the signed-in user's connected channels
+ */
+export const getTelegramLiveStats = async ( options?: RequestInit): Promise<TelegramLiveStats> => {
+
+  return customFetch<TelegramLiveStats>(getGetTelegramLiveStatsUrl(),
+  {
+    ...options,
+    method: 'GET'
+  }
+);}
+
+export const getGetTelegramLiveStatsQueryKey = () => {
+    return [
+    `/api/connectors/telegram/stats/live`
+    ] as const;
+    }
+
+export const getGetTelegramLiveStatsQueryOptions = <TData = Awaited<ReturnType<typeof getTelegramLiveStats>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramLiveStats>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTelegramLiveStatsQueryKey();
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTelegramLiveStats>>> = ({ signal }) => getTelegramLiveStats({ signal, ...requestOptions });
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTelegramLiveStats>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetTelegramLiveStatsQueryResult = NonNullable<Awaited<ReturnType<typeof getTelegramLiveStats>>>
+export type GetTelegramLiveStatsQueryError = ErrorType<unknown>
+
+/**
+ * @summary Realtime subscriber & view totals for the signed-in user's connected channels
+ */
+
+export function useGetTelegramLiveStats<TData = Awaited<ReturnType<typeof getTelegramLiveStats>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTelegramLiveStats>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetTelegramLiveStatsQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
