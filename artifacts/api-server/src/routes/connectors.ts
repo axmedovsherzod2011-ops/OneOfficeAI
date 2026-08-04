@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { usersTable, telegramChannelsTable } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
 import { createLinkToken, getBotIdentity, isTelegramConfigured } from "../telegram/bot";
-import { getSubscriberCount, getLatestPostViews } from "../telegram/liveStats";
+import { getSubscriberCount } from "../telegram/liveStats";
 
 const router = Router();
 
@@ -185,11 +185,19 @@ router.delete(
 );
 
 // ---------------------------------------------------------------------------
-// GET /connectors/telegram/stats/live — realtime dashboard numbers for the
-// signed-in user's connected channels: total subscribers and the views on
-// each channel's latest post. Computed fresh from the Telegram Bot API on
-// every request — nothing here is read from or written to the database, by
-// design (see telegram/postTracker.ts and telegram/liveStats.ts for why).
+// GET /connectors/telegram/stats/live — realtime subscriber count for the
+// signed-in user's connected channels. Computed fresh from the Telegram
+// Bot API on every request — nothing here is read from or written to the
+// database (see telegram/postTracker.ts and telegram/liveStats.ts for why).
+//
+// Views are intentionally NOT fetched here for now: the only way to read a
+// post's view count through the Bot API is to forward it into the channel
+// owner's private chat with the bot and immediately delete the forward —
+// but Telegram still pushes a notification for that split-second forward,
+// which the person sees and has no context for. Until real views are
+// wired up properly through an MTProto session (a real Telegram login, not
+// the bot), views stay demo data on the frontend and totalViews here is
+// always null.
 // ---------------------------------------------------------------------------
 router.get(
   "/connectors/telegram/stats/live",
@@ -204,6 +212,7 @@ router.get(
       res.status(404).json({ error: "Profil hali sozlanmagan." });
       return;
     }
+    void user.telegramUserId; // not used while views fetching is disabled
 
     const channels = await db
       .select()
@@ -217,15 +226,12 @@ router.get(
 
     const perChannel = await Promise.all(
       channels.map(async (c) => {
-        const [subscribers, views] = await Promise.all([
-          getSubscriberCount(c.channelId),
-          getLatestPostViews(c.id, c.channelId, user.telegramUserId),
-        ]);
+        const subscribers = await getSubscriberCount(c.channelId);
         return {
           id: c.id,
           channelTitle: c.channelTitle,
           subscribers,
-          views,
+          views: null as number | null,
         };
       }),
     );

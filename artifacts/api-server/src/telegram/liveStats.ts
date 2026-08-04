@@ -50,6 +50,14 @@ export async function getSubscriberCount(
 // there's nothing to check (no post sent yet this process, or the channel
 // owner hasn't linked their Telegram account so there's nowhere to forward
 // into).
+//
+// NOT CALLED ANYWHERE RIGHT NOW — the connectors route deliberately skips
+// this. forwardMessage still triggers a real Telegram notification for the
+// channel owner even though we delete the forward a moment later, which is
+// confusing when it fires silently in the background while someone's just
+// looking at their dashboard. Left here, disable_notification'd, ready to
+// wire back in once views are read through a proper MTProto session
+// instead of the bot.
 export async function getLatestPostViews(
   channelRowId: number,
   channelId: string,
@@ -65,6 +73,7 @@ export async function getLatestPostViews(
         chat_id: ownerTelegramUserId,
         from_chat_id: channelId,
         message_id: messageId,
+        disable_notification: true,
       },
     );
     if (!forwarded.ok || !forwarded.result) return null;

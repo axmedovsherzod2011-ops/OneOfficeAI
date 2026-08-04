@@ -94,8 +94,8 @@ import {
 
 import {
   ResponsiveContainer,
-  LineChart,
-  Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -317,15 +317,21 @@ function Glass({
 }
 
 // ---------------------------------------------------------------------------
-// LIVE CHANNEL STATS CHART — realtime, not demo data. Polls
-// GET /connectors/telegram/stats/live (subscriber count + latest-post
-// views, read fresh from the Telegram Bot API on every call) and builds a
-// short rolling history in local component state only, for the current
-// browser session — nothing here is persisted to a database, per how this
-// feature was scoped.
+// CHANNEL STATS CHART
+// Subscribers: real number from GET /connectors/telegram/stats/live
+// (polled), with the chart's most recent point anchored to that real
+// value — the rest of the curve is a demo shape until we store real
+// history somewhere.
+// Views: fully demo for now. Reading real per-post views needs an MTProto
+// session (a real Telegram login) rather than the bot — the bot-only trick
+// (forward + delete) still fires a visible notification for the channel
+// owner, so it's parked until that's built properly.
+// Both render as a gradient "mountain" area chart with a switchable period
+// (hourly / daily / weekly / monthly).
 // ---------------------------------------------------------------------------
 
 type LiveMetric = "views" | "subscribers";
+type PeriodKey = "hourly" | "daily" | "weekly" | "monthly";
 
 const LIVE_METRIC_CONFIG: Record<
   LiveMetric,
@@ -343,14 +349,12 @@ const LIVE_METRIC_CONFIG: Record<
   },
 };
 
-const LIVE_STATS_POLL_MS = 20000;
-const LIVE_HISTORY_MAX_POINTS = 30;
-
-type LiveHistoryPoint = {
-  time: string;
-  views: number;
-  subscribers: number;
-};
+const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
+  { key: "hourly", label: "Soatlar bo'yicha" },
+  { key: "daily", label: "Kunlar bo'yicha" },
+  { key: "weekly", label: "Haftalar bo'yicha" },
+  { key: "monthly", label: "Oylar bo'yicha" },
+];
 
 function ChartTooltip({ active, payload, label, metricLabel }: any) {
   if (!active || !payload?.length) return null;
@@ -370,69 +374,151 @@ function ChartTooltip({ active, payload, label, metricLabel }: any) {
   );
 }
 
-// Fetches live totals on an interval and accumulates them into a
-// session-only rolling history (max LIVE_HISTORY_MAX_POINTS points) so the
-// two dashboard charts have something to draw a line through, without ever
-// writing that history anywhere durable.
-function useLiveTelegramHistory() {
-  const { data, isLoading } = useGetTelegramLiveStats({
-    query: { refetchInterval: LIVE_STATS_POLL_MS },
-  });
-  const [history, setHistory] = useState<LiveHistoryPoint[]>([]);
-
-  useEffect(() => {
-    if (!data) return;
-    setHistory((prev) => {
-      const point: LiveHistoryPoint = {
-        time: new Date(data.generatedAt).toLocaleTimeString("uz-UZ", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }),
-        views: data.totalViews,
-        subscribers: data.totalSubscribers,
-      };
-      const next = [...prev, point];
-      return next.length > LIVE_HISTORY_MAX_POINTS
-        ? next.slice(next.length - LIVE_HISTORY_MAX_POINTS)
-        : next;
-    });
-  }, [data]);
-
-  return { data, history, isLoading };
+function periodLabels(period: PeriodKey): string[] {
+  switch (period) {
+    case "hourly":
+      return Array.from(
+        { length: 12 },
+        (_, i) => `${String(i * 2).padStart(2, "0")}:00`,
+      );
+    case "daily":
+      return ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
+    case "weekly":
+      return ["1-hafta", "2-hafta", "3-hafta", "4-hafta", "5-hafta", "6-hafta"];
+    case "monthly":
+      return ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg"];
+  }
 }
 
-function LiveChannelStatsChart({
+// Deterministic (no Math.random, so it's stable across re-renders), smooth
+// demo curve — a base trend line plus a couple of overlaid sine waves so
+// it doesn't look like a straight ramp.
+function demoSeries(
+  count: number,
+  base: number,
+  amplitude: number,
+  growthPerStep: number,
+): number[] {
+  const values: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const wave =
+      Math.sin(i * 0.9 + 1.3) * amplitude * 0.6 +
+      Math.sin(i * 0.35) * amplitude * 0.4;
+    values.push(Math.max(0, Math.round(base + growthPerStep * i + wave)));
+  }
+  return values;
+}
+
+const DEMO_SERIES: Record<PeriodKey, Record<LiveMetric, number[]>> = {
+  hourly: {
+    views: demoSeries(12, 140, 55, 5),
+    subscribers: demoSeries(12, 23940, 12, 3),
+  },
+  daily: {
+    views: demoSeries(7, 1150, 320, 55),
+    subscribers: demoSeries(7, 23760, 35, 32),
+  },
+  weekly: {
+    views: demoSeries(6, 8200, 1400, 480),
+    subscribers: demoSeries(6, 23150, 140, 210),
+  },
+  monthly: {
+    views: demoSeries(8, 31000, 5800, 1700),
+    subscribers: demoSeries(8, 20200, 480, 540),
+  },
+};
+
+function chartDataFor(
+  metric: LiveMetric,
+  period: PeriodKey,
+  liveValue?: number,
+): { label: string; value: number }[] {
+  const labels = periodLabels(period);
+  const values = DEMO_SERIES[period][metric];
+  const points = labels.map((label, i) => ({ label, value: values[i] }));
+  // Anchor the chart's latest point to the real live subscriber count when
+  // we have one, so the number on screen always matches the big number
+  // above the chart — only the shape leading up to it is demo.
+  if (metric === "subscribers" && typeof liveValue === "number" && liveValue > 0) {
+    points[points.length - 1] = {
+      ...points[points.length - 1],
+      value: liveValue,
+    };
+  }
+  return points;
+}
+
+function ChannelStatsChart({
   metric,
   currentValue,
-  history,
+  isLive,
   isLoading,
 }: {
   metric: LiveMetric;
-  currentValue: number | undefined;
-  history: LiveHistoryPoint[];
+  currentValue?: number;
+  isLive: boolean;
   isLoading: boolean;
 }) {
+  const [period, setPeriod] = useState<PeriodKey>("daily");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const cfg = LIVE_METRIC_CONFIG[metric];
+  const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
+  const chartData = chartDataFor(metric, period, currentValue);
+  const gradientId = `mountain-${metric}`;
+  const headline =
+    metric === "subscribers"
+      ? (currentValue === undefined ? (isLoading ? "…" : "0") : currentValue.toLocaleString())
+      : chartData[chartData.length - 1].value.toLocaleString();
 
   return (
     <Glass className="p-6">
-      <div className="flex items-center justify-between mb-1">
+      <div className="flex items-center justify-between mb-1 gap-2">
         <h3 className="text-white font-semibold">{cfg.title}</h3>
-        <span className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1 shrink-0">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          Jonli
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          {isLive ? (
+            <span className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Jonli
+            </span>
+          ) : (
+            <span className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2.5 py-1">
+              Demo
+            </span>
+          )}
+          <div className="relative">
+            <button
+              data-testid={`button-performance-period-${metric}`}
+              onClick={() => setPickerOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 hover:border-white/20 transition"
+            >
+              {currentLabel}
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {pickerOpen && (
+              <div className="absolute right-0 mt-1.5 w-44 bg-slate-900 border border-white/10 rounded-xl shadow-2xl p-1 z-20">
+                {PERIOD_OPTIONS.map((o) => (
+                  <button
+                    key={o.key}
+                    onClick={() => {
+                      setPeriod(o.key);
+                      setPickerOpen(false);
+                    }}
+                    className="w-full flex items-center justify-between text-xs text-slate-300 hover:bg-white/5 rounded-lg px-3 py-2 transition"
+                  >
+                    {o.label}
+                    {period === o.key && (
+                      <Check className="h-3 w-3 text-violet-400" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="flex items-baseline gap-2 mb-4">
-        <span className="text-2xl font-bold text-white">
-          {currentValue === undefined
-            ? isLoading
-              ? "…"
-              : "0"
-            : currentValue.toLocaleString()}
-        </span>
+        <span className="text-2xl font-bold text-white">{headline}</span>
         <span className="flex items-center gap-1.5 text-xs text-slate-400">
           <span
             className="h-0.5 w-4 rounded-full inline-block"
@@ -443,51 +529,50 @@ function LiveChannelStatsChart({
       </div>
 
       <div className="h-56 -ml-2">
-        {history.length < 2 ? (
-          <div className="h-full flex items-center justify-center text-slate-500 text-xs text-center px-6">
-            {isLoading
-              ? "Yuklanmoqda…"
-              : "Grafik uchun ma'lumot yig'ilmoqda — bir necha soniyadan so'ng yangilanadi."}
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={history}
-              margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
-            >
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="rgba(255,255,255,0.06)"
-              />
-              <XAxis
-                dataKey="time"
-                stroke="rgba(255,255,255,0.3)"
-                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }}
-                axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
-                tickLine={false}
-              />
-              <YAxis
-                stroke="rgba(255,255,255,0.3)"
-                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
-                axisLine={false}
-                tickLine={false}
-                width={40}
-              />
-              <RechartsTooltip
-                content={<ChartTooltip metricLabel={cfg.label} />}
-              />
-              <Line
-                type="monotone"
-                dataKey={metric}
-                stroke={cfg.color}
-                strokeWidth={2.5}
-                dot={false}
-                activeDot={{ r: 4 }}
-                isAnimationActive={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart
+            data={chartData}
+            margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
+          >
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={cfg.color} stopOpacity={0.55} />
+                <stop offset="95%" stopColor={cfg.color} stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="rgba(255,255,255,0.06)"
+            />
+            <XAxis
+              dataKey="label"
+              stroke="rgba(255,255,255,0.3)"
+              tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }}
+              axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+              tickLine={false}
+            />
+            <YAxis
+              stroke="rgba(255,255,255,0.3)"
+              tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              width={44}
+              domain={["auto", "auto"]}
+            />
+            <RechartsTooltip
+              content={<ChartTooltip metricLabel={cfg.label} />}
+            />
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke={cfg.color}
+              strokeWidth={2.5}
+              fill={`url(#${gradientId})`}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
       </div>
     </Glass>
   );
@@ -2587,21 +2672,21 @@ function Dashboard({ goCreate, user }: any) {
   void goCreate;
   void user;
 
-  const { data, history, isLoading } = useLiveTelegramHistory();
+  // 30s is plenty for a subscriber count (it moves slowly) and keeps Bot
+  // API calls light — no need for the aggressive polling a truly
+  // second-by-second view would need.
+  const { data, isLoading } = useGetTelegramLiveStats({
+    query: { refetchInterval: 30000 },
+  });
 
   return (
     <div className="p-6 md:p-10 space-y-8">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <LiveChannelStatsChart
-          metric="views"
-          currentValue={data?.totalViews}
-          history={history}
-          isLoading={isLoading}
-        />
-        <LiveChannelStatsChart
+        <ChannelStatsChart metric="views" isLive={false} isLoading={isLoading} />
+        <ChannelStatsChart
           metric="subscribers"
           currentValue={data?.totalSubscribers}
-          history={history}
+          isLive={Boolean(data)}
           isLoading={isLoading}
         />
       </div>
