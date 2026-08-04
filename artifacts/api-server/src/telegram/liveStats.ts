@@ -21,9 +21,11 @@ type TelegramApiResult<T> = {
 async function callTelegram<T>(
   method: string,
   body: Record<string, unknown>,
+  botToken?: string,
 ): Promise<TelegramApiResult<T>> {
+  const token = botToken ?? getBotToken();
   const res = await fetch(
-    `https://api.telegram.org/bot${getBotToken()}/${method}`,
+    `https://api.telegram.org/bot${token}/${method}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -35,11 +37,14 @@ async function callTelegram<T>(
 
 export async function getSubscriberCount(
   channelId: string,
+  botToken?: string,
 ): Promise<number | null> {
   try {
-    const data = await callTelegram<number>("getChatMemberCount", {
-      chat_id: channelId,
-    });
+    const data = await callTelegram<number>(
+      "getChatMemberCount",
+      { chat_id: channelId },
+      botToken,
+    );
     return data.ok && typeof data.result === "number" ? data.result : null;
   } catch {
     return null;

@@ -230,7 +230,7 @@ router.get(
 
     const perChannel = await Promise.all(
       channels.map(async (c) => {
-        const subscribers = await getSubscriberCount(c.channelId);
+        const subscribers = await getSubscriberCount(c.channelId, c.botToken);
         return {
           id: c.id,
           channelTitle: c.channelTitle,
