@@ -447,14 +447,21 @@ function chartDataFor(
 
   const labels = periodLabels(period);
   const values = DEMO_SERIES[period][metric];
-  const points = labels.map((label, i) => ({ label, value: values[i] }));
-  // Anchor the latest demo point to the real live value so the headline
-  // number always matches. Once snapshots accumulate this path is replaced
-  // by the real history branch above.
-  if (metric === "subscribers" && typeof liveValue === "number" && liveValue > 0) {
-    points[points.length - 1] = { ...points[points.length - 1], value: liveValue };
+
+  // For subscribers: if we have a real live value, shift the whole demo
+  // series so its last point equals liveValue. This keeps the mountain
+  // shape intact while making the Y-axis perfectly consistent with the
+  // headline number — no "0 headline but 23 980 axis" mismatch.
+  if (metric === "subscribers" && typeof liveValue === "number") {
+    const lastDemo = values[values.length - 1];
+    const shift = liveValue - lastDemo; // can be negative
+    return labels.map((label, i) => ({
+      label,
+      value: Math.max(0, values[i] + shift),
+    }));
   }
-  return points;
+
+  return labels.map((label, i) => ({ label, value: values[i] }));
 }
 
 function ChannelStatsChart({
