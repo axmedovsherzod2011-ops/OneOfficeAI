@@ -4561,16 +4561,24 @@ function AppShell() {
   } = useQuery({
     queryKey: ["me", firebaseUser?.uid],
     queryFn: async () => {
-      const token = await firebaseUser?.getIdToken();
+      // Force-refresh the token so an expired cached token never silently
+      // becomes a 401 (which would show the wrong "server error" screen).
+      const token = await firebaseUser?.getIdToken(true);
       const res = await fetch("/api/me", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
+      // 404 → profile doesn't exist yet (new user, onboarding needed)
       if (res.status === 404) return null;
+      // 401 → token was rejected; sign the user out so they can log in fresh
+      if (res.status === 401) {
+        await signOut();
+        return null;
+      }
       if (!res.ok) throw new Error("Failed to load profile");
       return res.json();
     },
     enabled: !!firebaseUser,
-    retry: 2,
+    retry: 1,
   });
 
   // Connected Telegram channels — fetched once a profile exists. Post

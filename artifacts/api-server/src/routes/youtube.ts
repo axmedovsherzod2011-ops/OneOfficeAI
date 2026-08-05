@@ -73,10 +73,15 @@ function toAccountResponse(a: typeof youtubeAccountsTable.$inferSelect) {
 // Renews the access token if it expires within 5 minutes.
 // ---------------------------------------------------------------------------
 
+/** Strip any accidental "https://" prefix that may have been pasted into the secret. */
+function getGoogleClientId(): string {
+  return (process.env.GOOGLE_CLIENT_ID ?? "").replace(/^https?:\/\//, "").trim();
+}
+
 async function ensureFreshToken(
   account: typeof youtubeAccountsTable.$inferSelect,
 ): Promise<string> {
-  const clientId = process.env.GOOGLE_CLIENT_ID!;
+  const clientId = getGoogleClientId();
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
 
   const expiresAt = account.tokenExpiresAt?.getTime() ?? 0;
@@ -508,7 +513,7 @@ async function uploadToYouTube(opts: {
 // GET /connectors/youtube/config
 // ---------------------------------------------------------------------------
 router.get("/connectors/youtube/config", (_req, res) => {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientId = getGoogleClientId();
   const configured = Boolean(clientId && process.env.GOOGLE_CLIENT_SECRET);
   res.json({
     clientId,
@@ -556,7 +561,7 @@ router.post(
       return;
     }
 
-    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientId = getGoogleClientId();
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
     if (!clientId || !clientSecret) {
       res.status(400).json({
@@ -920,13 +925,27 @@ router.post(
       // Refresh token if needed
       const accessToken = await ensureFreshToken(account);
 
-      // Download images
+      // Download images (up to 8, skip any that fail to download)
       const imagePaths: string[] = [];
-
-      const imageTotal = Math.min(images.length, 8);
-      for (let i = 0; i < imageTotal; i++) {
+      for (let i = 0; i < Math.min(images.length, 8); i++) {
         const dest = join(tmpDir, `img${i}.jpg`);
         const ok = await downloadImage(images[i], dest);
+        if (ok) imagePaths.push(dest);
+      }
+
+      if (imagePaths.length === 0) {
+        res.status(400).json({
+          error:
+            "Rasmlarni yuklab bo'lmadi. Rasm manzillarini tekshiring yoki boshqa rasm tanlang.",
+        });
+        return;
+      }
+
+      // Build the slideshow video
+      console.log(`[youtube] ffmpeg slideshow: ${imagePaths.length} rasm → ${videoPath}`);
+      await buildSlideshowVideo(imagePaths, videoPath, isShort ?? false);
+
+      // Get file size for the resumable upload
       const { statSync } = await import("fs");
       const { size: fileSize } = statSync(videoPath);
 
