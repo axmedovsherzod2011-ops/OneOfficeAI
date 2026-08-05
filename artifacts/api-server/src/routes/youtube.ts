@@ -515,8 +515,22 @@ async function uploadToYouTube(opts: {
 router.get("/connectors/youtube/config", (_req, res) => {
   const clientId = getGoogleClientId();
   const configured = Boolean(clientId && process.env.GOOGLE_CLIENT_SECRET);
+
+  // Always use the canonical public URL as the redirect URI so the user
+  // only ever needs to register ONE URL in Google Cloud Console, regardless
+  // of which device or domain they're using.
+  const rawPublicUrl = (process.env.PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+  // Ensure the URL has an https:// scheme — the secret may be stored without it.
+  const publicUrl = rawPublicUrl
+    ? rawPublicUrl.startsWith("http")
+      ? rawPublicUrl
+      : `https://${rawPublicUrl}`
+    : "";
+  const redirectUri = publicUrl ? `${publicUrl}/` : null;
+
   res.json({
     clientId,
+    redirectUri,
     // Both scopes in one space-separated string — the frontend spreads them
     // into the authorize URL's `scope` param.
     scope:

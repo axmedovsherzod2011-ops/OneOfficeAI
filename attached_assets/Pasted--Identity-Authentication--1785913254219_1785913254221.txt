@@ -1,0 +1,656 @@
+Перейти к основному контенту
+Identity
+Authentication
+
+Авторизация
+
+Ещё
+Результаты поиска
+/
+
+Language
+Войти
+Authorization
+Авторизация аккаунта Google
+Проверка приложения для использования API авторизации Google
+Привязка аккаунта Google
+Ресурсы
+Фильтр
+
+
+Эта страница переведена с помощью Cloud Translation API.
+Switch to English
+Главная
+Товары
+Google Identity
+Авторизация
+Authorization
+Эта информация оказалась полезной?
+
+Отправить отзывИспользование OAuth 2.0 для приложений веб-сервера
+
+
+
+
+
+В этом документе объясняется, как веб-серверные приложения используют клиентские библиотеки Google API или конечные точки Google OAuth 2.0 для реализации авторизации OAuth 2.0 для доступа к API Google.
+
+OAuth 2.0 позволяет пользователям обмениваться определенными данными с приложением, сохраняя при этом конфиденциальность своих имен пользователей, паролей и другой информации. Например, приложение может использовать OAuth 2.0 для получения разрешения от пользователей на хранение файлов в их Google Дисках.
+
+Данный алгоритм OAuth 2.0 предназначен специально для авторизации пользователей. Он разработан для приложений, которые могут хранить конфиденциальную информацию и поддерживать состояние. Правильно авторизованное веб-приложение может получить доступ к API как во время взаимодействия пользователя с приложением, так и после того, как пользователь покинул приложение.
+
+Приложения веб-серверов часто также используют служебные учетные записи для авторизации запросов API, особенно при вызове облачных API для доступа к данным, относящимся к проекту, а не к данным конкретного пользователя. Приложения веб-серверов могут использовать служебные учетные записи в сочетании с авторизацией пользователей.
+
+Примечание: Учитывая риски для безопасности, связанные с правильной реализацией, мы настоятельно рекомендуем использовать библиотеки OAuth 2.0 при взаимодействии с конечными точками Google OAuth 2.0. Использование хорошо отлаженного кода, предоставленного другими разработчиками, является лучшей практикой и поможет защитить вас и ваших пользователей. Для получения дополнительной информации см. раздел «Клиентские библиотеки» .
+Клиентские библиотеки
+В примерах на этой странице, адаптированных под конкретные языки программирования, используются клиентские библиотеки Google API для реализации авторизации OAuth 2.0. Для запуска примеров кода необходимо предварительно установить клиентскую библиотеку для вашего языка.
+
+При использовании клиентской библиотеки Google API для обработки потока OAuth 2.0 в вашем приложении, библиотека выполняет множество действий, которые в противном случае приложению пришлось бы обрабатывать самостоятельно. Например, она определяет, когда приложение может использовать или обновлять сохраненные токены доступа, а также когда приложению необходимо повторно получить согласие. Клиентская библиотека также генерирует корректные URL-адреса перенаправления и помогает реализовать обработчики перенаправлений, которые обменивают коды авторизации на токены доступа.
+
+Клиентские библиотеки Google API для серверных приложений доступны для следующих языков:
+
+Go
+Java
+.NET
+Node.js
+Dart
+PHP
+Python
+Ruby
+Важно: клиентская библиотека Google API для JavaScript и функция «Вход через Google» предназначены только для обработки OAuth 2.0 в браузере пользователя. Если вы хотите использовать JavaScript на стороне сервера для управления взаимодействием с Google по протоколу OAuth 2.0, рассмотрите возможность использования библиотеки Node.js на вашей серверной платформе.
+Предварительные требования
+Включите API для вашего проекта
+Любое приложение, использующее API Google, должно включить эти API в консоли API.
+
+Чтобы включить API для вашего проекта:
+
+Откройте библиотеку API в консоли Google API.
+При появлении запроса выберите проект или создайте новый.
+В библиотеке API перечислены все доступные API, сгруппированные по семействам продуктов и популярности. Если нужный вам API отсутствует в списке, воспользуйтесь поиском, чтобы найти его, или нажмите «Показать все» в семействе продуктов, к которому он относится.
+Выберите API, который хотите включить, затем нажмите кнопку «Включить» .
+При появлении запроса включите оплату.
+При появлении запроса ознакомьтесь с условиями использования API и примите их.
+Создать учетные данные авторизации
+Любое приложение, использующее OAuth 2.0 для доступа к API Google, должно иметь учетные данные авторизации, идентифицирующие приложение для сервера OAuth 2.0 Google. Следующие шаги описывают, как создать учетные данные для вашего проекта. Затем ваши приложения смогут использовать эти учетные данные для доступа к API, которые вы включили для этого проекта.
+
+Перейдите на страницу «Клиенты» .
+Нажмите «Создать клиента» .
+Выберите тип приложения: Веб-приложение .
+Заполните форму и нажмите «Создать» . Приложения, использующие языки и фреймворки, такие как PHP, Java, Python, Ruby и .NET, должны указывать авторизованные URI перенаправления . URI перенаправления — это конечные точки, на которые сервер OAuth 2.0 может отправлять ответы. Эти конечные точки должны соответствовать правилам проверки Google .
+Для тестирования можно указать URI, которые ссылаются на локальный компьютер, например, http://localhost:8080 . Во всех примерах в этом документе в качестве URI перенаправления используется http://localhost:8080 .
+
+Мы рекомендуем проектировать конечные точки аутентификации вашего приложения таким образом, чтобы оно не передавало коды авторизации другим ресурсам на странице.
+
+После создания учетных данных загрузите файл client_secret.json из консоли API. Надежно сохраните файл в месте, доступном только вашему приложению.
+
+Важно: не храните файл client_secret.json в общедоступном месте. Кроме того, если вы делитесь исходным кодом своего приложения — например, на GitHub — храните файл client_secret.json вне дерева исходного кода, чтобы избежать непреднамеренной передачи учетных данных клиента.
+Секретный ключ клиента вашего приложения отобразится только после его создания. Вы не сможете просмотреть или загрузить секретный ключ клиента повторно. Подробнее .
+
+Определите области доступа
+Области доступа (scopes) позволяют вашему приложению запрашивать доступ только к тем ресурсам, которые ему необходимы, а также дают пользователям возможность контролировать объем предоставляемого ими доступа. Таким образом, может существовать обратная зависимость между количеством запрашиваемых областей доступа и вероятностью получения согласия пользователя.
+
+Прежде чем приступать к внедрению авторизации OAuth 2.0, мы рекомендуем определить области доступа, к которым вашему приложению потребуются разрешения.
+
+Мы также рекомендуем, чтобы ваше приложение запрашивало доступ к областям авторизации посредством поэтапного процесса авторизации , в рамках которого приложение запрашивает доступ к пользовательским данным в контексте. Эта передовая практика помогает пользователям легче понять, зачем вашему приложению нужен запрашиваемый доступ.
+
+В документе «Области действия API OAuth 2.0» содержится полный список областей действия, которые вы можете использовать для доступа к API Google.
+
+Если ваше общедоступное приложение использует области доступа, разрешающие доступ к определенным пользовательским данным, оно должно пройти процесс проверки. Если при тестировании приложения вы видите на экране сообщение «Непроверенное приложение» , необходимо отправить запрос на проверку, чтобы удалить его. Подробнее о непроверенных приложениях и ответы на часто задаваемые вопросы о проверке приложений вы найдете в Справочном центре.
+Требования, специфичные для конкретного языка
+Для запуска любого из примеров кода в этом документе вам потребуется учетная запись Google, доступ к Интернету и веб-браузер. Если вы используете одну из клиентских библиотек API, также ознакомьтесь с требованиями к языку программирования в следующих разделах.
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+Для запуска примеров PHP-кода, приведенных в этом документе, вам потребуется:
+
+PHP 8.0 или более поздней версии с установленным интерфейсом командной строки (CLI) и расширением JSON.
+Инструмент управления зависимостями Composer .
+Клиентская библиотека Google API для PHP:
+
+
+composer require google/apiclient:^2.15.0
+Дополнительную информацию см. в клиентской библиотеке Google API для PHP .
+
+Получение токенов доступа OAuth 2.0
+Следующие шаги показывают, как ваше приложение взаимодействует с сервером Google OAuth 2.0 для получения согласия пользователя на выполнение запроса к API от его имени. Ваше приложение должно получить это согласие, прежде чем оно сможет выполнить запрос к API Google, требующий авторизации пользователя.
+
+Следующий список кратко суммирует эти шаги:
+
+Ваше приложение определяет необходимые ему разрешения.
+Ваше приложение перенаправляет пользователя на сайт Google вместе со списком запрошенных разрешений.
+Пользователь сам решает, предоставлять ли вашему приложению необходимые разрешения.
+Ваше приложение выясняет, какое решение принял пользователь.
+Если пользователь предоставил запрошенные разрешения, ваше приложение получит токены, необходимые для выполнения API-запросов от имени пользователя.
+Шаг 1: Настройка параметров авторизации
+Первым шагом является создание запроса на авторизацию. Этот запрос устанавливает параметры, которые идентифицируют ваше приложение и определяют разрешения, которые пользователю будет предложено предоставить вашему приложению.
+
+Если вы используете клиентскую библиотеку Google для аутентификации и авторизации OAuth 2.0, вам необходимо создать и настроить объект, определяющий эти параметры.
+Если вы напрямую обратитесь к конечной точке Google OAuth 2.0, вы сгенерируете URL-адрес и зададите параметры для этого URL-адреса.
+На следующих вкладках определены поддерживаемые параметры авторизации для веб-серверных приложений. Примеры для конкретных языков также показывают, как использовать клиентскую библиотеку или библиотеку авторизации для настройки объекта, который задает эти параметры:
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+Приведённый ниже фрагмент кода создаёт объект Google\Client() , который определяет параметры в запросе авторизации.
+
+Этот объект использует информацию из файла client_secret.json для идентификации вашего приложения. (Подробнее об этом файле см. в разделе «Создание учетных данных для авторизации» .) Объект также определяет области доступа, к которым ваше приложение запрашивает разрешение, и URL-адрес конечной точки аутентификации вашего приложения, которая будет обрабатывать ответ от сервера OAuth 2.0 от Google. Наконец, код устанавливает необязательные параметры access_type и include_granted_scopes .
+
+Например, этот код запрашивает доступ только для чтения в автономном режиме к метаданным и событиям календаря пользователя в Google Диск:
+
+
+use Google\Client;
+
+$client = new Client();
+
+// Required, call the setAuthConfig function to load authorization credentials from
+// client_secret.json file.
+$client->setAuthConfig('client_secret.json');
+
+// Required, to set the scope value, call the addScope function
+$client->addScope([Google\Service\Drive::DRIVE_METADATA_READONLY, Google\Service\Calendar::CALENDAR_READONLY]);
+
+// Required, call the setRedirectUri function to specify a valid redirect URI for the
+// provided client_id
+$client->setRedirectUri('http://' . $_SERVER['HTTP_HOST'] . '/oauth2callback.php');
+
+// Recommended, offline access will give you both an access and refresh token so that
+// your app can refresh the access token without user interaction.
+$client->setAccessType('offline');
+
+// Recommended, call the setState function. Using a state value can increase your assurance that
+// an incoming connection is the result of an authentication request.
+$client->setState($sample_passthrough_value);
+
+// Optional, if your application knows which user is trying to authenticate, it can use this
+// parameter to provide a hint to the Google Authentication Server.
+$client->setLoginHint('hint@example.com');
+
+// Optional, call the setPrompt function to set "consent" will prompt the user for consent
+$client->setPrompt('consent');
+
+// Optional, call the setIncludeGrantedScopes function with true to enable incremental
+// authorization
+$client->setIncludeGrantedScopes(true);
+Сервер авторизации Google поддерживает следующие параметры строки запроса для веб-приложений:
+
+Параметры
+client_id	Необходимый
+Идентификатор клиента для вашего приложения. Это значение можно найти на странице «Клиенты» в консоли Cloud.
+
+redirect_uri	Необходимый
+Определяет, куда API-сервер перенаправляет пользователя после завершения авторизации. Значение должно точно совпадать с одним из разрешенных URI перенаправления для клиента OAuth 2.0, который вы настроили на странице «Клиенты » в Cloud Console. Если это значение не совпадает с разрешенным URI перенаправления для указанного client_id вы получите ошибку redirect_uri_mismatch .
+
+Обратите внимание, что схема http или https , регистр и завершающая косая черта (' / ') должны совпадать.
+
+response_type	Необходимый
+Определяет, возвращает ли конечная точка Google OAuth 2.0 код авторизации.
+
+Установите значение параметра равным " code для приложений веб-сервера.
+
+scope	Необходимый
+Разделённый пробелами список областей действия, определяющих ресурсы, к которым ваше приложение может получить доступ от имени пользователя. Эти значения используются для формирования экрана согласия, который Google отображает пользователю.
+
+Области доступа (scopes) позволяют вашему приложению запрашивать доступ только к тем ресурсам, которые ему необходимы, а также дают пользователям возможность контролировать объем предоставляемого ими доступа. Таким образом, существует обратная зависимость между количеством запрашиваемых областей доступа и вероятностью получения согласия пользователя.
+
+Мы рекомендуем, чтобы ваше приложение запрашивало доступ к областям авторизации в контексте, когда это возможно. Запрашивая доступ к пользовательским данным в контексте, используя поэтапную авторизацию , вы помогаете пользователям понять, зачем вашему приложению нужен запрашиваемый доступ.
+
+access_type	Рекомендуется
+Указывает, может ли ваше приложение обновлять токены доступа, когда пользователь отсутствует в браузере. Допустимые значения параметра: online (значение по умолчанию) и offline .
+
+Установите значение offline , если вашему приложению необходимо обновлять токены доступа, когда пользователь отсутствует в браузере. Это способ обновления токенов доступа, описанный далее в этом документе. Это значение указывает серверу авторизации Google возвращать токен обновления и токен доступа при первом обмене кодом авторизации на токены вашим приложением.
+
+state	Рекомендуется
+Указывает любое строковое значение, которое ваше приложение использует для поддержания состояния между вашим запросом на авторизацию и ответом сервера авторизации. Сервер возвращает точное значение, которое вы отправляете в виде пары name=value в компоненте запроса URL ( ? ) параметра redirect_uri после того, как пользователь дает согласие или отклоняет запрос на доступ вашего приложения.
+
+Этот параметр можно использовать для различных целей, например, для перенаправления пользователя на правильный ресурс в вашем приложении, отправки одноразовых чисел (nonce) и предотвращения подделки межсайтовых запросов (CSS). Поскольку ваш redirect_uri может быть угадан, использование значения state может повысить вашу уверенность в том, что входящее соединение является результатом запроса аутентификации. Если вы сгенерируете случайную строку или закодируете хеш cookie или другое значение, которое отражает состояние клиента, вы можете проверить ответ, чтобы дополнительно убедиться, что запрос и ответ были отправлены из одного и того же браузера, обеспечивая защиту от таких атак, как подделка межсайтовых запросов . Пример создания и подтверждения токена state см. в документации OpenID Connect.
+
+Важно: клиент OAuth должен предотвращать CSRF-атаки, как указано в спецификации OAuth2 . Один из способов добиться этого — использовать параметр state для поддержания состояния между вашим запросом на авторизацию и ответом сервера авторизации.
+include_granted_scopes	Необязательный
+Позволяет приложениям использовать поэтапную авторизацию для запроса доступа к дополнительным областям действия в контексте. Если вы установите значение этого параметра равным true и запрос на авторизацию будет одобрен, то новый токен доступа будет также охватывать любые области действия, к которым пользователь ранее предоставил приложению доступ. Примеры см. в разделе « Поэтапная авторизация» .
+
+enable_granular_consent	Необязательный
+По умолчанию — true . Если установлено значение false , более детальные разрешения учетной записи Google будут отключены для идентификаторов клиентов OAuth, созданных до 2019 года. Для более новых идентификаторов клиентов OAuth это не имеет значения, поскольку для них более детальные разрешения всегда включены.
+
+Когда Google включит детализированные разрешения для приложения, этот параметр перестанет оказывать какое-либо воздействие.
+
+login_hint	Необязательный
+Если ваше приложение знает, какой пользователь пытается пройти аутентификацию, оно может использовать этот параметр для предоставления подсказки серверу аутентификации Google. Сервер использует эту подсказку для упрощения процесса входа в систему, либо предварительно заполняя поле электронной почты в форме входа, либо выбирая соответствующую сессию с несколькими учетными записями.
+
+Установите значение параметра равным адресу электронной почты или sub , эквивалентному идентификатору пользователя в Google.
+
+prompt	Необязательный
+Список вопросов, разделенных пробелами и учитывающих регистр, для отображения пользователю. Если этот параметр не указан, пользователю будет предложено подтвердить согласие только при первом запросе доступа к вашему проекту. Дополнительную информацию см. в разделе «Предварительное подтверждение согласия» .
+
+Возможные значения:
+
+none	Не отображать экраны аутентификации или согласия. Не должно указываться с другими значениями.
+consent	Запросите у пользователя согласие.
+select_account	Предложите пользователю выбрать учетную запись.
+Шаг 2: Перенаправление на сервер Google OAuth 2.0
+Перенаправьте пользователя на сервер Google OAuth 2.0 для запуска процесса аутентификации и авторизации. Обычно это происходит, когда вашему приложению впервые требуется доступ к данным пользователя. В случае поэтапной авторизации этот шаг также происходит, когда вашему приложению впервые требуется доступ к дополнительным ресурсам, к которым у него нет разрешения.
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+Сгенерируйте URL-адрес для запроса доступа к серверу Google OAuth 2.0:
+
+$auth_url = $client->createAuthUrl();
+Перенаправить пользователя на $auth_url :
+
+header('Location: ' . filter_var($auth_url, FILTER_SANITIZE_URL));
+Сервер OAuth 2.0 от Google аутентифицирует пользователя и получает от него согласие на доступ вашего приложения к запрошенным областям действия. Ответ отправляется обратно в ваше приложение с использованием указанного вами URL-адреса перенаправления.
+
+Шаг 3: Google запрашивает у пользователя согласие.
+На этом этапе пользователь решает, предоставлять ли вашему приложению запрошенный доступ. На этом этапе Google отображает окно согласия, в котором указывается название вашего приложения и сервисы Google API, к которым запрашивается разрешение на доступ, а также учетные данные пользователя и краткое описание предоставляемых областей доступа. Затем пользователь может дать согласие на предоставление доступа к одной или нескольким областям, запрошенным вашим приложением, или отклонить запрос.
+
+На данном этапе вашему приложению не нужно ничего делать, поскольку оно ожидает ответа от сервера OAuth 2.0 от Google, указывающего, был ли предоставлен доступ. Этот ответ объясняется на следующем шаге.
+
+Ошибки
+При обращении к конечной точке авторизации OAuth 2.0 от Google вместо ожидаемых процессов аутентификации и авторизации могут отображаться сообщения об ошибках, предназначенные для пользователя. Распространенные коды ошибок и рекомендуемые способы их устранения:
+
+admin_policy_enforced
+Учетная запись Google не может авторизовать одну или несколько запрошенных областей доступа из-за политики администратора Google Workspace. Дополнительную информацию о том, как администратор может ограничить доступ ко всем областям доступа или к конфиденциальным и ограниченным областям доступа до тех пор, пока доступ не будет явно предоставлен вашему идентификатору клиента OAuth, см. в справочной статье «Управление доступом сторонних и внутренних приложений к данным Google Workspace» .
+
+disallowed_useragent
+Точка авторизации отображается внутри встроенного пользовательского агента, что запрещено политикой Google OAuth 2.0 .
+
+Разработчики iOS и macOS могут столкнуться с этой ошибкой при открытии запросов авторизации в WKWebView . Вместо этого разработчикам следует использовать библиотеки iOS, такие как Google Sign-In для iOS или AppAuth для iOS от OpenID Foundation.
+
+Веб-разработчики могут столкнуться с этой ошибкой, когда приложение для iOS или macOS открывает обычную веб-ссылку во встроенном пользовательском агенте, и пользователь переходит на конечную точку авторизации Google OAuth 2.0 с вашего сайта. Разработчикам следует разрешить открытие обычных ссылок в обработчике ссылок по умолчанию операционной системы, включая обработчики универсальных ссылок или обработчики ссылок браузера по умолчанию. Библиотека SFSafariViewController также является поддерживаемым вариантом.
+
+org_internal
+Идентификатор клиента OAuth в запросе является частью проекта, ограничивающего доступ к учетным записям Google в конкретной организации Google Cloud . Для получения дополнительной информации об этом параметре конфигурации см. раздел «Тип пользователя» в справочной статье «Настройка экрана согласия OAuth».
+
+invalid_client
+Указан неверный секретный ключ клиента OAuth. Проверьте конфигурацию клиента OAuth , включая идентификатор клиента и секретный ключ, использованные для этого запроса.
+
+deleted_client
+Клиент OAuth, использованный для отправки запроса, был удален. Удаление может произойти вручную или автоматически в случае неиспользуемых клиентов . Удаленные клиенты могут быть восстановлены в течение 30 дней с момента удаления. Подробнее .
+
+invalid_grant
+При обновлении токена доступа или использовании инкрементальной авторизации срок действия токена может истечь или он может быть аннулирован. Повторно аутентифицируйте пользователя и запросите у него согласие на получение новых токенов. Если ошибка повторяется, убедитесь, что ваше приложение настроено правильно и что вы используете корректные токены и параметры в запросе. В противном случае учетная запись пользователя может быть удалена или отключена.
+
+redirect_uri_mismatch
+Передаваемый в запросе авторизации параметр redirect_uri не соответствует разрешенному URI перенаправления для идентификатора клиента OAuth. Проверьте разрешенные URI перенаправления на странице «Клиенты» в консоли Google Cloud.
+
+Параметр redirect_uri может указывать на устаревший и больше не поддерживаемый поток OAuth out-of-band (OOB). Для обновления интеграции обратитесь к руководству по миграции .
+
+invalid_request
+В вашем запросе произошла ошибка. Причиной может быть ряд причин:
+
+Запрос был оформлен неправильно.
+В запросе отсутствовали необходимые параметры.
+В запросе используется метод авторизации, который Google не поддерживает. Убедитесь, что ваша интеграция OAuth использует рекомендуемый метод интеграции.
+Шаг 4: Обработка ответа сервера OAuth 2.0
+Важно: Перед обработкой ответа OAuth 2.0 на сервере необходимо убедиться, что state , полученное от Google, совпадает с state , отправленным в запросе авторизации. Эта проверка помогает гарантировать, что запрос отправляет пользователь, а не вредоносный скрипт, и снижает риск CSRF-атак .
+Сервер OAuth 2.0 отвечает на запрос доступа вашего приложения, используя URL-адрес, указанный в запросе.
+
+Если пользователь одобряет запрос на доступ, то ответ содержит код авторизации. Если пользователь не одобряет запрос, ответ содержит сообщение об ошибке. Код авторизации или сообщение об ошибке, возвращаемое веб-серверу, отображается в строке запроса, как показано в следующих примерах:
+
+Сообщение об ошибке:
+
+https://oauth2.example.com/auth?error=access_denied
+Ответ с кодом авторизации:
+
+https://oauth2.example.com/auth?code=4/P7q7W91a-oMsCeLvIaQm6bTrgtp7
+Важно: если ваш конечный пункт ответа отображает HTML-страницу, любые ресурсы на этой странице смогут увидеть код авторизации в URL-адресе. Скрипты могут считывать URL-адрес напрямую, и URL-адрес из HTTP-заголовка Referer может быть отправлен любому или всем ресурсам на странице.
+Тщательно обдумайте, хотите ли вы отправлять учетные данные авторизации всем ресурсам на этой странице (особенно сторонним скриптам, таким как плагины социальных сетей и аналитические инструменты). Чтобы избежать этой проблемы, мы рекомендуем серверу сначала обработать запрос, а затем перенаправить на другой URL-адрес, который не содержит параметров ответа.
+
+Пример ответа сервера OAuth 2.0
+Вы можете протестировать этот процесс, перейдя по следующей ссылке, которая запрашивает доступ только для чтения к просмотру метаданных файлов в вашем Google Диске и доступ только для чтения к просмотру событий вашего Календаря Google:
+
+https://accounts.google.com/o/oauth2/v2/auth?
+ scope=https%3A//www.googleapis.com/auth/drive.metadata.readonly%20https%3A//www.googleapis.com/auth/calendar.readonly&
+ access_type=offline&
+ include_granted_scopes=true&
+ response_type=code&
+ state=state_parameter_passthrough_value&
+ redirect_uri=https%3A//developers.google.com/oauthplayground&
+ client_id=client_id
+После завершения процесса OAuth 2.0 ваш браузер перенаправит вас на OAuth 2.0 Playground — инструмент для тестирования процессов OAuth. Вы увидите, что OAuth 2.0 Playground автоматически получил код авторизации.
+
+Шаг 5: Обменяйте код авторизации на токены обновления и доступа.
+После получения кода авторизации веб-сервер может обменять этот код на токен доступа.
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+Для обмена кода авторизации на токен доступа используйте метод fetchAccessTokenWithAuthCode :
+
+$access_token = $client->fetchAccessTokenWithAuthCode($_GET['code']);
+Ошибки
+When exchanging the authorization code for an access token you may encounter the following error instead of the expected response. Common error codes and suggested resolutions are listed in this section.
+
+invalid_grant
+The supplied authorization code is invalid or in the wrong format. Request a new code by restarting the OAuth process to prompt the user for consent again.
+
+Step 6: Check which scopes users granted
+When requesting multiple permissions (scopes), users may not grant your app access to all of them. Your app must verify which scopes were actually granted and gracefully handle situations where some permissions are denied, typically by disabling the features that rely on those denied scopes.
+
+However, there are exceptions. Google Workspace Enterprise apps with domain-wide delegation of authority , or apps marked as Trusted , bypass the granular permissions consent screen. For these apps, users won't see the granular permission consent screen. Instead, your app will either receive all requested scopes or none.
+
+For more detailed information, see How to handle granular permissions .
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+To check which scopes the user has granted, use the getGrantedScope() method:
+
+// Space-separated string of granted scopes if it exists, otherwise null.
+$granted_scopes = $client->getOAuth2Service()->getGrantedScope();
+
+// Determine which scopes user granted and build a dictionary
+$granted_scopes_dict = [
+  'Drive' => str_contains($granted_scopes, Google\Service\Drive::DRIVE_METADATA_READONLY),
+  'Calendar' => str_contains($granted_scopes, Google\Service\Calendar::CALENDAR_READONLY)
+];
+Call Google APIs
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+Use the access token to call Google APIs by completing the following steps:
+
+If you need to apply an access token to a new Google\Client object — for example, if you stored the access token in a user session — use the setAccessToken method:
+$client->setAccessToken($access_token);
+Build a service object for the API that you want to call. You build a service object by providing an authorized Google\Client object to the constructor for the API you want to call. For example, to call the Drive API:
+$drive = new Google\Service\Drive($client);
+Make requests to the API service using the interface provided by the service object . For example, to list the files in the authenticated user's Google Drive:
+$files = $drive->files->listFiles(array());
+Complete example
+The following example prints a JSON-formatted list of files in a user's Google Drive after the user authenticates and gives consent for the application to access the user's Drive metadata.
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+To run this example:
+
+In the API Console, add the URL of the local machine to the list of redirect URLs. For example, add http://localhost:8080 .
+Create a new directory and change to it. For example:
+mkdir ~/php-oauth2-example
+cd ~/php-oauth2-example
+Install the Google API Client Library for PHP using Composer :
+composer require google/apiclient:^2.15.0
+Create the files index.php and oauth2callback.php with the following content.
+Run the example with the PHP's built-in test web server:
+php -S localhost:8080 ~/php-oauth2-example
+index.php
+<?php
+require_once __DIR__.'/vendor/autoload.php';
+
+session_start();
+
+$client = new Google\Client();
+$client->setAuthConfig('client_secret.json');
+
+// User granted permission as an access token is in the session.
+if (isset($_SESSION['access_token']) && $_SESSION['access_token'])
+{
+  $client->setAccessToken($_SESSION['access_token']);
+  
+  // Check if user granted Drive permission
+  if ($_SESSION['granted_scopes_dict']['Drive']) {
+    echo "Drive feature is enabled.";
+    echo "</br>";
+    $drive = new Drive($client);
+    $files = array();
+    $response = $drive->files->listFiles(array());
+    foreach ($response->files as $file) {
+        echo "File: " . $file->name . " (" . $file->id . ")";
+        echo "</br>";
+    }
+  } else {
+    echo "Drive feature is NOT enabled.";
+    echo "</br>";
+  }
+
+   // Check if user granted Calendar permission
+  if ($_SESSION['granted_scopes_dict']['Calendar']) {
+    echo "Calendar feature is enabled.";
+    echo "</br>";
+  } else {
+    echo "Calendar feature is NOT enabled.";
+    echo "</br>";
+  }
+}
+else
+{
+  // Redirect users to outh2call.php which redirects users to Google OAuth 2.0
+  $redirect_uri = 'http://' . $_SERVER['HTTP_HOST'] . '/oauth2callback.php';
+  header('Location: ' . filter_var($redirect_uri, FILTER_SANITIZE_URL));
+}
+?>
+oauth2callback.php
+<?php
+require_once __DIR__.'/vendor/autoload.php';
+
+session_start();
+
+$client = new Google\Client();
+
+// Required, call the setAuthConfig function to load authorization credentials from
+// client_secret.json file.
+$client->setAuthConfigFile('client_secret.json');
+$client->setRedirectUri('http://' . $_SERVER['HTTP_HOST']. $_SERVER['PHP_SELF']);
+
+// Required, to set the scope value, call the addScope function.
+$client->addScope([Google\Service\Drive::DRIVE_METADATA_READONLY, Google\Service\Calendar::CALENDAR_READONLY]);
+
+// Enable incremental authorization. Recommended as a best practice.
+$client->setIncludeGrantedScopes(true);
+
+// Recommended, offline access will give you both an access and refresh token so that
+// your app can refresh the access token without user interaction.
+$client->setAccessType("offline");
+
+// Generate a URL for authorization as it doesn't contain code and error
+if (!isset($_GET['code']) && !isset($_GET['error']))
+{
+  // Generate and set state value
+  $state = bin2hex(random_bytes(16));
+  $client->setState($state);
+  $_SESSION['state'] = $state;
+
+  // Generate a url that asks permissions.
+  $auth_url = $client->createAuthUrl();
+  header('Location: ' . filter_var($auth_url, FILTER_SANITIZE_URL));
+}
+
+// User authorized the request and authorization code is returned to exchange access and
+// refresh tokens.
+if (isset($_GET['code']))
+{
+  // Check the state value
+  if (!isset($_GET['state']) || $_GET['state'] !== $_SESSION['state']) {
+    die('State mismatch. Possible CSRF attack.');
+  }
+
+  // Get access and refresh tokens (if access_type is offline)
+  $token = $client->fetchAccessTokenWithAuthCode($_GET['code']);
+
+  /** Save access and refresh token to the session variables.
+    * ACTION ITEM: In a production app, you likely want to save the
+    *              refresh token in a secure persistent storage instead. */
+  $_SESSION['access_token'] = $token;
+  $_SESSION['refresh_token'] = $client->getRefreshToken();
+  
+  // Space-separated string of granted scopes if it exists, otherwise null.
+  $granted_scopes = $client->getOAuth2Service()->getGrantedScope();
+
+  // Determine which scopes user granted and build a dictionary
+  $granted_scopes_dict = [
+    'Drive' => str_contains($granted_scopes, Google\Service\Drive::DRIVE_METADATA_READONLY),
+    'Calendar' => str_contains($granted_scopes, Google\Service\Calendar::CALENDAR_READONLY)
+  ];
+  $_SESSION['granted_scopes_dict'] = $granted_scopes_dict;
+  
+  $redirect_uri = 'http://' . $_SERVER['HTTP_HOST'] . '/';
+  header('Location: ' . filter_var($redirect_uri, FILTER_SANITIZE_URL));
+}
+
+// An error response e.g. error=access_denied
+if (isset($_GET['error']))
+{
+  echo "Error: ". $_GET['error'];
+}
+?>
+Redirect URI validation rules
+Google applies the following validation rules to redirect URIs in order to help developers keep their applications secure. Your redirect URIs must adhere to these rules. See RFC 3986 section 3 for the definition of domain, host, path, query, scheme and userinfo, used in these rules.
+
+Validation rules
+Схема	
+Redirect URIs must use the HTTPS scheme, not plain HTTP. Localhost URIs (including localhost IP address URIs) are exempt from this rule.
+
+Хозяин	
+Hosts cannot be raw IP addresses. Localhost IP addresses are exempted from this rule.
+
+Домен	
+Host TLDs ( Top Level Domains ) must belong to the public suffix list .
+Host domains cannot be “googleusercontent.com” .
+Redirect URIs cannot contain URL shortener domains (eg goo.gl ) unless the app owns the domain. Furthermore, if an app that owns a shortener domain chooses to redirect to that domain, that redirect URI must either contain “/google-callback/” in its path or end with “/google-callback” .
+Информация о пользователе	
+Redirect URIs cannot contain the userinfo subcomponent.
+
+Путь	
+Redirect URIs cannot contain a path traversal (also called directory backtracking), which is represented by an “/..” or “\..” or their URL encoding.
+
+Запрос	
+Redirect URIs cannot contain open redirects .
+
+Фрагмент	
+Redirect URIs cannot contain the fragment component.
+
+Персонажи	Redirect URIs cannot contain certain characters including:
+Wildcard characters ( '*' )
+Non-printable ASCII characters
+Invalid percent encodings (any percent encoding that does not follow URL-encoding form of a percent sign followed by two hexadecimal digits)
+Null characters (an encoded NULL character, eg, %00 , %C0%80 )
+Incremental authorization
+In the OAuth 2.0 protocol, your app requests authorization to access resources, which are identified by scopes. It is considered a best user-experience practice to request authorization for resources at the time you need them. To enable that practice, Google's authorization server supports incremental authorization. This feature lets you request scopes as they are needed and, if the user grants permission for the new scope, returns an authorization code that may be exchanged for a token containing all scopes the user has granted the project.
+
+For example, an app that lets people sample music tracks and create mixes might need very few resources at sign-in time, perhaps nothing more than the name of the person signing in. However, saving a completed mix would require access to their Google Drive. Most people would find it natural if they only were asked for access to their Google Drive at the time the app actually needed it.
+
+In this case, at sign-in time the app might request the openid and profile scopes to perform basic sign-in, and then later request the https://www.googleapis.com/auth/drive.file scope at the time of the first request to save a mix.
+
+To implement incremental authorization, you complete the normal flow for requesting an access token but make sure that the authorization request includes previously granted scopes. This approach allows your app to avoid having to manage multiple access tokens.
+
+The following rules apply to an access token obtained from an incremental authorization:
+
+The token can be used to access resources corresponding to any of the scopes rolled into the new, combined authorization.
+When you use the refresh token for the combined authorization to obtain an access token, the access token represents the combined authorization and can be used for any of the scope values included in the response.
+The combined authorization includes all scopes that the user granted to the API project even if the grants were requested from different clients. For example, if a user granted access to one scope using an application's desktop client and then granted another scope to the same application via a mobile client, the combined authorization would include both scopes.
+If you revoke a token that represents a combined authorization, access to all of that authorization's scopes on behalf of the associated user are revoked simultaneously.
+Caution: choosing to include granted scopes will automatically add scopes previously granted by the user to your authorization request. A warning or error page may be displayed if your app is not currently approved to request all scopes that may be returned in the response. See Unverified apps for more information.
+The language-specific code samples in Step 1: Set authorization Redirect to Google's OAuth 2.0 server all use incremental authorization. The following code samples also show the code that you need to add to use incremental authorization.
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+$client->setIncludeGrantedScopes(true);
+Refresh an access token (offline access)
+Access tokens periodically expire and become invalid credentials for a related API request. You can refresh an access token without prompting the user for permission (including when the user is not present) if you requested offline access to the scopes associated with the token.
+
+If you use a Google API Client Library, the client object refreshes the access token as needed as long as you configure that object for offline access.
+If you are not using a client library, you need to set the access_type HTTP query parameter to offline when redirecting the user to Google's OAuth 2.0 server . In that case, Google's authorization server returns a refresh token when you exchange an authorization code for an access token. Then, if the access token expires (or at any other time), you can use a refresh token to obtain a new access token.
+Requesting offline access is a requirement for any application that needs to access a Google API when the user is not present. For example, an app that performs backup services or executes actions at predetermined times needs to be able to refresh its access token when the user is not present. The default style of access is called online .
+
+Server-side web applications, installed applications, and devices all obtain refresh tokens during the authorization process. Refresh tokens are not typically used in client-side (JavaScript) web applications.
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+If your application needs offline access to a Google API, set the API client's access type to offline :
+
+$client->setAccessType("offline");
+After a user grants offline access to the requested scopes, you can continue to use the API client to access Google APIs on the user's behalf when the user is offline. The client object will refresh the access token as needed.
+
+Token revocation
+In some cases a user may wish to revoke access given to an application. A user can revoke access by visiting Account Settings . See the Remove site or app access section of the Third-party sites & apps with access to your account support document for more information.
+
+It is also possible for an application to programmatically revoke the access given to it. Programmatic revocation is important in instances where a user unsubscribes, removes an application, or the API resources required by an app have significantly changed. In other words, part of the removal process can include an API request to ensure the permissions previously granted to the application are removed.
+
+PHP
+Python
+Руби
+Node.js
+HTTP/REST
+To programmatically revoke a token, call revokeToken() :
+
+$client->revokeToken();
+Key Point: Revocation removes all OAuth 2.0 scopes previously granted to a project, invalidating any issued access or refresh tokens for all clients registered under that project.
+Note: Following a successful revocation response, it might take some time before the revocation has full effect.
+Time-based access
+Time-based access allows a user to grant your app access to their data for a limited duration to complete an action. Time-based access is available in select Google products during the consent flow, giving users the option to grant access for a limited period of time. An example is the Data Portability API which enables a one-time transfer of data.
+
+When a user grants your application time-based access, the refresh token will expire after the specified duration. Note that refresh tokens may be invalidated earlier under specific circumstances; see these cases for details. The refresh_token_expires_in field returned in the authorization code exchange response represents the time remaining until the refresh token expires in such cases.
+
+Implement Cross-Account Protection
+An additional step you should take to protect your users' accounts is implementing Cross-Account Protection by utilizing Google's Cross-Account Protection Service. This service lets you subscribe to security event notifications which provide information to your application about major changes to the user account. You can then use the information to take action depending on how you decide to respond to events.
+
+Some examples of the event types sent to your app by Google's Cross-Account Protection Service are:
+
+https://schemas.openid.net/secevent/risc/event-type/sessions-revoked
+https://schemas.openid.net/secevent/oauth/event-type/token-revoked
+https://schemas.openid.net/secevent/risc/event-type/account-disabled
+See the Protect user accounts with Cross-Account Protection page for more information on how to implement Cross Account Protection and for the full list of available events.
+
+Эта информация оказалась полезной?
+
+Отправить отзыв
+Если не указано иное, контент на этой странице предоставляется по лицензии Creative Commons "С указанием авторства 4.0", а примеры кода – по лицензии Apache 2.0. Подробнее об этом написано в правилах сайта. Java – это зарегистрированный товарный знак корпорации Oracle и ее аффилированных лиц.
+
+Последнее обновление: 2026-05-26 UTC.
+
+GitHubGitHub
+Раскошельтесь на наши образцы и попробуйте сами
+Stack OverflowStack Overflow
+Задайте вопрос под тегом google-oauth
+БлогБлог
+Последние новости в блоге Google Developers
+Информация о продукте
+Условия использования
+Политика в отношении пользовательских данных API
+Правила фирменного оформления
+Stack Overflow
+Google Идентификация
+Войти через Google
+Google OAuth 2.0 и OpenID Connect.
+Привязка аккаунта Google
+Разработка
+Android
+Chrome
+Firebase
+Google AI Studio
+Google Antigravity
+Google Cloud
+Google Play
+View all
+Google Developers
+Android
+Chrome
+Firebase
+Google Cloud Platform
+Google AI
+Все продукты
+Условия использования
+Конфиденциальность
+
+Language

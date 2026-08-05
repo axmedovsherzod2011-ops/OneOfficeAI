@@ -2036,11 +2036,14 @@ function YoutubeConnectorCard() {
 
   function handleConnect() {
     if (!config?.clientId || atLimit) return;
+    // Use the stable redirect URI from the server (based on PUBLIC_APP_URL)
+    // so that the user only needs to register one URL in Google Cloud Console.
+    const redirectUri = config.redirectUri || `${window.location.origin}/`;
     setConnecting(true);
     const state = randomToken(16);
     sessionStorage.setItem("yt_oauth_pending", "1");
     sessionStorage.setItem("yt_oauth_state", state);
-    const redirectUri = `${window.location.origin}/`;
+    sessionStorage.setItem("yt_oauth_redirect_uri", redirectUri);
     const authUrl =
       "https://accounts.google.com/o/oauth2/v2/auth?" +
       new URLSearchParams({
@@ -4806,7 +4809,11 @@ function AppShell() {
           },
           body: JSON.stringify({
             code,
-            redirectUri: `${window.location.origin}/`,
+            // Must exactly match the redirect_uri used when the auth URL was
+            // built — read it back from sessionStorage so it's consistent.
+            redirectUri:
+              sessionStorage.getItem("yt_oauth_redirect_uri") ||
+              `${window.location.origin}/`,
           }),
         });
         const body = await res.json().catch(() => null);
