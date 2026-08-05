@@ -978,11 +978,11 @@ router.post(
         price: product.sellPrice,
         category: product.category,
         status: "Published",
-        // We re-use the telegramMessageId column for the video ID numeric
-        // part; the platform flag lives in the status text for now.
-        // telegramChannelId is left null — this is a YouTube post.
+        // telegramChannelId and telegramMessageId are null — this is a YouTube post.
         telegramMessageId: null,
-      } as any);
+        platform: "youtube",
+        platformPostId: videoId,
+      });
 
       console.log(`[youtube] ✓ video yuklandi: ${videoUrl}`);
       res.json({ success: true, videoId, url: videoUrl });

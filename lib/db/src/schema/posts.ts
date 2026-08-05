@@ -23,6 +23,8 @@ export const postsTable = pgTable("posts", {
   category: text("category").notNull().default("Electronics"),
   status: text("status").notNull().default("Published"),
   telegramMessageId: integer("telegram_message_id"),
+  platform: text("platform").default("telegram").notNull(),
+  platformPostId: text("platform_post_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
