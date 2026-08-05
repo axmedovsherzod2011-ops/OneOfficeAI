@@ -842,6 +842,7 @@ router.post(
       tags,
       hashtags,
       isShort,
+      imageUrls: clientImageUrls,
     } = req.body as {
       accountId?: number;
       productId?: number;
@@ -850,6 +851,9 @@ router.post(
       tags?: string[];
       hashtags?: string[];
       isShort?: boolean;
+      // User-selected images from the Results screen; overrides product.images
+      // when provided. Allows the seller to curate which photos go into the video.
+      imageUrls?: string[];
     };
 
     if (!accountId || !productId || !title) {
@@ -890,11 +894,17 @@ router.post(
       return;
     }
 
-    const images = (product.images as string[]) || [];
+    // Prefer user-selected images from the Results screen; fall back to all
+    // product images when the client sends none.
+    const images: string[] =
+      clientImageUrls && clientImageUrls.length > 0
+        ? clientImageUrls
+        : (product.images as string[]) || [];
+
     if (images.length === 0) {
       res.status(400).json({
         error:
-          "Mahsulotda rasm yo'q. Avval Inventory'ga rasm qo'shing.",
+          "Rasm topilmadi. Inventory'ga rasm qo'shing yoki Results ekranida rasm tanlang.",
       });
       return;
     }

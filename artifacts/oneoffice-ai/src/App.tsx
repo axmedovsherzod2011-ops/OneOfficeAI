@@ -4020,7 +4020,7 @@ function YtMetadataGenerating({ product, form, onDone, onError }: any) {
 }
 
 // Step 2 — review / edit metadata and choose YouTube account
-function YtMetadataReview({ product, ytMetadata, onConfirm, onBack }: any) {
+function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack }: any) {
   const { user: firebaseUser } = useAuth();
   const [title, setTitle] = useState(ytMetadata?.title ?? "");
   const [description, setDescription] = useState(ytMetadata?.description ?? "");
@@ -4207,9 +4207,9 @@ function YtMetadataReview({ product, ytMetadata, onConfirm, onBack }: any) {
         </div>
       </Glass>
 
-      {metaError && (
+      {(metaError || uploadError) && (
         <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 text-rose-300 text-sm">
-          {metaError}
+          {metaError || uploadError}
         </div>
       )}
 
@@ -4239,7 +4239,7 @@ function YtMetadataReview({ product, ytMetadata, onConfirm, onBack }: any) {
 }
 
 // Step 3 — upload video, show progress
-function YtPublishing({ product, accountId, ytMetadata, onDone, onError }: any) {
+function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, onError }: any) {
   const { user: firebaseUser } = useAuth();
   const called = useRef(false);
   const mounted = useRef(true);
@@ -4253,6 +4253,12 @@ function YtPublishing({ product, accountId, ytMetadata, onDone, onError }: any) 
       try {
         const token = await firebaseUser?.getIdToken();
         if (mounted.current) setStage("uploading");
+
+        // Send the user-selected image URLs so the backend builds the
+        // slideshow from exactly those images (falls back to product.images
+        // when the array is empty).
+        const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
+
         const res = await fetch("/api/connectors/youtube/publish", {
           method: "POST",
           headers: {
@@ -4267,6 +4273,7 @@ function YtPublishing({ product, accountId, ytMetadata, onDone, onError }: any) 
             tags: ytMetadata?.tags,
             hashtags: ytMetadata?.hashtags,
             isShort: ytMetadata?.isShort,
+            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
           }),
         });
         const body = await res.json().catch(() => null);
@@ -5136,6 +5143,7 @@ function AppShell() {
               <YtMetadataReview
                 product={selectedProduct}
                 ytMetadata={ytMetadata}
+                uploadError={publishError}
                 onConfirm={handleYtPublish}
                 onBack={() => {
                   setPublishError("");
@@ -5148,6 +5156,7 @@ function AppShell() {
                 product={selectedProduct}
                 accountId={ytAccountId}
                 ytMetadata={ytMetadata}
+                selectedImages={selectedImages}
                 onDone={handleYtDone}
                 onError={handleYtPublishError}
               />
