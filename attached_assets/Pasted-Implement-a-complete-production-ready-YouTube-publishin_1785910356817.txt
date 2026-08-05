@@ -1,0 +1,63 @@
+Implement a complete production-ready YouTube publishing connector by extending the existing publishing architecture already used in OneOffice AI.
+
+Requirements:
+
+- Reuse the existing product publishing workflow instead of creating a separate one.
+- When a user clicks "Publish to YouTube", the system must use the selected product from the existing product database.
+- Do NOT ask the user to enter product information again.
+- Automatically load the product's stored data, including:
+  - Product name
+  - Product description
+  - Images
+  - Price
+  - Category
+  - Additional information
+  - Any AI-generated metadata already available.
+
+The AI must generate YouTube-specific content optimized for the YouTube algorithm.
+
+For every publish request generate:
+- SEO-optimized title
+- Long YouTube description
+- Strong opening hook
+- Search-friendly keywords
+- Relevant hashtags
+- Tags
+- Call-to-action
+- Natural language optimized for discoverability
+- Content suitable for either a normal video or a YouTube Short depending on the user's selection.
+
+Publishing flow:
+
+1. User selects an existing product.
+2. User chooses:
+   - Video
+   - Short
+3. AI generates YouTube-optimized metadata.
+4. User reviews and edits if desired.
+5. Publish using the connected YouTube account.
+6. Save publishing status.
+7. Save the returned YouTube video ID.
+8. Save publish date and time.
+9. Allow future analytics integration.
+
+The connector must support:
+
+- OAuth authentication (already configured)
+- Automatic access token refresh
+- Multiple users
+- Proper permission validation
+- Quota handling
+- Retry logic
+- Detailed error messages
+- Production-grade logging
+
+Do not use demo data or mock publishing.
+
+Reuse as much of the existing publishing architecture as possible instead of duplicating code.
+
+After implementation, explain:
+- What was implemented.
+- What YouTube permissions are being used.
+- How the publishing pipeline works.
+- Whether any manual configuration is still required.
