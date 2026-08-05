@@ -1,3 +1,4 @@
 - [OneOffice AI architecture](oneoffice-ai-arch.md) — full-stack SaaS: React+Vite frontend, Express API server, Postgres+Drizzle, OpenAI gpt-4o-mini, DuckDuckGo image search
 - [Enrich endpoint pattern](enrich-endpoint.md) — POST /api/enrich runs OpenAI + DDG image search in parallel; DDG needs 2-step VQD token fetch before image query
 - [OpenAPI codegen flow](codegen-flow.md) — edit lib/api-spec/openapi.yaml → run codegen → hooks land in lib/api-client-react, zod schemas in lib/api-zod; never edit generated files
+- [YouTube connector](youtube-connector.md) — ffmpeg slideshow → resumable YouTube upload; OAuth via GOOGLE_CLIENT_ID/SECRET; AI provider chain duplicated from enrich.ts

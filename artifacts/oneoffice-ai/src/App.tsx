@@ -68,6 +68,7 @@ import {
   Pencil,
   Instagram,
   Youtube,
+  RefreshCw,
 } from "lucide-react";
 
 import {
@@ -3349,6 +3350,7 @@ function Results({
   onPreview,
   onApprove,
   onReject,
+  onYtApprove,
 }: any) {
   const postText: string =
     enrichData?.postText ||
@@ -3704,8 +3706,17 @@ function Results({
           disabled={selectedChannelIds.length === 0}
           className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          <ThumbsUp className="h-4 w-4" /> Approve & Publish
+          <ThumbsUp className="h-4 w-4" /> Telegram'ga publish
         </button>
+        {onYtApprove && (
+          <button
+            data-testid="button-approve-youtube"
+            onClick={onYtApprove}
+            className="flex items-center gap-2 bg-gradient-to-r from-red-500 to-rose-500 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-red-900/30"
+          >
+            <Youtube className="h-4 w-4" /> YouTube'ga publish
+          </button>
+        )}
         <button
           data-testid="button-reject"
           onClick={onReject}
@@ -3948,6 +3959,378 @@ function SuccessScreen({ form, onDone }: any) {
           className="mt-7 w-full bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3 rounded-xl text-sm font-medium"
         >
           Back to Dashboard
+        </button>
+      </Glass>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// YOUTUBE PUBLISH FLOW
+// ---------------------------------------------------------------------------
+
+// Step 1 — call the backend to generate YouTube metadata
+function YtMetadataGenerating({ product, form, onDone, onError }: any) {
+  const { user: firebaseUser } = useAuth();
+  const called = useRef(false);
+
+  useEffect(() => {
+    if (called.current) return;
+    called.current = true;
+
+    async function run() {
+      try {
+        const token = await firebaseUser?.getIdToken();
+        const res = await fetch("/api/connectors/youtube/metadata", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            productId: product?.id,
+            isShort: false,
+          }),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(body?.error || "Metadata generatsiya qilishda xato.");
+        onDone(body);
+      } catch (err: any) {
+        onError(err?.message || "YouTube metadata tayyorlashda xato yuz berdi.");
+      }
+    }
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="p-6 md:p-10 max-w-md">
+      <Glass className="p-10 text-center">
+        <div className="relative h-16 w-16 mx-auto mb-5">
+          <div className="absolute inset-0 rounded-full bg-red-500 opacity-30 animate-ping" />
+          <div className="relative h-16 w-16 rounded-full bg-red-500 flex items-center justify-center">
+            <Youtube className="h-7 w-7 text-white" />
+          </div>
+        </div>
+        <h3 className="text-white font-semibold text-lg">YouTube metadata tayyorlanmoqda…</h3>
+        <p className="text-slate-400 text-sm mt-1">AI sarlavha, tavsif va teglar yozmoqda.</p>
+      </Glass>
+    </div>
+  );
+}
+
+// Step 2 — review / edit metadata and choose YouTube account
+function YtMetadataReview({ product, ytMetadata, onConfirm, onBack }: any) {
+  const { user: firebaseUser } = useAuth();
+  const [title, setTitle] = useState(ytMetadata?.title ?? "");
+  const [description, setDescription] = useState(ytMetadata?.description ?? "");
+  const [tagsStr, setTagsStr] = useState((ytMetadata?.tags ?? []).join(", "));
+  const [isShort, setIsShort] = useState(ytMetadata?.isShort ?? false);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [metaError, setMetaError] = useState("");
+  const [regenerating, setRegenerating] = useState(false);
+
+  async function authedFetch(path: string, init: RequestInit = {}) {
+    const token = await firebaseUser?.getIdToken();
+    const res = await fetch(path, {
+      ...init,
+      headers: {
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => null);
+      throw new Error(b?.error ?? "So'rov muvaffaqiyatsiz.");
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  const { data: accounts, isLoading: accountsLoading } = useQuery({
+    queryKey: ["youtube-accounts"],
+    queryFn: () => authedFetch("/api/connectors/youtube"),
+    enabled: !!firebaseUser,
+  });
+  const list: any[] = accounts ?? [];
+
+  // Auto-select first account
+  useEffect(() => {
+    if (list.length > 0 && !selectedAccountId) setSelectedAccountId(list[0].id);
+  }, [list, selectedAccountId]);
+
+  async function handleRegenerate() {
+    setRegenerating(true);
+    setMetaError("");
+    try {
+      const data = await authedFetch("/api/connectors/youtube/metadata", {
+        method: "POST",
+        body: JSON.stringify({ productId: product?.id, isShort }),
+      });
+      setTitle(data.title ?? "");
+      setDescription(data.description ?? "");
+      setTagsStr((data.tags ?? []).join(", "));
+    } catch (err: any) {
+      setMetaError(err?.message ?? "Metadata regeneratsiya muvaffaqiyatsiz.");
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  function handlePublish() {
+    if (!selectedAccountId) {
+      setMetaError("Iltimos, YouTube kanalini tanlang.");
+      return;
+    }
+    if (!title.trim()) {
+      setMetaError("Sarlavha bo'sh bo'lishi mumkin emas.");
+      return;
+    }
+    setSubmitting(true);
+    onConfirm(selectedAccountId, {
+      title: title.trim(),
+      description,
+      tags: tagsStr.split(",").map((t: string) => t.trim()).filter(Boolean),
+      hashtags: ytMetadata?.hashtags ?? [],
+      isShort,
+    });
+  }
+
+  return (
+    <div className="p-6 md:p-10 max-w-3xl space-y-6">
+      <div className="flex items-center gap-2 text-red-400 text-sm font-medium">
+        <Youtube className="h-4 w-4" /> YouTube metadata
+      </div>
+
+      {/* Account picker */}
+      <Glass className="p-5 space-y-3">
+        <h3 className="text-white font-semibold text-sm">YouTube kanalini tanlang</h3>
+        {accountsLoading ? (
+          <div className="flex items-center gap-2 text-slate-400 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" /> Yuklanmoqda…
+          </div>
+        ) : list.length === 0 ? (
+          <p className="text-amber-300 text-sm bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3">
+            YouTube kanal ulanmagan. Connectors bo'limidan kanal ulang.
+          </p>
+        ) : (
+          <div className="grid gap-2">
+            {list.map((a: any) => {
+              const checked = selectedAccountId === a.id;
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => setSelectedAccountId(a.id)}
+                  aria-pressed={checked}
+                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition ${
+                    checked ? "border-red-400 bg-red-500/10" : "border-white/10 bg-white/5 hover:border-white/20"
+                  }`}
+                >
+                  {a.thumbnailUrl ? (
+                    <img src={a.thumbnailUrl} alt={a.title} className="h-8 w-8 rounded-full object-cover shrink-0" />
+                  ) : (
+                    <div className="h-8 w-8 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center shrink-0">
+                      <Youtube className="h-4 w-4 text-red-400" />
+                    </div>
+                  )}
+                  <span className="text-sm text-white truncate min-w-0">
+                    {a.title || "YouTube kanal"}
+                  </span>
+                  <span className={`ml-auto h-5 w-5 rounded-md border flex items-center justify-center shrink-0 transition ${checked ? "bg-red-500 border-red-500" : "border-white/20"}`}>
+                    {checked && <Check className="h-3.5 w-3.5 text-white" />}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Glass>
+
+      {/* Format toggle */}
+      <Glass className="p-5 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-white text-sm font-medium">YouTube Shorts formati</p>
+          <p className="text-slate-400 text-xs mt-0.5">Vertikal video (9:16), ≤60 soniya</p>
+        </div>
+        <button
+          onClick={() => setIsShort((v: boolean) => !v)}
+          className={`h-6 w-11 rounded-full transition relative shrink-0 ${isShort ? "bg-red-500" : "bg-white/10"}`}
+        >
+          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${isShort ? "left-5" : "left-0.5"}`} />
+        </button>
+      </Glass>
+
+      {/* Metadata fields */}
+      <Glass className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-white font-semibold text-sm">Sarlavha va tavsif</h3>
+          <button
+            onClick={handleRegenerate}
+            disabled={regenerating}
+            className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 disabled:opacity-40 transition"
+          >
+            {regenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Qayta yaratish
+          </button>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-slate-400 text-xs">Sarlavha (≤100 belgi)</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value.slice(0, 100))}
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-400 transition"
+            placeholder="Video sarlavhasi…"
+          />
+          <p className="text-slate-600 text-xs text-right">{title.length}/100</p>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-slate-400 text-xs">Tavsif</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={6}
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-400 transition resize-none"
+            placeholder="Video tavsifi…"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-slate-400 text-xs">Teglar (vergul bilan ajrating)</label>
+          <input
+            value={tagsStr}
+            onChange={(e) => setTagsStr(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-violet-400 transition"
+            placeholder="mahsulot, elektronika, aksiya…"
+          />
+        </div>
+      </Glass>
+
+      {metaError && (
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 text-rose-300 text-sm">
+          {metaError}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 bg-white/5 border border-white/10 text-white px-5 py-3 rounded-xl text-sm font-medium hover:border-white/20 transition"
+        >
+          <ArrowLeft className="h-4 w-4" /> Ortga
+        </button>
+        <button
+          data-testid="button-yt-publish"
+          onClick={handlePublish}
+          disabled={submitting || list.length === 0}
+          className="flex items-center gap-2 bg-gradient-to-r from-red-500 to-rose-500 text-white px-6 py-3 rounded-xl text-sm font-medium shadow-lg shadow-red-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {submitting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Youtube className="h-4 w-4" />
+          )}
+          YouTube'ga yuklash
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Step 3 — upload video, show progress
+function YtPublishing({ product, accountId, ytMetadata, onDone, onError }: any) {
+  const { user: firebaseUser } = useAuth();
+  const called = useRef(false);
+  const mounted = useRef(true);
+  const [stage, setStage] = useState<"building" | "uploading">("building");
+
+  useEffect(() => {
+    if (called.current) return;
+    called.current = true;
+
+    async function run() {
+      try {
+        const token = await firebaseUser?.getIdToken();
+        if (mounted.current) setStage("uploading");
+        const res = await fetch("/api/connectors/youtube/publish", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            accountId,
+            productId: product?.id,
+            title: ytMetadata?.title,
+            description: ytMetadata?.description,
+            tags: ytMetadata?.tags,
+            hashtags: ytMetadata?.hashtags,
+            isShort: ytMetadata?.isShort,
+          }),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(body?.error || "YouTube'ga yuklashda xato.");
+        if (mounted.current) onDone(body?.url ?? "");
+      } catch (err: any) {
+        if (mounted.current) onError(err?.message || "YouTube publish muvaffaqiyatsiz.");
+      }
+    }
+    run();
+    return () => { mounted.current = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="p-6 md:p-10 max-w-md">
+      <Glass className="p-10 text-center">
+        <div className="relative h-16 w-16 mx-auto mb-5">
+          <div className="absolute inset-0 rounded-full bg-red-500 opacity-30 animate-ping" />
+          <div className="relative h-16 w-16 rounded-full bg-red-500 flex items-center justify-center">
+            <Youtube className="h-7 w-7 text-white" />
+          </div>
+        </div>
+        <h3 className="text-white font-semibold text-lg">
+          {stage === "building" ? "Video tayyorlanmoqda…" : "YouTube'ga yuklanmoqda…"}
+        </h3>
+        <p className="text-slate-400 text-sm mt-1">
+          {stage === "building"
+            ? "Rasmlardan slideshow video yaratilmoqda."
+            : "Video YouTube'ga yuklanmoqda. Bu bir necha daqiqa olishi mumkin."}
+        </p>
+      </Glass>
+    </div>
+  );
+}
+
+// Step 4 — success
+function YtSuccessScreen({ videoUrl, onDone }: any) {
+  return (
+    <div className="p-6 md:p-10 max-w-md">
+      <Glass className="p-10 text-center">
+        <div className="h-16 w-16 rounded-full bg-red-500 flex items-center justify-center mx-auto mb-5">
+          <Check className="h-8 w-8 text-white" />
+        </div>
+        <h3 className="text-white font-semibold text-xl">YouTube'ga muvaffaqiyatli yuklandi!</h3>
+        <p className="text-slate-400 text-sm mt-2">
+          Videongiz YouTube'da publish qilindi.
+        </p>
+        {videoUrl && (
+          <a
+            href={videoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-5 flex items-center justify-center gap-2 w-full bg-red-500/10 border border-red-500/30 text-red-400 py-3 rounded-xl text-sm font-medium hover:bg-red-500/15 transition"
+          >
+            <Youtube className="h-4 w-4" /> YouTube'da ko'rish
+          </a>
+        )}
+        <button
+          data-testid="button-yt-back-to-dashboard"
+          onClick={onDone}
+          className="mt-3 w-full bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3 rounded-xl text-sm font-medium"
+        >
+          Dashboard'ga qaytish
         </button>
       </Glass>
     </div>
@@ -4223,6 +4606,10 @@ function AppShell() {
   const [showPreview, setShowPreview] = useState(false);
   const [publishError, setPublishError] = useState("");
   const [generateError, setGenerateError] = useState("");
+  // YouTube publishing state
+  const [ytMetadata, setYtMetadata] = useState<any>(null);
+  const [ytAccountId, setYtAccountId] = useState<number | null>(null);
+  const [ytVideoUrl, setYtVideoUrl] = useState<string>("");
 
   // Instagram OAuth redirects the browser back to our own root URL with a
   // `?code=` (or `?error=`) query string — there's no separate callback
@@ -4470,6 +4857,9 @@ function AppShell() {
     setShowPreview(false);
     setPublishError("");
     setGenerateError("");
+    setYtMetadata(null);
+    setYtAccountId(null);
+    setYtVideoUrl("");
   }
 
   function pickProductForPost(p: ProductItem) {
@@ -4520,6 +4910,42 @@ function AppShell() {
   function handlePublishError(message: string) {
     setPublishError(message);
     setFlow("results");
+  }
+
+  // YouTube flow handlers
+  function handleYtApprove() {
+    if (!selectedProduct?.id) {
+      setPublishError("YouTube'ga publish qilish uchun inventory'dan mahsulot tanlang.");
+      return;
+    }
+    setPublishError("");
+    setFlow("yt-metadata");
+  }
+
+  function handleYtMetadataDone(data: any) {
+    setYtMetadata(data);
+    setFlow("yt-review");
+  }
+
+  function handleYtMetadataError(msg: string) {
+    setPublishError(msg);
+    setFlow("results");
+  }
+
+  function handleYtPublish(accountId: number, metadata: any) {
+    setYtAccountId(accountId);
+    setYtMetadata(metadata);
+    setFlow("yt-publishing");
+  }
+
+  function handleYtDone(url: string) {
+    setYtVideoUrl(url);
+    setFlow("yt-success");
+  }
+
+  function handleYtPublishError(msg: string) {
+    setPublishError(msg);
+    setFlow("yt-review");
   }
 
   function handleLogout() {
@@ -4675,6 +5101,7 @@ function AppShell() {
                 onPreview={() => setShowPreview(true)}
                 onApprove={handleApprove}
                 onReject={resetCreate}
+                onYtApprove={selectedProduct?.id ? handleYtApprove : undefined}
               />
             )}
             {flow === "publishing" && (
@@ -4691,6 +5118,43 @@ function AppShell() {
             {flow === "success" && (
               <SuccessScreen
                 form={form}
+                onDone={() => {
+                  setNavView("dashboard");
+                  resetCreate();
+                }}
+              />
+            )}
+            {flow === "yt-metadata" && (
+              <YtMetadataGenerating
+                product={selectedProduct}
+                form={form}
+                onDone={handleYtMetadataDone}
+                onError={handleYtMetadataError}
+              />
+            )}
+            {flow === "yt-review" && (
+              <YtMetadataReview
+                product={selectedProduct}
+                ytMetadata={ytMetadata}
+                onConfirm={handleYtPublish}
+                onBack={() => {
+                  setPublishError("");
+                  setFlow("results");
+                }}
+              />
+            )}
+            {flow === "yt-publishing" && (
+              <YtPublishing
+                product={selectedProduct}
+                accountId={ytAccountId}
+                ytMetadata={ytMetadata}
+                onDone={handleYtDone}
+                onError={handleYtPublishError}
+              />
+            )}
+            {flow === "yt-success" && (
+              <YtSuccessScreen
+                videoUrl={ytVideoUrl}
                 onDone={() => {
                   setNavView("dashboard");
                   resetCreate();

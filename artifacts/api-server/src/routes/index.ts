@@ -9,6 +9,7 @@ import storeRouter from "./store";
 import publishRouter from "./publish";
 import enrichRouter from "./enrich";
 import productsRouter from "./products";
+import youtubeRouter from "./youtube";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(storeRouter);
 router.use(publishRouter);
 router.use(enrichRouter);
 router.use(productsRouter);
+router.use(youtubeRouter);
 
 export default router;

@@ -3,6 +3,7 @@ export * from "./telegramChannels";
 export * from "./telegramLinkTokens";
 export * from "./instagramAccounts";
 export * from "./vkAccounts";
+export * from "./youtubeAccounts";
 export * from "./posts";
 export * from "./products";
 export * from "./channelStatSnapshots";
