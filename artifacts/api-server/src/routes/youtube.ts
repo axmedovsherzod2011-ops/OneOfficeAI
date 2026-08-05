@@ -508,7 +508,7 @@ async function uploadToYouTube(opts: {
 // GET /connectors/youtube/config
 // ---------------------------------------------------------------------------
 router.get("/connectors/youtube/config", (_req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID ?? "";
+    const clientId = process.env.GOOGLE_CLIENT_ID;
   const configured = Boolean(clientId && process.env.GOOGLE_CLIENT_SECRET);
   res.json({
     clientId,
@@ -612,7 +612,7 @@ router.post(
       return;
     }
 
-    const accessToken = tokenData.access_token;
+      const accessToken = await ensureFreshToken(account);
     const refreshToken = tokenData.refresh_token ?? null;
     const tokenExpiresAt = new Date(
       Date.now() + (tokenData.expires_in ?? 3600) * 1000,
@@ -673,13 +673,16 @@ router.post(
       tokenExpiresAt,
     };
 
-    const [account] = already
-      ? await db
-          .update(youtubeAccountsTable)
-          .set(values)
-          .where(eq(youtubeAccountsTable.id, already.id))
-          .returning()
-      : await db.insert(youtubeAccountsTable).values(values).returning();
+    const [account] = await db
+      .select()
+      .from(youtubeAccountsTable)
+      .where(
+        and(
+          eq(youtubeAccountsTable.id, accountId),
+          eq(youtubeAccountsTable.userId, userId),
+        ),
+      )
+      .limit(1);
 
     res.json(toAccountResponse(account));
   }),
@@ -919,25 +922,11 @@ router.post(
 
       // Download images
       const imagePaths: string[] = [];
-      for (let i = 0; i < Math.min(images.length, 8); i++) {
+
+      const imageTotal = Math.min(images.length, 8);
+      for (let i = 0; i < imageTotal; i++) {
         const dest = join(tmpDir, `img${i}.jpg`);
         const ok = await downloadImage(images[i], dest);
-        if (ok) imagePaths.push(dest);
-      }
-
-      if (imagePaths.length === 0) {
-        res.status(400).json({
-          error:
-            "Rasmlarni yuklab bo'lmadi. Mahsulot rasmlarini tekshiring.",
-        });
-        return;
-      }
-
-      // Build the slideshow video
-      console.log(`[youtube] ffmpeg slideshow: ${imagePaths.length} rasm → ${videoPath}`);
-      await buildSlideshowVideo(imagePaths, videoPath, isShort ?? false);
-
-      // Get file size for the resumable upload
       const { statSync } = await import("fs");
       const { size: fileSize } = statSync(videoPath);
 
