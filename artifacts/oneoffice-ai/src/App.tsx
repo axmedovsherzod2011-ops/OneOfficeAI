@@ -105,6 +105,7 @@ import {
   CartesianGrid,
   Tooltip as RechartsTooltip,
 } from "recharts";
+import { apiUrl } from "./lib/api-url";
 
 const queryClient = new QueryClient();
 
@@ -244,7 +245,7 @@ function mapFirebaseError(err: any): string {
 // (already-generated images) since those need no proxying.
 function proxyImage(url: string): string {
   if (!url || url.startsWith("data:")) return url;
-  return `/api/images/proxy?url=${encodeURIComponent(url)}`;
+  return apiUrl(`/api/images/proxy?url=${encodeURIComponent(url)}`);
 }
 
 // Reads an uploaded photo, downsizes it (long edge capped at 1600px) and
@@ -1815,7 +1816,7 @@ function VkConnectorCard() {
 
   const { data: config } = useQuery({
     queryKey: ["vk-config"],
-    queryFn: () => authedFetch("/api/connectors/vk/config"),
+    queryFn: () => authedFetch(apiUrl("/api/connectors/vk/config")),
     enabled: !!firebaseUser,
   });
 
@@ -1824,7 +1825,7 @@ function VkConnectorCard() {
     isLoading,
   } = useQuery({
     queryKey: ["vk-accounts"],
-    queryFn: () => authedFetch("/api/connectors/vk"),
+    queryFn: () => authedFetch(apiUrl("/api/connectors/vk")),
     enabled: !!firebaseUser,
   });
 
@@ -1881,7 +1882,7 @@ function VkConnectorCard() {
   async function handleDisconnect(id: number) {
     setRemovingId(id);
     try {
-      await authedFetch(`/api/connectors/vk/${id}`, { method: "DELETE" });
+      await authedFetch(apiUrl(`/api/connectors/vk/${id}`), { method: "DELETE" });
       queryClient.invalidateQueries({ queryKey: ["vk-accounts"] });
     } finally {
       setRemovingId(null);
@@ -2010,7 +2011,7 @@ function YoutubeConnectorCard() {
 
   const { data: config } = useQuery({
     queryKey: ["youtube-config"],
-    queryFn: () => authedFetch("/api/connectors/youtube/config"),
+    queryFn: () => authedFetch(apiUrl("/api/connectors/youtube/config")),
     enabled: !!firebaseUser,
   });
 
@@ -2019,7 +2020,7 @@ function YoutubeConnectorCard() {
     isLoading,
   } = useQuery({
     queryKey: ["youtube-accounts"],
-    queryFn: () => authedFetch("/api/connectors/youtube"),
+    queryFn: () => authedFetch(apiUrl("/api/connectors/youtube")),
     enabled: !!firebaseUser,
   });
 
@@ -2064,7 +2065,7 @@ function YoutubeConnectorCard() {
   async function handleDisconnect(id: number) {
     setRemovingId(id);
     try {
-      await authedFetch(`/api/connectors/youtube/${id}`, { method: "DELETE" });
+      await authedFetch(apiUrl(`/api/connectors/youtube/${id}`), { method: "DELETE" });
       queryClient.invalidateQueries({ queryKey: ["youtube-accounts"] });
     } finally {
       setRemovingId(null);
@@ -2176,7 +2177,7 @@ function StoreConnectorCard() {
     queryKey: ["store-config"],
     queryFn: async () => {
       const token = await firebaseUser?.getIdToken();
-      const res = await fetch("/api/connectors/store/config", {
+      const res = await fetch(apiUrl("/api/connectors/store/config"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load store config");
@@ -3984,7 +3985,7 @@ function YtMetadataGenerating({ product, form, onDone, onError }: any) {
     async function run() {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/youtube/metadata", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/metadata"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4052,7 +4053,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
 
   const { data: accounts, isLoading: accountsLoading } = useQuery({
     queryKey: ["youtube-accounts"],
-    queryFn: () => authedFetch("/api/connectors/youtube"),
+    queryFn: () => authedFetch(apiUrl("/api/connectors/youtube")),
     enabled: !!firebaseUser,
   });
   const list: any[] = accounts ?? [];
@@ -4066,7 +4067,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
     setRegenerating(true);
     setMetaError("");
     try {
-      const data = await authedFetch("/api/connectors/youtube/metadata", {
+      const data = await authedFetch(apiUrl("/api/connectors/youtube/metadata"), {
         method: "POST",
         body: JSON.stringify({ productId: product?.id, isShort }),
       });
@@ -4262,7 +4263,7 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
         // when the array is empty).
         const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
 
-        const res = await fetch("/api/connectors/youtube/publish", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4567,7 +4568,7 @@ function AppShell() {
       // Force-refresh the token so an expired cached token never silently
       // becomes a 401 (which would show the wrong "server error" screen).
       const token = await firebaseUser?.getIdToken(true);
-      const res = await fetch("/api/me", {
+      const res = await fetch(apiUrl("/api/me"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       // 404 → profile doesn't exist yet (new user, onboarding needed)
@@ -4730,7 +4731,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/vk/exchange", {
+        const res = await fetch(apiUrl("/api/connectors/vk/exchange"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4801,7 +4802,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/youtube/exchange", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/exchange"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -5269,7 +5270,7 @@ function StorefrontPage({ slug }: { slug: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
@@ -5504,7 +5505,7 @@ function ProductDetailPage({
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
