@@ -1,0 +1,187 @@
+From 7b23fdd795793642f0255e64525d54458ac2f7f4 Mon Sep 17 00:00:00 2001
+From: "Claude (sandbox)" <noreply@anthropic.com>
+Date: Sat, 15 Aug 2026 17:05:57 +0000
+Subject: [PATCH] fix(frontend): route API calls through VITE_API_BASE_URL for
+ split-origin deploy
+
+The frontend (Cloudflare Pages) and backend (Render) are deployed to
+different origins in production. Raw fetch("/api/...") calls and the
+generated API client both used relative paths, which resolved against
+the frontend's own origin instead of the backend, causing profile
+loading and other API calls to fail with 'Profilni yuklab bo'lmadi'.
+
+- Add apiUrl(path) helper (src/lib/api-url.ts) that prefixes relative
+  paths with VITE_API_BASE_URL when set, or leaves them unchanged when
+  empty/unset (preserves same-origin local dev behavior).
+- Wire all 8 raw fetch("/api/...") call sites in App.tsx through apiUrl().
+- Initialize the generated @workspace/api-client-react client's base URL
+  via setBaseUrl() at startup (main.tsx), using the same env var.
+- Document VITE_API_BASE_URL in .env.example.
+
+No backend, CORS, Firebase, database, or Telegram changes.
+---
+ .env.example                              |  7 ++++++
+ artifacts/oneoffice-ai/src/App.tsx        | 17 +++++++-------
+ artifacts/oneoffice-ai/src/lib/api-url.ts | 28 +++++++++++++++++++++++
+ artifacts/oneoffice-ai/src/main.tsx       |  7 ++++++
+ 4 files changed, 51 insertions(+), 8 deletions(-)
+ create mode 100644 artifacts/oneoffice-ai/src/lib/api-url.ts
+
+diff --git a/.env.example b/.env.example
+index 6c71c91..eb87fc5 100644
+--- a/.env.example
++++ b/.env.example
+@@ -7,6 +7,13 @@
+ # process.env automatically; the app reads it the same way either way.
+ DATABASE_URL=postgresql://<user>:<password>@<your-project>.neon.tech/<database>?sslmode=require
+ 
++# Frontend (Vite) build-time var — only needed when the frontend and
++# backend are deployed to different origins (e.g. frontend on Cloudflare
++# Pages, backend on Render). Points the frontend's API calls at the
++# backend's origin. Leave empty for local dev / same-origin deployments,
++# where relative /api/... requests already work.
++VITE_API_BASE_URL=https://oneofficeai-1.onrender.com
++
+ # VK (VKontakte) OAuth app credentials — optional. Without VK_APP_ID, the
+ # VK connector card just shows "not configured" instead of erroring; the
+ # rest of the app works fine either way.
+diff --git a/artifacts/oneoffice-ai/src/App.tsx b/artifacts/oneoffice-ai/src/App.tsx
+index 07d0d7e..adc4b41 100644
+--- a/artifacts/oneoffice-ai/src/App.tsx
++++ b/artifacts/oneoffice-ai/src/App.tsx
+@@ -7,6 +7,7 @@ import {
+ } from "@tanstack/react-query";
+ import { Switch, Route, useLocation, Router as WouterRouter } from "wouter";
+ import { AuthProvider, useAuth } from "@/lib/auth-context";
++import { apiUrl } from "@/lib/api-url";
+ import {
+   signInWithEmail,
+   signUpWithEmail,
+@@ -2176,7 +2177,7 @@ function StoreConnectorCard() {
+     queryKey: ["store-config"],
+     queryFn: async () => {
+       const token = await firebaseUser?.getIdToken();
+-      const res = await fetch("/api/connectors/store/config", {
++      const res = await fetch(apiUrl("/api/connectors/store/config"), {
+         headers: token ? { Authorization: `Bearer ${token}` } : {},
+       });
+       if (!res.ok) throw new Error("Failed to load store config");
+@@ -3984,7 +3985,7 @@ function YtMetadataGenerating({ product, form, onDone, onError }: any) {
+     async function run() {
+       try {
+         const token = await firebaseUser?.getIdToken();
+-        const res = await fetch("/api/connectors/youtube/metadata", {
++        const res = await fetch(apiUrl("/api/connectors/youtube/metadata"), {
+           method: "POST",
+           headers: {
+             "Content-Type": "application/json",
+@@ -4262,7 +4263,7 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone,
+         // when the array is empty).
+         const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
+ 
+-        const res = await fetch("/api/connectors/youtube/publish", {
++        const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {
+           method: "POST",
+           headers: {
+             "Content-Type": "application/json",
+@@ -4567,7 +4568,7 @@ function AppShell() {
+       // Force-refresh the token so an expired cached token never silently
+       // becomes a 401 (which would show the wrong "server error" screen).
+       const token = await firebaseUser?.getIdToken(true);
+-      const res = await fetch("/api/me", {
++      const res = await fetch(apiUrl("/api/me"), {
+         headers: token ? { Authorization: `Bearer ${token}` } : {},
+       });
+       // 404 → profile doesn't exist yet (new user, onboarding needed)
+@@ -4730,7 +4731,7 @@ function AppShell() {
+     (async () => {
+       try {
+         const token = await firebaseUser?.getIdToken();
+-        const res = await fetch("/api/connectors/vk/exchange", {
++        const res = await fetch(apiUrl("/api/connectors/vk/exchange"), {
+           method: "POST",
+           headers: {
+             "Content-Type": "application/json",
+@@ -4801,7 +4802,7 @@ function AppShell() {
+     (async () => {
+       try {
+         const token = await firebaseUser?.getIdToken();
+-        const res = await fetch("/api/connectors/youtube/exchange", {
++        const res = await fetch(apiUrl("/api/connectors/youtube/exchange"), {
+           method: "POST",
+           headers: {
+             "Content-Type": "application/json",
+@@ -5269,7 +5270,7 @@ function StorefrontPage({ slug }: { slug: string }) {
+   const { data, isLoading, error } = useQuery({
+     queryKey: ["storefront", slug],
+     queryFn: async () => {
+-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
++      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
+       if (!res.ok) {
+         const body = await res.json().catch(() => null);
+         throw new Error(body?.error || "Do'kon topilmadi.");
+@@ -5504,7 +5505,7 @@ function ProductDetailPage({
+   const { data, isLoading, error } = useQuery({
+     queryKey: ["storefront", slug],
+     queryFn: async () => {
+-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
++      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
+       if (!res.ok) {
+         const body = await res.json().catch(() => null);
+         throw new Error(body?.error || "Do'kon topilmadi.");
+diff --git a/artifacts/oneoffice-ai/src/lib/api-url.ts b/artifacts/oneoffice-ai/src/lib/api-url.ts
+new file mode 100644
+index 0000000..a980dd4
+--- /dev/null
++++ b/artifacts/oneoffice-ai/src/lib/api-url.ts
+@@ -0,0 +1,28 @@
++// ---------------------------------------------------------------------------
++// Centralized backend API base URL.
++//
++// In production the frontend (Cloudflare Pages) and backend (Render) are
++// served from different origins, so a relative fetch("/api/...") resolves
++// against the frontend's own origin and never reaches the backend. Set
++// VITE_API_BASE_URL (a Vite build-time env var) to the backend's origin,
++// e.g. "https://oneofficeai-1.onrender.com", to fix that.
++//
++// In local development VITE_API_BASE_URL is typically unset, in which case
++// apiUrl() returns the path unchanged — relative requests keep working
++// exactly as before (same-origin dev server / proxy).
++// ---------------------------------------------------------------------------
++
++const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "");
++
++/**
++ * Resolves a relative backend path (e.g. "/api/me") against
++ * VITE_API_BASE_URL, producing an absolute URL in production
++ * (e.g. "https://oneofficeai-1.onrender.com/api/me") or leaving it
++ * unchanged when VITE_API_BASE_URL is empty/unset.
++ */
++export function apiUrl(path: string): string {
++  if (!API_BASE_URL) return path;
++  return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
++}
++
++export { API_BASE_URL };
+diff --git a/artifacts/oneoffice-ai/src/main.tsx b/artifacts/oneoffice-ai/src/main.tsx
+index 8215edf..5e0585e 100644
+--- a/artifacts/oneoffice-ai/src/main.tsx
++++ b/artifacts/oneoffice-ai/src/main.tsx
+@@ -1,7 +1,14 @@
+ import { createRoot } from 'react-dom/client';
++import { setBaseUrl } from '@workspace/api-client-react';
+ 
+ import App from './App';
+ 
+ import './index.css';
+ 
++// Split-origin production deployment (frontend on Cloudflare Pages, backend
++// on Render): point the generated API client at the backend's origin via
++// VITE_API_BASE_URL. Unset/empty in local dev, so setBaseUrl(null) leaves
++// relative "/api/..." requests unchanged — same as before.
++setBaseUrl(import.meta.env.VITE_API_BASE_URL || null);
++
+ createRoot(document.getElementById('root')!).render(<App />);
+-- 
+2.43.0
+
