@@ -140,23 +140,18 @@ export async function consumeLinkToken(token: string): Promise<ConsumeLinkTokenR
 
 export async function ensureTelegramWebhook(): Promise<void> {
   // Only the deployed (production) server should tell Telegram where to
-  // send updates. `REPLIT_DEPLOYMENT` is set to "1" by Replit only inside a
-  // deployed autoscale/reserved-VM instance — it's absent in the workspace
-  // dev preview. Without this guard, whichever environment (re)started most
-  // recently would silently steal the webhook from the other one.
+  // send updates. There's no Replit-specific "are we deployed?" flag to
+  // check anymore now that this runs on Render — instead, production-ness
+  // is inferred from the presence of the production-only config below
+  // (PUBLIC_APP_URL, TELEGRAM_WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN). A dev
+  // environment that doesn't set those simply skips registration the same
+  // way it always has, without needing a platform-specific env var.
   //
   // Note: with dual-database write mirroring now in place (see
   // @workspace/db), a stray webhook pointed at dev would no longer cause
   // "link not found" errors — link tokens exist in both databases either
   // way. This guard is kept regardless, since dev is not meant to be a
   // public-facing endpoint receiving live user traffic.
-  if (!process.env.REPLIT_DEPLOYMENT) {
-    console.log(
-      "[telegram] dev muhitida ishlayapmiz — webhook faqat production deploy'da ro'yxatdan o'tadi, shuning uchun bu yerda o'tkazib yuborilyapti.",
-    );
-    return;
-  }
-
   if (!isTelegramConfigured()) {
     console.log(
       "[telegram] TELEGRAM_BOT_TOKEN not set — skipping webhook setup. Telegram connect/publish will be unavailable until it's configured.",
