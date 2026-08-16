@@ -106,6 +106,7 @@ import {
   Tooltip as RechartsTooltip,
 } from "recharts";
 import { apiUrl } from "./lib/api-url";
+import { Logo } from "./components/Logo";
 
 const queryClient = new QueryClient();
 
@@ -618,11 +619,7 @@ function Landing({
 
       <nav className="relative z-10 flex items-center justify-between px-8 py-6 max-w-7xl mx-auto w-full">
         <div className="flex items-center gap-2">
-          <img
-            src="/brand-logo.png"
-            alt="OneOffice AI"
-            className="h-9 w-9 rounded-xl object-cover shrink-0"
-          />
+          <Logo className="h-9 w-9 shrink-0" />
           <span className="text-white font-semibold text-lg tracking-tight">
             OneOffice AI
           </span>
@@ -720,11 +717,7 @@ function WelcomeScreen({
       <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 left-1/3" />
 
       <div className="relative z-10 flex flex-col items-center text-center max-w-md w-full">
-        <img
-          src="/brand-logo.png"
-          alt="OneOffice AI"
-          className="h-16 w-16 rounded-2xl object-cover shrink-0 mb-6 shadow-lg shadow-violet-900/40"
-        />
+        <Logo className="h-16 w-16 shrink-0 mb-6" />
         <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">
           OneOffice AI'ga xush kelibsiz
         </h1>
@@ -788,11 +781,7 @@ function AuthCard({ children }: { children: React.ReactNode }) {
 function AuthBrand() {
   return (
     <div className="flex items-center gap-2">
-      <img
-        src="/brand-logo.png"
-        alt="OneOffice AI"
-        className="h-9 w-9 rounded-xl object-cover shrink-0"
-      />
+      <Logo className="h-9 w-9 shrink-0" />
       <span className="text-white font-semibold text-lg tracking-tight">
         OneOffice AI
       </span>
@@ -1267,11 +1256,7 @@ function ProfileFallbackForm({
 
       <Glass className="relative z-10 w-full max-w-md p-5 sm:p-8">
         <div className="flex items-center gap-2 mb-6">
-          <img
-            src="/brand-logo.png"
-            alt="OneOffice AI"
-            className="h-9 w-9 rounded-xl object-cover shrink-0"
-          />
+          <Logo className="h-9 w-9 shrink-0" />
           <span className="text-white font-semibold text-lg">OneOffice AI</span>
         </div>
         <h2 className="text-2xl font-semibold text-white mb-1">
@@ -2284,11 +2269,7 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
   return (
     <aside className="hidden md:flex md:sticky top-0 h-screen w-64 bg-white/5 backdrop-blur-xl border-r border-white/10 flex-col py-6 px-4">
       <div className="flex items-center gap-2 px-2 mb-10">
-        <img
-          src="/brand-logo.png"
-          alt="OneOffice AI"
-          className="h-9 w-9 rounded-xl object-cover shrink-0"
-        />
+        <Logo className="h-9 w-9 shrink-0" />
         <span className="text-white font-semibold text-lg">OneOffice AI</span>
       </div>
       <nav className="flex-1 space-y-1">
