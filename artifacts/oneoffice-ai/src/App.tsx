@@ -105,8 +105,6 @@ import {
   CartesianGrid,
   Tooltip as RechartsTooltip,
 } from "recharts";
-import { apiUrl } from "./lib/api-url";
-import { Logo } from "./components/Logo";
 
 const queryClient = new QueryClient();
 
@@ -246,7 +244,7 @@ function mapFirebaseError(err: any): string {
 // (already-generated images) since those need no proxying.
 function proxyImage(url: string): string {
   if (!url || url.startsWith("data:")) return url;
-  return apiUrl(`/api/images/proxy?url=${encodeURIComponent(url)}`);
+  return `/api/images/proxy?url=${encodeURIComponent(url)}`;
 }
 
 // Reads an uploaded photo, downsizes it (long edge capped at 1600px) and
@@ -619,7 +617,11 @@ function Landing({
 
       <nav className="relative z-10 flex items-center justify-between px-8 py-6 max-w-7xl mx-auto w-full">
         <div className="flex items-center gap-2">
-          <Logo className="h-9 w-9 shrink-0" />
+          <img
+            src="/brand-logo.png"
+            alt="OneOffice AI"
+            className="h-9 w-9 rounded-xl object-cover shrink-0"
+          />
           <span className="text-white font-semibold text-lg tracking-tight">
             OneOffice AI
           </span>
@@ -717,7 +719,11 @@ function WelcomeScreen({
       <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 left-1/3" />
 
       <div className="relative z-10 flex flex-col items-center text-center max-w-md w-full">
-        <Logo className="h-16 w-16 shrink-0 mb-6" />
+        <img
+          src="/brand-logo.png"
+          alt="OneOffice AI"
+          className="h-16 w-16 rounded-2xl object-cover shrink-0 mb-6 shadow-lg shadow-violet-900/40"
+        />
         <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">
           OneOffice AI'ga xush kelibsiz
         </h1>
@@ -781,7 +787,11 @@ function AuthCard({ children }: { children: React.ReactNode }) {
 function AuthBrand() {
   return (
     <div className="flex items-center gap-2">
-      <Logo className="h-9 w-9 shrink-0" />
+      <img
+        src="/brand-logo.png"
+        alt="OneOffice AI"
+        className="h-9 w-9 rounded-xl object-cover shrink-0"
+      />
       <span className="text-white font-semibold text-lg tracking-tight">
         OneOffice AI
       </span>
@@ -1256,7 +1266,11 @@ function ProfileFallbackForm({
 
       <Glass className="relative z-10 w-full max-w-md p-5 sm:p-8">
         <div className="flex items-center gap-2 mb-6">
-          <Logo className="h-9 w-9 shrink-0" />
+          <img
+            src="/brand-logo.png"
+            alt="OneOffice AI"
+            className="h-9 w-9 rounded-xl object-cover shrink-0"
+          />
           <span className="text-white font-semibold text-lg">OneOffice AI</span>
         </div>
         <h2 className="text-2xl font-semibold text-white mb-1">
@@ -1801,7 +1815,7 @@ function VkConnectorCard() {
 
   const { data: config } = useQuery({
     queryKey: ["vk-config"],
-    queryFn: () => authedFetch(apiUrl("/api/connectors/vk/config")),
+    queryFn: () => authedFetch("/api/connectors/vk/config"),
     enabled: !!firebaseUser,
   });
 
@@ -1810,7 +1824,7 @@ function VkConnectorCard() {
     isLoading,
   } = useQuery({
     queryKey: ["vk-accounts"],
-    queryFn: () => authedFetch(apiUrl("/api/connectors/vk")),
+    queryFn: () => authedFetch("/api/connectors/vk"),
     enabled: !!firebaseUser,
   });
 
@@ -1867,7 +1881,7 @@ function VkConnectorCard() {
   async function handleDisconnect(id: number) {
     setRemovingId(id);
     try {
-      await authedFetch(apiUrl(`/api/connectors/vk/${id}`), { method: "DELETE" });
+      await authedFetch(`/api/connectors/vk/${id}`, { method: "DELETE" });
       queryClient.invalidateQueries({ queryKey: ["vk-accounts"] });
     } finally {
       setRemovingId(null);
@@ -1996,7 +2010,7 @@ function YoutubeConnectorCard() {
 
   const { data: config } = useQuery({
     queryKey: ["youtube-config"],
-    queryFn: () => authedFetch(apiUrl("/api/connectors/youtube/config")),
+    queryFn: () => authedFetch("/api/connectors/youtube/config"),
     enabled: !!firebaseUser,
   });
 
@@ -2005,7 +2019,7 @@ function YoutubeConnectorCard() {
     isLoading,
   } = useQuery({
     queryKey: ["youtube-accounts"],
-    queryFn: () => authedFetch(apiUrl("/api/connectors/youtube")),
+    queryFn: () => authedFetch("/api/connectors/youtube"),
     enabled: !!firebaseUser,
   });
 
@@ -2050,7 +2064,7 @@ function YoutubeConnectorCard() {
   async function handleDisconnect(id: number) {
     setRemovingId(id);
     try {
-      await authedFetch(apiUrl(`/api/connectors/youtube/${id}`), { method: "DELETE" });
+      await authedFetch(`/api/connectors/youtube/${id}`, { method: "DELETE" });
       queryClient.invalidateQueries({ queryKey: ["youtube-accounts"] });
     } finally {
       setRemovingId(null);
@@ -2162,7 +2176,7 @@ function StoreConnectorCard() {
     queryKey: ["store-config"],
     queryFn: async () => {
       const token = await firebaseUser?.getIdToken();
-      const res = await fetch(apiUrl("/api/connectors/store/config"), {
+      const res = await fetch("/api/connectors/store/config", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load store config");
@@ -2246,6 +2260,31 @@ function ShopFrontPage() {
   );
 }
 
+// World Brand Sellers — placeholder page only, sits next to ShopFront
+// (Vitrina) in the nav. No marketplace logic yet; just an internal page
+// that mirrors the existing design system until the real feature lands.
+function WorldBrandSellersPage() {
+  return (
+    <div className="p-6 md:p-10 max-w-2xl space-y-6">
+      <Glass className="p-6">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+            <Globe className="h-5 w-5 text-emerald-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold">
+              🌍 World Brand Sellers
+            </h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              Manage your global WorldBrand store from OneOffice.
+            </p>
+          </div>
+        </div>
+      </Glass>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // APP SHELL
 // ---------------------------------------------------------------------------
@@ -2262,6 +2301,7 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connectors", icon: Send },
     { key: "shopfront", label: "ShopFront", icon: Globe },
+    { key: "worldbrand", label: "🌍 World Brand Sellers", icon: Globe },
     { key: "settings", label: "Settings", icon: Settings },
     { key: "profile", label: "Profile", icon: User },
   ];
@@ -2269,7 +2309,11 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
   return (
     <aside className="hidden md:flex md:sticky top-0 h-screen w-64 bg-white/5 backdrop-blur-xl border-r border-white/10 flex-col py-6 px-4">
       <div className="flex items-center gap-2 px-2 mb-10">
-        <Logo className="h-9 w-9 shrink-0" />
+        <img
+          src="/brand-logo.png"
+          alt="OneOffice AI"
+          className="h-9 w-9 rounded-xl object-cover shrink-0"
+        />
         <span className="text-white font-semibold text-lg">OneOffice AI</span>
       </div>
       <nav className="flex-1 space-y-1">
@@ -2318,6 +2362,7 @@ function BottomNav({ active, setActive }: any) {
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connect", icon: Send },
     { key: "shopfront", label: "ShopFront", icon: Globe },
+    { key: "worldbrand", label: "World Brand", icon: Globe },
     { key: "profile", label: "Profile", icon: User },
   ];
 
@@ -3966,7 +4011,7 @@ function YtMetadataGenerating({ product, form, onDone, onError }: any) {
     async function run() {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch(apiUrl("/api/connectors/youtube/metadata"), {
+        const res = await fetch("/api/connectors/youtube/metadata", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4034,7 +4079,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
 
   const { data: accounts, isLoading: accountsLoading } = useQuery({
     queryKey: ["youtube-accounts"],
-    queryFn: () => authedFetch(apiUrl("/api/connectors/youtube")),
+    queryFn: () => authedFetch("/api/connectors/youtube"),
     enabled: !!firebaseUser,
   });
   const list: any[] = accounts ?? [];
@@ -4048,7 +4093,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
     setRegenerating(true);
     setMetaError("");
     try {
-      const data = await authedFetch(apiUrl("/api/connectors/youtube/metadata"), {
+      const data = await authedFetch("/api/connectors/youtube/metadata", {
         method: "POST",
         body: JSON.stringify({ productId: product?.id, isShort }),
       });
@@ -4244,7 +4289,7 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
         // when the array is empty).
         const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
 
-        const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {
+        const res = await fetch("/api/connectors/youtube/publish", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4549,7 +4594,7 @@ function AppShell() {
       // Force-refresh the token so an expired cached token never silently
       // becomes a 401 (which would show the wrong "server error" screen).
       const token = await firebaseUser?.getIdToken(true);
-      const res = await fetch(apiUrl("/api/me"), {
+      const res = await fetch("/api/me", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       // 404 → profile doesn't exist yet (new user, onboarding needed)
@@ -4712,7 +4757,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch(apiUrl("/api/connectors/vk/exchange"), {
+        const res = await fetch("/api/connectors/vk/exchange", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4783,7 +4828,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch(apiUrl("/api/connectors/youtube/exchange"), {
+        const res = await fetch("/api/connectors/youtube/exchange", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4848,6 +4893,7 @@ function AppShell() {
     inventory: "Inventory",
     connectors: "Connectors",
     shopfront: "ShopFront",
+    worldbrand: "🌍 World Brand Sellers",
     settings: "Settings",
     profile: "Profile",
   };
@@ -5196,6 +5242,7 @@ function AppShell() {
           />
         )}
         {navView === "shopfront" && <ShopFrontPage />}
+        {navView === "worldbrand" && <WorldBrandSellersPage />}
         {navView === "settings" && (
           <SettingsPage onOpenConnectors={goToConnectors} />
         )}
@@ -5251,7 +5298,7 @@ function StorefrontPage({ slug }: { slug: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
+      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
@@ -5486,7 +5533,7 @@ function ProductDetailPage({
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
+      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
