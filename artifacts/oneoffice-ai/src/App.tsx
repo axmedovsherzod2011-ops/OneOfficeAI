@@ -7,7 +7,6 @@ import {
 } from "@tanstack/react-query";
 import { Switch, Route, useLocation, Router as WouterRouter } from "wouter";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
-import { apiUrl } from "@/lib/api-url";
 import {
   signInWithEmail,
   signUpWithEmail,
@@ -70,6 +69,9 @@ import {
   Instagram,
   Youtube,
   RefreshCw,
+  Users,
+  Share2,
+  Megaphone,
 } from "lucide-react";
 
 import {
@@ -2177,7 +2179,7 @@ function StoreConnectorCard() {
     queryKey: ["store-config"],
     queryFn: async () => {
       const token = await firebaseUser?.getIdToken();
-      const res = await fetch(apiUrl("/api/connectors/store/config"), {
+      const res = await fetch("/api/connectors/store/config", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load store config");
@@ -2261,6 +2263,118 @@ function ShopFrontPage() {
   );
 }
 
+// Marketer — navigation + UI shell only. Every card here is a static
+// preview of a capability that will exist later; nothing on this page
+// calls an API or writes any data. Intentionally built so wiring in the
+// real features later means swapping a card's content, not restructuring
+// the page.
+function MarketerPage() {
+  const capabilities: {
+    key: string;
+    label: string;
+    desc: string;
+    icon: React.ElementType;
+  }[] = [
+    {
+      key: "campaigns",
+      label: "Campaigns",
+      desc: "Plan, launch, and track marketing campaigns end to end.",
+      icon: Rocket,
+    },
+    {
+      key: "audience",
+      label: "Audience",
+      desc: "Understand and segment the people you're marketing to.",
+      icon: Users,
+    },
+    {
+      key: "content",
+      label: "Content",
+      desc: "Plan and organize marketing content across channels.",
+      icon: PenTool,
+    },
+    {
+      key: "analytics",
+      label: "Analytics",
+      desc: "Measure what's working with real marketing performance data.",
+      icon: BarChart3,
+    },
+    {
+      key: "social",
+      label: "Social Media",
+      desc: "Coordinate posts and presence across social platforms.",
+      icon: Share2,
+    },
+    {
+      key: "ai-marketing",
+      label: "AI Marketing",
+      desc: "AI-assisted ideas, copy, and optimization for your marketing.",
+      icon: Sparkles,
+    },
+  ];
+
+  return (
+    <div className="p-6 md:p-10 space-y-8">
+      <div className="flex items-start gap-4">
+        <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shrink-0">
+          <Megaphone className="h-6 w-6 text-white" />
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-white font-semibold text-xl">Marketer</h2>
+          <p className="text-slate-400 text-sm mt-1 max-w-xl">
+            Your future marketing and growth command center — plan
+            campaigns, understand your audience, and grow OneOffice AI's
+            reach, all from one place.
+          </p>
+        </div>
+      </div>
+
+      <Glass className="p-8 md:p-12 text-center">
+        <div className="h-14 w-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto mb-5">
+          <Rocket className="h-6 w-6 text-violet-400" />
+        </div>
+        <h3 className="text-white font-semibold text-lg">
+          Marketer is coming soon
+        </h3>
+        <p className="text-slate-400 text-sm mt-2 max-w-md mx-auto">
+          We're building a full marketing command center here — campaigns,
+          audience insights, content planning, and more. This section will
+          light up as those tools ship.
+        </p>
+      </Glass>
+
+      <div>
+        <h3 className="text-white font-semibold text-sm mb-4">
+          What's coming
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {capabilities.map((c) => {
+            const Icon = c.icon;
+            return (
+              <div
+                key={c.key}
+                data-testid={`card-marketer-${c.key}`}
+                className="relative rounded-2xl border border-white/10 bg-white/5 p-5 cursor-default"
+              >
+                <span className="absolute top-4 right-4 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                  Tez orada
+                </span>
+                <div className="h-10 w-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center mb-4">
+                  <Icon className="h-5 w-5 text-violet-400" />
+                </div>
+                <p className="text-white text-sm font-medium">{c.label}</p>
+                <p className="text-slate-500 text-xs mt-1.5 leading-relaxed">
+                  {c.desc}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // APP SHELL
 // ---------------------------------------------------------------------------
@@ -2277,6 +2391,7 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connectors", icon: Send },
     { key: "shopfront", label: "ShopFront", icon: Globe },
+    { key: "marketer", label: "Marketer", icon: Megaphone },
     { key: "settings", label: "Settings", icon: Settings },
     { key: "profile", label: "Profile", icon: User },
   ];
@@ -2337,6 +2452,7 @@ function BottomNav({ active, setActive }: any) {
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "connectors", label: "Connect", icon: Send },
     { key: "shopfront", label: "ShopFront", icon: Globe },
+    { key: "marketer", label: "Marketer", icon: Megaphone },
     { key: "profile", label: "Profile", icon: User },
   ];
 
@@ -3985,7 +4101,7 @@ function YtMetadataGenerating({ product, form, onDone, onError }: any) {
     async function run() {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch(apiUrl("/api/connectors/youtube/metadata"), {
+        const res = await fetch("/api/connectors/youtube/metadata", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4263,7 +4379,7 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
         // when the array is empty).
         const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
 
-        const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {
+        const res = await fetch("/api/connectors/youtube/publish", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4568,7 +4684,7 @@ function AppShell() {
       // Force-refresh the token so an expired cached token never silently
       // becomes a 401 (which would show the wrong "server error" screen).
       const token = await firebaseUser?.getIdToken(true);
-      const res = await fetch(apiUrl("/api/me"), {
+      const res = await fetch("/api/me", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       // 404 → profile doesn't exist yet (new user, onboarding needed)
@@ -4731,7 +4847,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch(apiUrl("/api/connectors/vk/exchange"), {
+        const res = await fetch("/api/connectors/vk/exchange", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4802,7 +4918,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch(apiUrl("/api/connectors/youtube/exchange"), {
+        const res = await fetch("/api/connectors/youtube/exchange", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4867,6 +4983,7 @@ function AppShell() {
     inventory: "Inventory",
     connectors: "Connectors",
     shopfront: "ShopFront",
+    marketer: "Marketer",
     settings: "Settings",
     profile: "Profile",
   };
@@ -5215,6 +5332,7 @@ function AppShell() {
           />
         )}
         {navView === "shopfront" && <ShopFrontPage />}
+        {navView === "marketer" && <MarketerPage />}
         {navView === "settings" && (
           <SettingsPage onOpenConnectors={goToConnectors} />
         )}
@@ -5270,7 +5388,7 @@ function StorefrontPage({ slug }: { slug: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
+      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
@@ -5505,7 +5623,7 @@ function ProductDetailPage({
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
+      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
