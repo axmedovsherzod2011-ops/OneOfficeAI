@@ -116,14 +116,30 @@ async function resolveImage(url: string): Promise<ResolvedImage | null> {
       },
     });
     const contentType = imgRes.headers.get("content-type") || "";
-    if (imgRes.ok && contentType.startsWith("image/")) {
+
+console.log("[telegram] Image fetch:", {
+  url,
+  status: imgRes.status,
+  ok: imgRes.ok,
+  contentType,
+});
+
+if (imgRes.ok && contentType.startsWith("image/")) {
       const arrayBuffer = await imgRes.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
       return { buffer, contentType, ext: extFromContentType(contentType) };
     }
-  } catch {
-    // fall through to null below
+    } catch (error) {
+    console.error("[telegram] Failed to resolve image:", {
+      url,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
+
+  console.error("[telegram] Image could not be resolved:", {
+    url,
+  });
+
   return null;
 }
 

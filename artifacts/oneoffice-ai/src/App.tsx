@@ -16,6 +16,7 @@ import {
 } from "@/lib/firebase";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { apiUrl } from "./lib/api-url";
 
 import {
   Sparkles,
@@ -2176,7 +2177,7 @@ function StoreConnectorCard() {
     queryKey: ["store-config"],
     queryFn: async () => {
       const token = await firebaseUser?.getIdToken();
-      const res = await fetch("/api/connectors/store/config", {
+      const res = await fetch(apiUrl("/api/connectors/store/config"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load store config");
@@ -3984,7 +3985,7 @@ function YtMetadataGenerating({ product, form, onDone, onError }: any) {
     async function run() {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/youtube/metadata", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/metadata"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4262,7 +4263,7 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
         // when the array is empty).
         const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
 
-        const res = await fetch("/api/connectors/youtube/publish", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4567,7 +4568,7 @@ function AppShell() {
       // Force-refresh the token so an expired cached token never silently
       // becomes a 401 (which would show the wrong "server error" screen).
       const token = await firebaseUser?.getIdToken(true);
-      const res = await fetch("/api/me", {
+      const res = await fetch(apiUrl("/api/me"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       // 404 → profile doesn't exist yet (new user, onboarding needed)
@@ -4730,7 +4731,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/vk/exchange", {
+        const res = await fetch(apiUrl("/api/connectors/vk/exchange"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4801,7 +4802,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/youtube/exchange", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/exchange"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
