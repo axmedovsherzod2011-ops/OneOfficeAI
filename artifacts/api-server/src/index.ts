@@ -1,3 +1,13 @@
+import dotenv from "dotenv";
+import path from "node:path";
+
+// Root .env faylini yuklash.
+// index.ts CWD: artifacts/api-server
+// Shuning uchun ../../.env -> OneOfficeAI/.env
+dotenv.config({
+  path: path.resolve(process.cwd(), "../../.env"),
+});
+
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
