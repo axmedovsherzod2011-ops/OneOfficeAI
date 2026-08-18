@@ -13,6 +13,11 @@ export const channelStatSnapshotsTable = pgTable("channel_stat_snapshots", {
   // so we never hit timezone-mangling from JS Date <-> Postgres date round-trips.
   snapshotDate: text("snapshot_date").notNull(),
   subscribers: integer("subscribers").notNull().default(0),
+  // "bot_api" (existing getChatMemberCount polling) or "mtproto" (new
+  // GramJS-based reading). Lets both run side by side against the same
+  // table while we validate MTProto numbers before trusting them —
+  // defaults to "bot_api" so existing rows/writers are unaffected.
+  source: text("source").notNull().default("bot_api"),
 });
 
 export type ChannelStatSnapshot =
