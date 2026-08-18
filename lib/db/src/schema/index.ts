@@ -7,3 +7,4 @@ export * from "./youtubeAccounts";
 export * from "./posts";
 export * from "./products";
 export * from "./channelStatSnapshots";
+export * from "./telegramMtprotoAccounts";
