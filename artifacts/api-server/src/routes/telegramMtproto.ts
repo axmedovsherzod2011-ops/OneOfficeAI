@@ -11,6 +11,7 @@ import {
   revoke,
   getStatus,
 } from "../telegram-mtproto/auth";
+import { listAdminChannels } from "../telegram-mtproto/discovery";
 
 const router = Router();
 
@@ -125,6 +126,25 @@ router.post(
       return;
     }
     res.json({ status: result.status });
+  }),
+);
+
+router.get(
+  "/telegram-mtproto/channels",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const result = await listAdminChannels(userId);
+    if (result.status === "not_connected") {
+      res.status(409).json({ error: "MTProto hisob ulanmagan." });
+      return;
+    }
+    if (result.status === "error") {
+      res.status(500).json({ error: result.message });
+      return;
+    }
+    res.json({ channels: result.channels });
   }),
 );
 
