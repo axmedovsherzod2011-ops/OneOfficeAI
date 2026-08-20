@@ -10,6 +10,7 @@ import publishRouter from "./publish";
 import enrichRouter from "./enrich";
 import productsRouter from "./products";
 import youtubeRouter from "./youtube";
+import telegramMtprotoRouter from "./telegramMtproto";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(publishRouter);
 router.use(enrichRouter);
 router.use(productsRouter);
 router.use(youtubeRouter);
+router.use(telegramMtprotoRouter);
 
 export default router;
