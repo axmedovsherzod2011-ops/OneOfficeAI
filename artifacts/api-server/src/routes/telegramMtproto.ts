@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
-import { usersTable } from "@workspace/db/schema";
+import { usersTable, telegramChannelsTable, postsTable } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
 import { isMtprotoConfigured } from "../telegram-mtproto/client";
 import {
@@ -12,6 +12,7 @@ import {
   getStatus,
 } from "../telegram-mtproto/auth";
 import { listAdminChannels } from "../telegram-mtproto/discovery";
+import { getPostViews, getChannelSubscriberCount } from "../telegram-mtproto/stats";
 
 const router = Router();
 
@@ -145,6 +146,87 @@ router.get(
       return;
     }
     res.json({ channels: result.channels });
+  }),
+);
+
+// Real views for one already-published post, read straight from Telegram
+// via MTProto — no forward/delete workaround (see telegram/liveStats.ts).
+router.get(
+  "/telegram-mtproto/posts/:postId/views",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const postId = Number(req.params.postId);
+    if (!postId) {
+      res.status(400).json({ error: "postId noto'g'ri." });
+      return;
+    }
+
+    const [post] = await db.select().from(postsTable).where(eq(postsTable.id, postId)).limit(1);
+    if (!post || post.userId !== userId) {
+      res.status(404).json({ error: "Post topilmadi." });
+      return;
+    }
+    if (!post.telegramChannelId || !post.telegramMessageId) {
+      res.status(400).json({ error: "Bu post Telegramga hali chop etilmagan." });
+      return;
+    }
+
+    const [channel] = await db
+      .select()
+      .from(telegramChannelsTable)
+      .where(eq(telegramChannelsTable.id, post.telegramChannelId))
+      .limit(1);
+    if (!channel) {
+      res.status(404).json({ error: "Channel topilmadi." });
+      return;
+    }
+
+    const result = await getPostViews(userId, channel.channelId, [post.telegramMessageId]);
+    if (result.status === "not_connected") {
+      res.status(409).json({ error: "MTProto hisob ulanmagan." });
+      return;
+    }
+    if (result.status === "channel_not_found") {
+      res.status(404).json({ error: "MTProto hisobingiz bu channel'da admin emas." });
+      return;
+    }
+    if (result.status === "error") {
+      res.status(500).json({ error: result.message });
+      return;
+    }
+    res.json({ views: result.views.get(post.telegramMessageId) ?? 0 });
+  }),
+);
+
+router.get(
+  "/telegram-mtproto/channels/:telegramChannelId/subscribers",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const telegramChannelId = Number(req.params.telegramChannelId);
+    const [channel] = await db
+      .select()
+      .from(telegramChannelsTable)
+      .where(eq(telegramChannelsTable.id, telegramChannelId))
+      .limit(1);
+    if (!channel || channel.userId !== userId) {
+      res.status(404).json({ error: "Channel topilmadi." });
+      return;
+    }
+
+    const result = await getChannelSubscriberCount(userId, channel.channelId);
+    if (result.status === "not_connected") {
+      res.status(409).json({ error: "MTProto hisob ulanmagan." });
+      return;
+    }
+    if (result.status !== "ok") {
+      res.status(404).json({ error: "Obunachilar sonini olishda xatolik." });
+      return;
+    }
+    res.json({ subscribers: result.subscribers });
   }),
 );
 
