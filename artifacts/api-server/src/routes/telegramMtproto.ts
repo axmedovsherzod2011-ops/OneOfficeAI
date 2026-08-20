@@ -12,7 +12,7 @@ import {
   getStatus,
 } from "../telegram-mtproto/auth";
 import { listAdminChannels } from "../telegram-mtproto/discovery";
-import { getPostViews, getChannelSubscriberCount } from "../telegram-mtproto/stats";
+import { getPostViews, getChannelSubscriberCount, recordMtprotoSubscriberSnapshot, getParityHistory } from "../telegram-mtproto/stats";
 
 const router = Router();
 
@@ -226,7 +226,40 @@ router.get(
       res.status(404).json({ error: "Obunachilar sonini olishda xatolik." });
       return;
     }
+
+    // Fire-and-forget, same pattern as the bot_api writer in
+    // connectors.ts — never block the response on the snapshot write.
+    recordMtprotoSubscriberSnapshot(channel.id, result.subscribers).catch((e) =>
+      console.warn("[mtproto snapshot] upsert failed (non-fatal):", e),
+    );
+
     res.json({ subscribers: result.subscribers });
+  }),
+);
+
+// Stage 7: side-by-side bot_api vs mtproto subscriber history for one
+// channel, so old and new can be watched together before anything is
+// trusted or cut over — the "OLD VIEWS / MTProto VIEWS" table from the plan.
+router.get(
+  "/telegram-mtproto/channels/:telegramChannelId/parity",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const telegramChannelId = Number(req.params.telegramChannelId);
+    const [channel] = await db
+      .select()
+      .from(telegramChannelsTable)
+      .where(eq(telegramChannelsTable.id, telegramChannelId))
+      .limit(1);
+    if (!channel || channel.userId !== userId) {
+      res.status(404).json({ error: "Channel topilmadi." });
+      return;
+    }
+
+    const daysBack = Number(req.query.days ?? 14);
+    const history = await getParityHistory(channel.id, daysBack);
+    res.json({ channelTitle: channel.channelTitle, history });
   }),
 );
 

@@ -1,8 +1,8 @@
 import { Api } from "teleproto";
 import type { TelegramClient } from "teleproto";
 import { db } from "@workspace/db";
-import { telegramMtprotoAccountsTable } from "@workspace/db/schema";
-import { eq } from "drizzle-orm";
+import { telegramMtprotoAccountsTable, channelStatSnapshotsTable } from "@workspace/db/schema";
+import { eq, and } from "drizzle-orm";
 import { createMtprotoClient } from "./client";
 import { decryptSessionString } from "./sessionCrypto";
 
@@ -139,4 +139,87 @@ export async function getChannelSubscriberCount(
   } finally {
     await client.disconnect().catch(() => {});
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 7 — parallel run. Writes an mtproto-sourced snapshot alongside
+// whatever the bot_api writer in routes/connectors.ts already wrote for
+// today, using the same upsert-by-(channel, date, source) shape so the two
+// never collide (source is part of the lookup on both sides).
+// ---------------------------------------------------------------------------
+
+export async function recordMtprotoSubscriberSnapshot(
+  channelRowId: number,
+  subscribers: number,
+): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  const [existing] = await db
+    .select()
+    .from(channelStatSnapshotsTable)
+    .where(
+      and(
+        eq(channelStatSnapshotsTable.channelRowId, channelRowId),
+        eq(channelStatSnapshotsTable.snapshotDate, today),
+        eq(channelStatSnapshotsTable.source, "mtproto"),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(channelStatSnapshotsTable)
+      .set({ subscribers })
+      .where(eq(channelStatSnapshotsTable.id, existing.id));
+  } else {
+    await db.insert(channelStatSnapshotsTable).values({
+      channelRowId,
+      snapshotDate: today,
+      subscribers,
+      source: "mtproto",
+    });
+  }
+}
+
+export interface ParityRow {
+  date: string;
+  botApiSubscribers: number | null;
+  mtprotoSubscribers: number | null;
+  // Same day, both sources present, and the numbers actually match —
+  // this is the signal stage 7's plan uses to eventually decide
+  // "MTProto = trusted".
+  matches: boolean;
+}
+
+// Side-by-side comparison for one channel over the last N days — the
+// "OLD VIEWS: 1,245 / MTProto VIEWS: 1,245" table from the plan.
+export async function getParityHistory(
+  channelRowId: number,
+  daysBack = 14,
+): Promise<ParityRow[]> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysBack);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  const rows = await db
+    .select()
+    .from(channelStatSnapshotsTable)
+    .where(eq(channelStatSnapshotsTable.channelRowId, channelRowId));
+
+  const byDate = new Map<string, { botApi?: number; mtproto?: number }>();
+  for (const r of rows) {
+    if (r.snapshotDate < cutoffStr) continue;
+    const entry = byDate.get(r.snapshotDate) ?? {};
+    if (r.source === "bot_api") entry.botApi = r.subscribers;
+    else if (r.source === "mtproto") entry.mtproto = r.subscribers;
+    byDate.set(r.snapshotDate, entry);
+  }
+
+  return Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, v]) => ({
+      date,
+      botApiSubscribers: v.botApi ?? null,
+      mtprotoSubscribers: v.mtproto ?? null,
+      matches: v.botApi != null && v.mtproto != null && v.botApi === v.mtproto,
+    }));
 }
