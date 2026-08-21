@@ -251,6 +251,11 @@ router.get(
           and(
             eq(channelStatSnapshotsTable.channelRowId, ch.id),
             eq(channelStatSnapshotsTable.snapshotDate, today),
+            // Scoped to bot_api explicitly — once telegram-mtproto/stats.ts
+            // starts writing its own source="mtproto" rows for the same
+            // channel/date (parallel-run comparison), this upsert must
+            // never touch those rows or vice versa.
+            eq(channelStatSnapshotsTable.source, "bot_api"),
           ),
         )
         .limit(1)
@@ -265,6 +270,7 @@ router.get(
               channelRowId: ch.id,
               snapshotDate: today,
               subscribers: ch.subscribers!,
+              source: "bot_api",
             });
           }
         })
@@ -350,6 +356,12 @@ router.get(
       .where(
         and(
           gte(channelStatSnapshotsTable.snapshotDate, cutoffStr),
+          // Same reasoning as the write side above: keep this — the
+          // dashboard's one source of truth today — reading only bot_api
+          // rows, so it's unaffected by mtproto snapshots landing in
+          // parallel. See /telegram-mtproto/channels/:id/parity for the
+          // side-by-side comparison view.
+          eq(channelStatSnapshotsTable.source, "bot_api"),
           // drizzle doesn't have inArray exported from pg-core yet — filter
           // in JS for the small number of channels a user typically has.
         ),
