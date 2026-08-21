@@ -79,7 +79,6 @@ import {
   useDisconnectTelegramChannel,
   useGetTelegramLiveStats,
   useGetTelegramStatsHistory,
-  type SubscriberSnapshot,
   getListTelegramChannelsQueryKey,
   useGetInstagramConfig,
   useListInstagramAccounts,
@@ -94,6 +93,14 @@ import {
   useDeleteProduct,
   getListProductsQueryKey,
   type ProductItem,
+  useGetTelegramMtprotoStatus,
+  useListTelegramMtprotoChannels,
+  useTelegramMtprotoSendCode,
+  useTelegramMtprotoVerifyCode,
+  useTelegramMtprotoVerifyPassword,
+  useTelegramMtprotoLogout,
+  useGetTelegramMtprotoLiveStats,
+  useGetTelegramMtprotoStatsHistory,
 } from "@workspace/api-client-react";
 
 import {
@@ -322,14 +329,16 @@ function Glass({
 
 // ---------------------------------------------------------------------------
 // CHANNEL STATS CHART
-// Subscribers: real number from GET /connectors/telegram/stats/live
-// (polled), with the chart's most recent point anchored to that real
-// value — the rest of the curve is a demo shape until we store real
-// history somewhere.
-// Views: fully demo for now. Reading real per-post views needs an MTProto
-// session (a real Telegram login) rather than the bot — the bot-only trick
-// (forward + delete) still fires a visible notification for the channel
-// owner, so it's parked until that's built properly.
+// Subscribers: real number + real history from
+// GET /connectors/telegram/stats/{live,history} (Bot API).
+// Views: real number + real history from
+// GET /telegram-mtproto/stats/{live,history} — this needs an MTProto
+// session (a real Telegram login), since the Bot API's only way to read
+// view counts is forwarding the post into a private chat and deleting it,
+// which still fires a visible notification for the channel owner (see
+// telegram/liveStats.ts).
+// Neither chart ever falls back to synthetic data — when there isn't yet
+// enough real history for the selected period, it shows an empty state.
 // Both render as a gradient "mountain" area chart with a switchable period
 // (hourly / daily / weekly / monthly).
 // ---------------------------------------------------------------------------
@@ -378,91 +387,14 @@ function ChartTooltip({ active, payload, label, metricLabel }: any) {
   );
 }
 
-function periodLabels(period: PeriodKey): string[] {
-  switch (period) {
-    case "hourly":
-      return Array.from(
-        { length: 12 },
-        (_, i) => `${String(i * 2).padStart(2, "0")}:00`,
-      );
-    case "daily":
-      return ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
-    case "weekly":
-      return ["1-hafta", "2-hafta", "3-hafta", "4-hafta", "5-hafta", "6-hafta"];
-    case "monthly":
-      return ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg"];
-  }
-}
-
-// Deterministic (no Math.random, so it's stable across re-renders), smooth
-// demo curve — a base trend line plus a couple of overlaid sine waves so
-// it doesn't look like a straight ramp.
-function demoSeries(
-  count: number,
-  base: number,
-  amplitude: number,
-  growthPerStep: number,
-): number[] {
-  const values: number[] = [];
-  for (let i = 0; i < count; i++) {
-    const wave =
-      Math.sin(i * 0.9 + 1.3) * amplitude * 0.6 +
-      Math.sin(i * 0.35) * amplitude * 0.4;
-    values.push(Math.max(0, Math.round(base + growthPerStep * i + wave)));
-  }
-  return values;
-}
-
-const DEMO_SERIES: Record<PeriodKey, Record<LiveMetric, number[]>> = {
-  hourly: {
-    views: demoSeries(12, 140, 55, 5),
-    subscribers: demoSeries(12, 23940, 12, 3),
-  },
-  daily: {
-    views: demoSeries(7, 1150, 320, 55),
-    subscribers: demoSeries(7, 23760, 35, 32),
-  },
-  weekly: {
-    views: demoSeries(6, 8200, 1400, 480),
-    subscribers: demoSeries(6, 23150, 140, 210),
-  },
-  monthly: {
-    views: demoSeries(8, 31000, 5800, 1700),
-    subscribers: demoSeries(8, 20200, 480, 540),
-  },
-};
-
+// Real snapshot data only — no synthetic/demo fallback of any kind. When
+// there isn't yet enough real history, the chart renders an explicit empty
+// state (see ChannelStatsChart) instead of a fabricated curve.
 function chartDataFor(
-  metric: LiveMetric,
-  period: PeriodKey,
-  liveValue?: number,
-  snapshots?: SubscriberSnapshot[],
+  snapshots?: { date: string; value: number }[],
 ): { label: string; value: number }[] {
-  // Use real snapshot data for subscribers when available
-  if (metric === "subscribers" && snapshots && snapshots.length >= 2) {
-    return snapshots.map((s) => ({
-      label: s.date.slice(5), // "MM-DD"
-      value: s.subscribers,
-    }));
-  }
-
-  const labels = periodLabels(period);
-  const values = DEMO_SERIES[period][metric];
-
-  // For subscribers: if we have a real live value, shift the whole demo
-  // series so its last point equals liveValue. This keeps the mountain
-  // shape intact while making the Y-axis perfectly consistent with the
-  // headline number — no "0 headline but 23 980 axis" mismatch.
-  if (metric === "subscribers" && typeof liveValue === "number") {
-    const lastDemo = values[values.length - 1];
-    const shift = liveValue - lastDemo; // can be negative
-    return labels.map((label, i) => ({
-      label,
-      value: Math.max(0, values[i] + shift),
-    }));
-  }
-
-  return labels.map((label, i) => ({ label, value: values[i] }));
+  if (!snapshots || snapshots.length < 2) return [];
+  return snapshots.map((s) => ({ label: s.date.slice(5), value: s.value }));
 }
 
 function ChannelStatsChart({
@@ -471,24 +403,25 @@ function ChannelStatsChart({
   isLive,
   isLoading,
   snapshots,
+  period,
+  onPeriodChange,
 }: {
   metric: LiveMetric;
   currentValue?: number;
   isLive: boolean;
   isLoading: boolean;
-  snapshots?: SubscriberSnapshot[];
+  snapshots?: { date: string; value: number }[];
+  period: PeriodKey;
+  onPeriodChange: (period: PeriodKey) => void;
 }) {
-  const [period, setPeriod] = useState<PeriodKey>("daily");
   const [pickerOpen, setPickerOpen] = useState(false);
   const cfg = LIVE_METRIC_CONFIG[metric];
   const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
-  const hasRealHistory = metric === "subscribers" && !!snapshots && snapshots.length >= 2;
-  const chartData = chartDataFor(metric, period, currentValue, snapshots);
+  const chartData = chartDataFor(snapshots);
+  const hasRealHistory = chartData.length > 0;
   const gradientId = `mountain-${metric}`;
   const headline =
-    metric === "subscribers"
-      ? (currentValue === undefined ? (isLoading ? "…" : "0") : currentValue.toLocaleString())
-      : chartData[chartData.length - 1].value.toLocaleString();
+    currentValue === undefined ? (isLoading ? "…" : "—") : currentValue.toLocaleString();
 
   return (
     <Glass className="p-6">
@@ -501,8 +434,8 @@ function ChannelStatsChart({
               Jonli
             </span>
           ) : (
-            <span className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2.5 py-1">
-              Demo
+            <span className="text-[11px] text-slate-400 bg-white/5 border border-white/10 rounded-full px-2.5 py-1">
+              Ma'lumot to'planmoqda
             </span>
           )}
           <div className="relative">
@@ -520,7 +453,7 @@ function ChannelStatsChart({
                   <button
                     key={o.key}
                     onClick={() => {
-                      setPeriod(o.key);
+                      onPeriodChange(o.key);
                       setPickerOpen(false);
                     }}
                     className="w-full flex items-center justify-between text-xs text-slate-300 hover:bg-white/5 rounded-lg px-3 py-2 transition"
@@ -549,50 +482,60 @@ function ChannelStatsChart({
       </div>
 
       <div className="h-56 -ml-2">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart
-            data={chartData}
-            margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
-          >
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={cfg.color} stopOpacity={0.55} />
-                <stop offset="95%" stopColor={cfg.color} stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="rgba(255,255,255,0.06)"
-            />
-            <XAxis
-              dataKey="label"
-              stroke="rgba(255,255,255,0.3)"
-              tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }}
-              axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
-              tickLine={false}
-            />
-            <YAxis
-              stroke="rgba(255,255,255,0.3)"
-              tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              width={44}
-              domain={["auto", "auto"]}
-            />
-            <RechartsTooltip
-              content={<ChartTooltip metricLabel={cfg.label} />}
-            />
-            <Area
-              type="monotone"
-              dataKey="value"
-              stroke={cfg.color}
-              strokeWidth={2.5}
-              fill={`url(#${gradientId})`}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+        {chartData.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-500">
+            <BarChart3 className="h-8 w-8 opacity-40" />
+            <p className="text-xs max-w-[220px]">
+              Hozircha tarixiy ma'lumot yo'q — vaqt o'tishi bilan bu yerda
+              real grafik shakllanadi.
+            </p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart
+              data={chartData}
+              margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
+            >
+              <defs>
+                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={cfg.color} stopOpacity={0.55} />
+                  <stop offset="95%" stopColor={cfg.color} stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid
+                strokeDasharray="3 3"
+                stroke="rgba(255,255,255,0.06)"
+              />
+              <XAxis
+                dataKey="label"
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }}
+                axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+                tickLine={false}
+              />
+              <YAxis
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                width={44}
+                domain={["auto", "auto"]}
+              />
+              <RechartsTooltip
+                content={<ChartTooltip metricLabel={cfg.label} />}
+              />
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke={cfg.color}
+                strokeWidth={2.5}
+                fill={`url(#${gradientId})`}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </Glass>
   );
@@ -1567,6 +1510,278 @@ function TelegramConnectorCard() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// TELEGRAM MTPROTO CONNECTOR CARD
+// A separate, additive flow — connecting here does NOT replace or affect
+// the bot connector above. This is a real Telegram account login
+// (phone -> code -> optional 2FA password), used only to read real
+// statistics (subscribers + post views) that the Bot API can't provide.
+// ---------------------------------------------------------------------------
+
+type MtprotoStep = "idle" | "phone" | "code" | "password";
+
+function TelegramMtprotoConnectorCard() {
+  const queryClient = useQueryClient();
+  const { data: status, isLoading: statusLoading } = useGetTelegramMtprotoStatus();
+  const { data: channelsData, isLoading: channelsLoading } = useListTelegramMtprotoChannels({
+    enabled: Boolean(status?.connected),
+  });
+  const sendCode = useTelegramMtprotoSendCode();
+  const verifyCode = useTelegramMtprotoVerifyCode();
+  const verifyPassword = useTelegramMtprotoVerifyPassword();
+  const logout = useTelegramMtprotoLogout();
+
+  const [step, setStep] = useState<MtprotoStep>("idle");
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [pendingId, setPendingId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  function resetFlow() {
+    setStep("idle");
+    setCode("");
+    setPassword("");
+    setPendingId(null);
+    setError("");
+  }
+
+  async function handleSendCode() {
+    setError("");
+    try {
+      const result = await sendCode.mutateAsync({ phoneNumber: phone.trim() });
+      setPendingId(result.pendingId);
+      setStep("code");
+    } catch (err: any) {
+      setError(err?.data?.error || "Kod yuborilmadi. Raqamni tekshirib qayta urining.");
+    }
+  }
+
+  async function handleVerifyCode() {
+    if (!pendingId) return;
+    setError("");
+    try {
+      const result = await verifyCode.mutateAsync({
+        pendingId,
+        phoneNumber: phone.trim(),
+        code: code.trim(),
+      });
+      if (result.status === "needs_password") {
+        setStep("password");
+      } else {
+        onConnected();
+      }
+    } catch (err: any) {
+      setError(err?.data?.error || "Kod noto'g'ri.");
+    }
+  }
+
+  async function handleVerifyPassword() {
+    if (!pendingId) return;
+    setError("");
+    try {
+      await verifyPassword.mutateAsync({ pendingId, password });
+      onConnected();
+    } catch (err: any) {
+      setError(err?.data?.error || "Parol noto'g'ri.");
+    }
+  }
+
+  function onConnected() {
+    resetFlow();
+    queryClient.invalidateQueries({ queryKey: ["/api/telegram-mtproto/status"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/telegram-mtproto/channels"] });
+  }
+
+  async function handleLogout() {
+    await logout.mutateAsync();
+    setPhone("");
+  }
+
+  const connected = Boolean(status?.connected);
+  const channels = channelsData?.channels || [];
+  const busy = sendCode.isPending || verifyCode.isPending || verifyPassword.isPending;
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-start justify-between gap-4 mb-1">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+            <KeyRound className="h-5 w-5 text-violet-400" />
+          </div>
+          <div>
+            <h3 className="text-white font-semibold">Telegram MTProto</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
+              {statusLoading
+                ? "Tekshirilmoqda..."
+                : connected
+                  ? "Ulangan — real statistika uchun"
+                  : "Ulanmagan"}
+            </p>
+          </div>
+        </div>
+        {connected && (
+          <button
+            onClick={handleLogout}
+            disabled={logout.isPending}
+            className="shrink-0 flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 px-4 py-2.5 rounded-xl text-sm font-medium hover:border-rose-500/30 hover:text-rose-300 transition"
+          >
+            {logout.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <LogOut className="h-3.5 w-3.5" />
+            )}
+            Uzish
+          </button>
+        )}
+      </div>
+
+      <p className="text-slate-500 text-xs mt-3 leading-relaxed">
+        Bu — botdan mustaqil, alohida ulanish: haqiqiy Telegram hisobingizga
+        kirasiz (bot emas). Faqat obunachilar va post views kabi{" "}
+        <strong className="text-slate-300">real statistikani</strong> o'qish
+        uchun ishlatiladi — kanal ulanishi va publish qilish hamon botga
+        bog'liq bo'lib qoladi.
+      </p>
+
+      {error && <p className="text-rose-300 text-xs mt-3">{error}</p>}
+
+      {connected ? (
+        channelsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+          </div>
+        ) : channels.length === 0 ? (
+          <p className="text-slate-500 text-sm mt-5">
+            Bu hisob hech qanday kanalda admin emas.
+          </p>
+        ) : (
+          <div className="mt-5 divide-y divide-white/5">
+            {channels.map((c) => (
+              <div
+                key={c.id}
+                className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="h-9 w-9 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-center justify-center shrink-0">
+                    <Radio className="h-4 w-4 text-violet-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-white text-sm font-medium truncate">{c.title}</p>
+                    <p className="text-slate-500 text-xs mt-0.5 truncate">
+                      {c.username ? `@${c.username}` : "Shaxsiy kanal"}
+                      {c.membersCount != null ? ` · ${c.membersCount.toLocaleString()} a'zo` : ""}
+                    </p>
+                  </div>
+                </div>
+                {c.isCreator && (
+                  <span className="shrink-0 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">
+                    Egasi
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )
+      ) : step === "idle" ? (
+        <button
+          data-testid="button-connect-mtproto"
+          onClick={() => setStep("phone")}
+          className="mt-5 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
+        >
+          <Link2 className="h-3.5 w-3.5" />
+          Ulash
+        </button>
+      ) : (
+        <div className="mt-5 space-y-3 max-w-sm">
+          {step === "phone" && (
+            <>
+              <input
+                type="tel"
+                placeholder="+998901234567"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSendCode}
+                  disabled={busy || !phone.trim()}
+                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                >
+                  {sendCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Kod yuborish
+                </button>
+                <button
+                  onClick={resetFlow}
+                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                >
+                  Bekor qilish
+                </button>
+              </div>
+            </>
+          )}
+          {step === "code" && (
+            <>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="Telegramdan kelgan kod"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleVerifyCode}
+                  disabled={busy || !code.trim()}
+                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                >
+                  {verifyCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Tasdiqlash
+                </button>
+                <button
+                  onClick={resetFlow}
+                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                >
+                  Bekor qilish
+                </button>
+              </div>
+            </>
+          )}
+          {step === "password" && (
+            <>
+              <input
+                type="password"
+                placeholder="2FA parol"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleVerifyPassword}
+                  disabled={busy || !password}
+                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                >
+                  {verifyPassword.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Tasdiqlash
+                </button>
+                <button
+                  onClick={resetFlow}
+                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                >
+                  Bekor qilish
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </Glass>
+  );
+}
+
 function ConnectorsPage({
   instagramNotice,
   onDismissInstagramNotice,
@@ -1639,6 +1854,8 @@ function ConnectorsPage({
       )}
 
       <TelegramConnectorCard />
+
+      <TelegramMtprotoConnectorCard />
 
       <InstagramConnectorCard />
 
@@ -2912,6 +3129,9 @@ function Dashboard({ goCreate, user }: any) {
   void goCreate;
   void user;
 
+  const [subscribersPeriod, setSubscribersPeriod] = useState<PeriodKey>("daily");
+  const [viewsPeriod, setViewsPeriod] = useState<PeriodKey>("daily");
+
   // 30s is plenty for a subscriber count (it moves slowly) and keeps Bot
   // API calls light — no need for the aggressive polling a truly
   // second-by-second view would need.
@@ -2922,20 +3142,67 @@ function Dashboard({ goCreate, user }: any) {
   // Fetch real subscriber history — triggers a fresh snapshot upsert on the
   // backend each time the live stats are polled, so history accumulates
   // automatically over time without any extra user action.
-  const { data: historyData } = useGetTelegramStatsHistory("daily", {
+  const { data: historyData } = useGetTelegramStatsHistory(subscribersPeriod, {
     refetchInterval: 30000,
   });
 
+  const { data: mtprotoStatus } = useGetTelegramMtprotoStatus();
+  const mtprotoConnected = Boolean(mtprotoStatus?.connected);
+
+  // Real views — only source is MTProto (see telegram-mtproto/stats.ts).
+  // Disabled entirely until connected, so we don't poll a 409 every 30s.
+  const { data: mtprotoLive, isLoading: mtprotoLoading } = useGetTelegramMtprotoLiveStats({
+    enabled: mtprotoConnected,
+    refetchInterval: 30000,
+  });
+  const { data: mtprotoHistory } = useGetTelegramMtprotoStatsHistory(viewsPeriod, {
+    enabled: mtprotoConnected,
+    refetchInterval: 30000,
+  });
+
+  const viewsSnapshots = mtprotoHistory?.snapshots.map((s) => ({
+    date: s.date,
+    value: s.views,
+  }));
+  const subscribersSnapshots = historyData?.snapshots.map((s) => ({
+    date: s.date,
+    value: s.subscribers,
+  }));
+
   return (
     <div className="p-6 md:p-10 space-y-8">
+      {!mtprotoConnected && (
+        <Glass className="p-5 flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-2xl bg-violet-500/10 flex items-center justify-center shrink-0">
+              <KeyRound className="h-5 w-5 text-violet-400" />
+            </div>
+            <p className="text-sm text-slate-300">
+              Real post views'ni ko'rish uchun{" "}
+              <strong className="text-white">Telegram MTProto</strong>ni
+              ulang — Sozlamalar → Ulanishlar bo'limida.
+            </p>
+          </div>
+        </Glass>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChannelStatsChart metric="views" isLive={false} isLoading={isLoading} />
+        <ChannelStatsChart
+          metric="views"
+          currentValue={mtprotoLive?.totalViews}
+          isLive={mtprotoConnected && Boolean(mtprotoLive)}
+          isLoading={mtprotoConnected && mtprotoLoading}
+          snapshots={viewsSnapshots}
+          period={viewsPeriod}
+          onPeriodChange={setViewsPeriod}
+        />
         <ChannelStatsChart
           metric="subscribers"
           currentValue={data?.totalSubscribers}
           isLive={Boolean(data)}
           isLoading={isLoading}
-          snapshots={historyData?.snapshots}
+          snapshots={subscribersSnapshots}
+          period={subscribersPeriod}
+          onPeriodChange={setSubscribersPeriod}
         />
       </div>
     </div>

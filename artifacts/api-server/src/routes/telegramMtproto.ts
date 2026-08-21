@@ -12,7 +12,14 @@ import {
   getStatus,
 } from "../telegram-mtproto/auth";
 import { listAdminChannels } from "../telegram-mtproto/discovery";
-import { getPostViews, getChannelSubscriberCount, recordMtprotoSubscriberSnapshot, getParityHistory } from "../telegram-mtproto/stats";
+import {
+  getPostViews,
+  getChannelSubscriberCount,
+  recordMtprotoSubscriberSnapshot,
+  getParityHistory,
+  getMtprotoLiveStatsForUser,
+  getMtprotoStatsHistoryForUser,
+} from "../telegram-mtproto/stats";
 
 const router = Router();
 
@@ -48,6 +55,51 @@ async function requireUserId(req: any, res: any): Promise<number | null> {
   }
   return user.id;
 }
+
+// ---------------------------------------------------------------------------
+// Account-wide, mirrors /connectors/telegram/stats/{live,history} — but
+// this is the ONLY place real "views" ever comes from (see stats.ts). The
+// old demo views chart in App.tsx was removed in favor of these.
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/telegram-mtproto/stats/live",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const result = await getMtprotoLiveStatsForUser(userId);
+    if (result.status === "not_connected") {
+      res.status(409).json({ error: "MTProto hisob ulanmagan." });
+      return;
+    }
+    if (result.status === "error") {
+      res.status(500).json({ error: result.message });
+      return;
+    }
+    res.json({
+      totalSubscribers: result.totalSubscribers,
+      totalViews: result.totalViews,
+      channels: result.channels,
+      generatedAt: new Date().toISOString(),
+    });
+  }),
+);
+
+router.get(
+  "/telegram-mtproto/stats/history",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const period = String(req.query.period ?? "daily");
+    const daysBack =
+      period === "hourly" ? 1 : period === "weekly" ? 42 : period === "monthly" ? 365 : 30;
+
+    const snapshots = await getMtprotoStatsHistoryForUser(userId, daysBack);
+    res.json({ snapshots });
+  }),
+);
 
 router.get(
   "/telegram-mtproto/status",
