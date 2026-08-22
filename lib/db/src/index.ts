@@ -307,3 +307,4 @@ export const db = new Proxy(primaryDb, {
 }) as typeof primaryDb;
 
 export * from "./schema";
+export { ensureMtprotoSchema } from "./ensureMtprotoSchema";

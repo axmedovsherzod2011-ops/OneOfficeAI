@@ -11,6 +11,7 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
+import { ensureMtprotoSchema } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -25,6 +26,15 @@ const port = Number(rawPort);
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
+
+// Creates the telegram_mtproto_* tables/columns if they don't exist yet.
+// See lib/db/src/ensureMtprotoSchema.ts for why this runs here instead of
+// `drizzle-kit push` (no shell access into this deployment to run it by
+// hand). Awaited before listen() so the very first request never races a
+// half-created schema; it's a fast no-op on every boot after the first.
+await ensureMtprotoSchema().catch((err) => {
+  logger.error({ err }, "ensureMtprotoSchema failed — mtproto routes will 500 until this is fixed");
+});
 
 app.listen(port, (err) => {
   if (err) {
