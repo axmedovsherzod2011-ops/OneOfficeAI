@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import {
   usersTable,
   telegramChannelsTable,
+  postsTable,
 } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
 import { getBotToken } from "../telegram/bot";
@@ -41,6 +42,14 @@ type PublishBody = {
   text: string;
   imageUrl?: string;
   imageUrls?: string[];
+  // Optional — used only to populate posts.name / posts.price so this
+  // publish shows up in MTProto stats (views are looked up by joining on
+  // posts.telegramMessageId, see telegram-mtproto/stats.ts). Falls back to
+  // sensible defaults when the caller doesn't have a product on hand.
+  productId?: number;
+  name?: string;
+  price?: string;
+  category?: string;
 };
 
 function parsePublishBody(body: unknown): PublishBody | { error: string } {
@@ -81,12 +90,22 @@ function parsePublishBody(body: unknown): PublishBody | { error: string } {
     imageUrl = b.imageUrl;
   }
 
+  const productId = typeof b.productId === "number" ? b.productId : undefined;
+  const name = typeof b.name === "string" && b.name.trim() ? b.name : undefined;
+  const price = typeof b.price === "string" && b.price.trim() ? b.price : undefined;
+  const category =
+    typeof b.category === "string" && b.category.trim() ? b.category : undefined;
+
   return {
     userId: b.userId,
     channelId: b.channelId,
     text: b.text,
     imageUrl,
     imageUrls,
+    productId,
+    name,
+    price,
+    category,
   };
 }
 
@@ -293,6 +312,10 @@ router.post("/publish", async (req, res) => {
     text,
     imageUrl,
     imageUrls,
+    productId,
+    name,
+    price,
+    category,
   } = parsed;
 
   // imageUrls (multi-select) takes precedence when present; otherwise fall
@@ -388,6 +411,28 @@ router.post("/publish", async (req, res) => {
   // In-memory only (never the database) — lets the live stats endpoint
   // read this post's current view count on demand. See telegram/postTracker.ts.
   trackPublishedPost(telegramChannelRowId, telegramMessageId);
+
+  // Persisted row — this is what telegram-mtproto/stats.ts joins on
+  // (postsTable.telegramChannelId + telegramMessageId) to fetch real view
+  // counts. Without this row the MTProto dashboard has nothing to look up
+  // and always reports 0 views, even once a session is connected.
+  try {
+    await db.insert(postsTable).values({
+      userId,
+      telegramChannelId: telegramChannelRowId,
+      productId,
+      name: name ?? text.slice(0, 80),
+      price: price ?? "0",
+      category: category ?? "Electronics",
+      status: "Published",
+      telegramMessageId: telegramMessageId ?? null,
+      platform: "telegram",
+    });
+  } catch (err) {
+    // Never fail the publish because of the analytics write — the message
+    // already went out to Telegram successfully.
+    console.error("[publish] Failed to record post row:", err);
+  }
 
   res.json({ success: true, messageId: telegramMessageId ?? 0 });
 });

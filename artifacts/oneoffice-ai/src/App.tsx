@@ -4368,6 +4368,7 @@ function Publishing({
   form,
   enrichData,
   selectedImages,
+  productId,
   onDone,
   onError,
 }: any) {
@@ -4398,6 +4399,11 @@ function Publishing({
               channelId,
               text: postText,
               ...(imageUrls.length ? { imageUrls } : {}),
+              ...(form?.name ? { name: form.name } : {}),
+              ...(form?.price
+                ? { price: `${form.price}${form.currency ? " " + form.currency : ""}` }
+                : {}),
+              ...(productId ? { productId } : {}),
             },
           });
           if (mounted.current) setDoneCount((n) => n + 1);
@@ -5638,6 +5644,7 @@ function AppShell() {
                 form={form}
                 enrichData={enrichData}
                 selectedImages={selectedImages}
+                productId={selectedProduct?.id}
                 onDone={handlePublishDone}
                 onError={handlePublishError}
               />
