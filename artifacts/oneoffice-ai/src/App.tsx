@@ -374,6 +374,16 @@ const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
   { key: "monthly", label: "Oylar bo'yicha" },
 ];
 
+// Mirrors the backend's period -> daysBack mapping (telegramMtproto.ts /
+// connectors.ts) so the chart's date axis always spans exactly the same
+// window the snapshots were queried for.
+const PERIOD_DAYS: Record<PeriodKey, number> = {
+  hourly: 1,
+  daily: 30,
+  weekly: 42,
+  monthly: 365,
+};
+
 function ChartTooltip({ active, payload, label, metricLabel }: any) {
   if (!active || !payload?.length) return null;
   return (
@@ -392,14 +402,28 @@ function ChartTooltip({ active, payload, label, metricLabel }: any) {
   );
 }
 
-// Real snapshot data only — no synthetic/demo fallback of any kind. When
-// there isn't yet enough real history, the chart renders an explicit empty
-// state (see ChannelStatsChart) instead of a fabricated curve.
+// Real snapshot data only — no synthetic/demo fallback of any kind. But once
+// there's at least one real snapshot (i.e. a post has actually gone out),
+// we pad the rest of the selected period's date range with explicit 0s
+// rather than showing an empty state — a brand-new channel's chart should
+// read as "flat at zero, then a real jump", not "no data" for a period that
+// legitimately had zero activity. Still returns [] when there's truly no
+// history yet, so the empty state stays for that case.
 function chartDataFor(
-  snapshots?: { date: string; value: number }[],
+  snapshots: { date: string; value: number }[] | undefined,
+  daysBack: number,
 ): { label: string; value: number }[] {
-  if (!snapshots || snapshots.length < 2) return [];
-  return snapshots.map((s) => ({ label: s.date.slice(5), value: s.value }));
+  if (!snapshots || snapshots.length === 0) return [];
+  const byDate = new Map(snapshots.map((s) => [s.date, s.value]));
+  const today = new Date();
+  const days: { label: string; value: number }[] = [];
+  for (let i = daysBack; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    days.push({ label: dateStr.slice(5), value: byDate.get(dateStr) ?? 0 });
+  }
+  return days;
 }
 
 // First-vs-last snapshot in the selected period, as a percent — the
@@ -438,7 +462,7 @@ function ChannelStatsChart({
   const [pickerOpen, setPickerOpen] = useState(false);
   const cfg = LIVE_METRIC_CONFIG[metric];
   const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
-  const chartData = chartDataFor(snapshots);
+  const chartData = chartDataFor(snapshots, PERIOD_DAYS[period]);
   const hasRealHistory = chartData.length > 0;
   const gradientId = `mountain-${metric}`;
   const headline =
