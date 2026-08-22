@@ -244,7 +244,11 @@ export async function getParityHistory(
 // ---------------------------------------------------------------------------
 
 export interface MtprotoChannelLiveStats {
-  channelRowId: number;
+  // null for a channel the MTProto account administers but that was never
+  // connected through the bot flow — there's no telegram_channels row (and
+  // therefore no posts to join on), so it can contribute to the totals but
+  // not to per-post view tracking or historical snapshots (see below).
+  channelRowId: number | null;
   channelTitle: string;
   subscribers: number | null;
   views: number | null;
@@ -276,10 +280,6 @@ export async function getMtprotoLiveStatsForUser(userId: number): Promise<LiveSt
     .from(telegramChannelsTable)
     .where(and(eq(telegramChannelsTable.userId, userId), eq(telegramChannelsTable.isActive, true)));
 
-  if (channels.length === 0) {
-    return { status: "ok", totalSubscribers: 0, totalViews: 0, channels: [] };
-  }
-
   const client = await createMtprotoClient(decryptSessionString(account.sessionEncrypted));
   try {
     const dialogs = await client.getDialogs({});
@@ -291,9 +291,11 @@ export async function getMtprotoLiveStatsForUser(userId: number): Promise<LiveSt
 
     const results: MtprotoChannelLiveStats[] = [];
     const today = new Date().toISOString().slice(0, 10);
+    const matchedTargetIds = new Set<string>();
 
     for (const channel of channels) {
       const targetId = botChannelIdToMtprotoId(channel.channelId);
+      matchedTargetIds.add(targetId);
       const entity = entityById.get(targetId);
       const subscribers = entity?.participantsCount ?? null;
 
@@ -375,6 +377,30 @@ export async function getMtprotoLiveStatsForUser(userId: number): Promise<LiveSt
       } catch (err) {
         console.warn("[mtproto snapshot] upsert failed (non-fatal):", err);
       }
+    }
+
+    // Channels the MTProto account administers (owns, or has admin rights
+    // on) but that were never connected through the bot flow — these have
+    // no telegram_channels row, so they were previously invisible to every
+    // dashboard total even though the Connectors page (via
+    // discovery.ts:listAdminChannels, the same admin-rights check below)
+    // already lists them with a live member count. They can't be tracked
+    // for per-post views or historical snapshots (no row to join posts or
+    // snapshots against), but their subscriber count belongs in the totals
+    // — same "channel the account controls" as a bot-connected one, just
+    // without the bot flow.
+    for (const entity of entityById.values()) {
+      if (!entity.broadcast) continue;
+      if (matchedTargetIds.has(entity.id.toString())) continue;
+      const canAdminister = Boolean(entity.creator) || Boolean(entity.adminRights);
+      if (!canAdminister) continue;
+
+      results.push({
+        channelRowId: null,
+        channelTitle: entity.title,
+        subscribers: entity.participantsCount ?? null,
+        views: null,
+      });
     }
 
     await db

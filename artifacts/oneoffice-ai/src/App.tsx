@@ -3361,13 +3361,51 @@ function ChannelBreakdownList({
   mtprotoConnected,
 }: {
   botChannels?: { id: number; channelTitle: string; subscribers: number | null }[];
-  mtprotoChannels?: { channelRowId: number; views: number | null }[];
+  mtprotoChannels?: {
+    channelRowId: number | null;
+    channelTitle: string;
+    subscribers: number | null;
+    views: number | null;
+  }[];
   mtprotoConnected: boolean;
 }) {
   const viewsByChannel = new Map(
-    (mtprotoChannels ?? []).map((c) => [c.channelRowId, c.views]),
+    (mtprotoChannels ?? [])
+      .filter((c) => c.channelRowId !== null)
+      .map((c) => [c.channelRowId as number, c.views]),
   );
-  const rows = botChannels ?? [];
+
+  type Row = {
+    key: string;
+    title: string;
+    subscribers: number | null;
+    views: number | null;
+    botConnected: boolean;
+  };
+
+  const botRows: Row[] = (botChannels ?? []).map((ch) => ({
+    key: `bot-${ch.id}`,
+    title: ch.channelTitle,
+    subscribers: ch.subscribers,
+    views: viewsByChannel.get(ch.id) ?? null,
+    botConnected: true,
+  }));
+
+  // Channels the MTProto account administers but that were never connected
+  // through the bot (channelRowId === null, see stats.ts) — they have no
+  // telegram_channels row, so no per-post view tracking, but their live
+  // subscriber count is real and belongs in this list too.
+  const mtprotoOnlyRows: Row[] = (mtprotoChannels ?? [])
+    .filter((c) => c.channelRowId === null)
+    .map((c, i) => ({
+      key: `mtproto-${i}-${c.channelTitle}`,
+      title: c.channelTitle,
+      subscribers: c.subscribers,
+      views: null,
+      botConnected: false,
+    }));
+
+  const rows = [...botRows, ...mtprotoOnlyRows];
 
   if (rows.length === 0) {
     return null;
@@ -3382,33 +3420,32 @@ function ChannelBreakdownList({
       <div className="space-y-2">
         {rows
           .slice()
-          .sort(
-            (a: { id: number }, b: { id: number }) =>
-              (viewsByChannel.get(b.id) ?? -1) - (viewsByChannel.get(a.id) ?? -1),
-          )
-          .map((ch: { id: number; channelTitle: string; subscribers: number | null }) => {
-            const views = viewsByChannel.get(ch.id);
-            return (
-              <div
-                key={ch.id}
-                className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3"
-              >
+          .sort((a, b) => (b.views ?? -1) - (a.views ?? -1))
+          .map((ch) => (
+            <div
+              key={ch.key}
+              className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3"
+            >
+              <div className="min-w-0">
                 <p className="text-sm text-white font-medium truncate">
-                  {ch.channelTitle}
+                  {ch.title}
                 </p>
-                <div className="flex items-center gap-4 shrink-0 text-xs">
-                  <span className="flex items-center gap-1.5 text-slate-300">
-                    <Users className="h-3.5 w-3.5 text-cyan-400" />
-                    {ch.subscribers !== null ? ch.subscribers.toLocaleString() : "—"}
-                  </span>
-                  <span className="flex items-center gap-1.5 text-slate-300">
-                    <Eye className="h-3.5 w-3.5 text-violet-400" />
-                    {mtprotoConnected && views != null ? views.toLocaleString() : "—"}
-                  </span>
-                </div>
+                {!ch.botConnected && (
+                  <p className="text-[10px] text-slate-500">MTProto orqali</p>
+                )}
               </div>
-            );
-          })}
+              <div className="flex items-center gap-4 shrink-0 text-xs">
+                <span className="flex items-center gap-1.5 text-slate-300">
+                  <Users className="h-3.5 w-3.5 text-cyan-400" />
+                  {ch.subscribers !== null ? ch.subscribers.toLocaleString() : "—"}
+                </span>
+                <span className="flex items-center gap-1.5 text-slate-300">
+                  <Eye className="h-3.5 w-3.5 text-violet-400" />
+                  {mtprotoConnected && ch.views != null ? ch.views.toLocaleString() : "—"}
+                </span>
+              </div>
+            </div>
+          ))}
       </div>
       {!mtprotoConnected && (
         <p className="text-[11px] text-slate-500 mt-3">
@@ -3470,6 +3507,14 @@ function Dashboard({ goCreate, user }: any) {
         (b.views ?? 0) - (a.views ?? 0),
     )[0];
 
+  // Once MTProto is connected, its channel list is the full picture — bot-
+  // connected channels (matched) plus channels the account administers but
+  // never bot-connected (see stats.ts) — so it's the more complete total.
+  // Bot API's count only ever covers bot-connected channels.
+  const totalSubscribers = mtprotoConnected && mtprotoLive
+    ? mtprotoLive.totalSubscribers
+    : data?.totalSubscribers;
+
   return (
     <div className="p-6 md:p-10 space-y-8">
       {!mtprotoConnected && (
@@ -3488,7 +3533,7 @@ function Dashboard({ goCreate, user }: any) {
       )}
 
       <DashboardSummaryCards
-        totalSubscribers={data?.totalSubscribers}
+        totalSubscribers={totalSubscribers}
         totalViews={mtprotoLive?.totalViews}
         viewsKnown={mtprotoConnected}
         topChannel={topChannel ? { title: topChannel.channelTitle, views: topChannel.views ?? 0 } : null}
@@ -3506,8 +3551,8 @@ function Dashboard({ goCreate, user }: any) {
         />
         <ChannelStatsChart
           metric="subscribers"
-          currentValue={data?.totalSubscribers}
-          isLive={Boolean(data)}
+          currentValue={totalSubscribers}
+          isLive={Boolean(data) || (mtprotoConnected && Boolean(mtprotoLive))}
           isLoading={isLoading}
           snapshots={subscribersSnapshots}
           period={subscribersPeriod}

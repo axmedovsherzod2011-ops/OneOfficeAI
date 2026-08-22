@@ -122,7 +122,9 @@ export function useListTelegramMtprotoChannels(options?: { enabled?: boolean }) 
 // --- live stats + history (the real "views" source, see stats.ts) --------
 
 export type MtprotoChannelLiveStats = {
-  channelRowId: number;
+  // null for a channel the MTProto account administers but that isn't
+  // connected through the bot flow — see stats.ts for why.
+  channelRowId: number | null;
   channelTitle: string;
   subscribers: number | null;
   views: number | null;
