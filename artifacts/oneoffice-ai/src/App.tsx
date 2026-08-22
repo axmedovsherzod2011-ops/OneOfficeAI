@@ -69,6 +69,9 @@ import {
   Instagram,
   Youtube,
   RefreshCw,
+  Users,
+  TrendingDown,
+  Layers,
 } from "lucide-react";
 
 import {
@@ -397,6 +400,22 @@ function chartDataFor(
   return snapshots.map((s) => ({ label: s.date.slice(5), value: s.value }));
 }
 
+// First-vs-last snapshot in the selected period, as a percent — the
+// "+3.2% shu hafta" badge next to a chart's headline. Real snapshots only,
+// same as chartDataFor; returns null when there isn't enough real history
+// yet rather than showing a misleading 0%.
+function growthFor(
+  snapshots?: { date: string; value: number }[],
+): { percent: number; direction: "up" | "down" | "flat" } | null {
+  if (!snapshots || snapshots.length < 2) return null;
+  const first = snapshots[0].value;
+  const last = snapshots[snapshots.length - 1].value;
+  if (first === 0) return last === 0 ? { percent: 0, direction: "flat" } : null;
+  const percent = ((last - first) / first) * 100;
+  const direction = percent > 0.05 ? "up" : percent < -0.05 ? "down" : "flat";
+  return { percent, direction };
+}
+
 function ChannelStatsChart({
   metric,
   currentValue,
@@ -422,6 +441,7 @@ function ChannelStatsChart({
   const gradientId = `mountain-${metric}`;
   const headline =
     currentValue === undefined ? (isLoading ? "…" : "—") : currentValue.toLocaleString();
+  const growth = growthFor(snapshots);
 
   return (
     <Glass className="p-6">
@@ -470,7 +490,7 @@ function ChannelStatsChart({
         </div>
       </div>
 
-      <div className="flex items-baseline gap-2 mb-4">
+      <div className="flex items-baseline gap-2 mb-4 flex-wrap">
         <span className="text-2xl font-bold text-white">{headline}</span>
         <span className="flex items-center gap-1.5 text-xs text-slate-400">
           <span
@@ -479,6 +499,23 @@ function ChannelStatsChart({
           />
           {cfg.label}
         </span>
+        {growth && growth.direction !== "flat" && (
+          <span
+            className={`flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 ${
+              growth.direction === "up"
+                ? "text-emerald-400 bg-emerald-500/10"
+                : "text-rose-400 bg-rose-500/10"
+            }`}
+          >
+            {growth.direction === "up" ? (
+              <TrendingUp className="h-3 w-3" />
+            ) : (
+              <TrendingDown className="h-3 w-3" />
+            )}
+            {growth.percent > 0 ? "+" : ""}
+            {growth.percent.toFixed(1)}% ({currentLabel.toLowerCase()})
+          </span>
+        )}
       </div>
 
       <div className="h-56 -ml-2">
@@ -3125,6 +3162,145 @@ function InventoryPage({
 // DASHBOARD
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SUMMARY CARDS — four top-line numbers computed entirely from data the
+// two live-stats queries already fetch (no extra requests): total
+// subscribers, total views, an engagement ratio (views per subscriber),
+// and which connected channel is pulling the most views right now.
+// ---------------------------------------------------------------------------
+function DashboardSummaryCards({
+  totalSubscribers,
+  totalViews,
+  viewsKnown,
+  topChannel,
+}: {
+  totalSubscribers?: number;
+  totalViews?: number;
+  viewsKnown: boolean;
+  topChannel?: { title: string; views: number } | null;
+}) {
+  const engagement =
+    viewsKnown && totalViews !== undefined && totalSubscribers
+      ? totalViews / totalSubscribers
+      : null;
+
+  const cards = [
+    {
+      icon: Users,
+      color: "#22d3ee",
+      label: "Jami obunachilar",
+      value: totalSubscribers !== undefined ? totalSubscribers.toLocaleString() : "—",
+    },
+    {
+      icon: Eye,
+      color: "#a78bfa",
+      label: "Jami ko'rishlar",
+      value: viewsKnown && totalViews !== undefined ? totalViews.toLocaleString() : "—",
+    },
+    {
+      icon: BarChart3,
+      color: "#34d399",
+      label: "O'rtacha ko'rish / obunachi",
+      value: engagement !== null ? engagement.toFixed(2) : "—",
+    },
+    {
+      icon: Layers,
+      color: "#fbbf24",
+      label: "Eng faol kanal",
+      value: topChannel ? topChannel.title : "—",
+      sub: topChannel ? `${topChannel.views.toLocaleString()} ko'rish` : undefined,
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {cards.map((c) => (
+        <Glass key={c.label} className="p-4">
+          <div
+            className="h-9 w-9 rounded-xl flex items-center justify-center mb-3"
+            style={{ backgroundColor: `${c.color}1a` }}
+          >
+            <c.icon className="h-4 w-4" style={{ color: c.color }} />
+          </div>
+          <p className="text-lg font-bold text-white truncate">{c.value}</p>
+          <p className="text-xs text-slate-400 mt-0.5">{c.label}</p>
+          {c.sub && <p className="text-[11px] text-slate-500 mt-0.5">{c.sub}</p>}
+        </Glass>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PER-CHANNEL BREAKDOWN — merges the bot_api channel list (always present,
+// subscribers only) with the mtproto channel list (subscribers + real
+// views, once connected) by row id, so each connected channel gets one
+// line with both numbers side by side instead of only an aggregate total.
+// ---------------------------------------------------------------------------
+function ChannelBreakdownList({
+  botChannels,
+  mtprotoChannels,
+  mtprotoConnected,
+}: {
+  botChannels?: { id: number; channelTitle: string; subscribers: number | null }[];
+  mtprotoChannels?: { channelRowId: number; views: number | null }[];
+  mtprotoConnected: boolean;
+}) {
+  const viewsByChannel = new Map(
+    (mtprotoChannels ?? []).map((c) => [c.channelRowId, c.views]),
+  );
+  const rows = botChannels ?? [];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-center gap-2 mb-4">
+        <Radio className="h-4 w-4 text-violet-400" />
+        <h3 className="text-white font-semibold">Kanallar bo'yicha statistika</h3>
+      </div>
+      <div className="space-y-2">
+        {rows
+          .slice()
+          .sort(
+            (a: { id: number }, b: { id: number }) =>
+              (viewsByChannel.get(b.id) ?? -1) - (viewsByChannel.get(a.id) ?? -1),
+          )
+          .map((ch: { id: number; channelTitle: string; subscribers: number | null }) => {
+            const views = viewsByChannel.get(ch.id);
+            return (
+              <div
+                key={ch.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3"
+              >
+                <p className="text-sm text-white font-medium truncate">
+                  {ch.channelTitle}
+                </p>
+                <div className="flex items-center gap-4 shrink-0 text-xs">
+                  <span className="flex items-center gap-1.5 text-slate-300">
+                    <Users className="h-3.5 w-3.5 text-cyan-400" />
+                    {ch.subscribers !== null ? ch.subscribers.toLocaleString() : "—"}
+                  </span>
+                  <span className="flex items-center gap-1.5 text-slate-300">
+                    <Eye className="h-3.5 w-3.5 text-violet-400" />
+                    {mtprotoConnected && views != null ? views.toLocaleString() : "—"}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+      </div>
+      {!mtprotoConnected && (
+        <p className="text-[11px] text-slate-500 mt-3">
+          Har bir kanal bo'yicha real ko'rishlar sonini ko'rish uchun MTProto'ni ulang.
+        </p>
+      )}
+    </Glass>
+  );
+}
+
 function Dashboard({ goCreate, user }: any) {
   void goCreate;
   void user;
@@ -3169,6 +3345,13 @@ function Dashboard({ goCreate, user }: any) {
     value: s.subscribers,
   }));
 
+  const topChannel = (mtprotoLive?.channels ?? [])
+    .filter((c: { views: number | null }) => c.views != null)
+    .sort(
+      (a: { views: number | null }, b: { views: number | null }) =>
+        (b.views ?? 0) - (a.views ?? 0),
+    )[0];
+
   return (
     <div className="p-6 md:p-10 space-y-8">
       {!mtprotoConnected && (
@@ -3185,6 +3368,14 @@ function Dashboard({ goCreate, user }: any) {
           </div>
         </Glass>
       )}
+
+      <DashboardSummaryCards
+        totalSubscribers={data?.totalSubscribers}
+        totalViews={mtprotoLive?.totalViews}
+        viewsKnown={mtprotoConnected}
+        topChannel={topChannel ? { title: topChannel.channelTitle, views: topChannel.views ?? 0 } : null}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <ChannelStatsChart
           metric="views"
@@ -3205,6 +3396,12 @@ function Dashboard({ goCreate, user }: any) {
           onPeriodChange={setSubscribersPeriod}
         />
       </div>
+
+      <ChannelBreakdownList
+        botChannels={data?.channels}
+        mtprotoChannels={mtprotoLive?.channels}
+        mtprotoConnected={mtprotoConnected}
+      />
     </div>
   );
 }
