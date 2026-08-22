@@ -402,6 +402,30 @@ function ChartTooltip({ active, payload, label, metricLabel }: any) {
   );
 }
 
+const UZ_MONTH_SHORT = [
+  "Yan", "Fev", "Mar", "Apr", "May", "Iyun",
+  "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek",
+];
+
+// Builds one row per calendar day across the selected period's window,
+// filling gaps with 0 (see chartDataFor's comment for why).
+function buildDailySeries(
+  snapshots: { date: string; value: number }[] | undefined,
+  daysBack: number,
+): { date: string; value: number }[] {
+  if (!snapshots || snapshots.length === 0) return [];
+  const byDate = new Map(snapshots.map((s) => [s.date, s.value]));
+  const today = new Date();
+  const days: { date: string; value: number }[] = [];
+  for (let i = daysBack; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    days.push({ date: dateStr, value: byDate.get(dateStr) ?? 0 });
+  }
+  return days;
+}
+
 // Real snapshot data only — no synthetic/demo fallback of any kind. But once
 // there's at least one real snapshot (i.e. a post has actually gone out),
 // we pad the rest of the selected period's date range with explicit 0s
@@ -409,21 +433,50 @@ function ChartTooltip({ active, payload, label, metricLabel }: any) {
 // read as "flat at zero, then a real jump", not "no data" for a period that
 // legitimately had zero activity. Still returns [] when there's truly no
 // history yet, so the empty state stays for that case.
+//
+// Labels/grouping adapt to the selected period rather than always showing
+// one point per calendar day: weekly buckets 7 days into one point (label =
+// the week's last date), monthly buckets by calendar month (label = short
+// Uzbek month name). Bucket value is the max seen in that bucket — these
+// are point-in-time counters (subscriber/view totals), not deltas, so a
+// gap day padded to 0 should never pull a bucket's value back down.
 function chartDataFor(
   snapshots: { date: string; value: number }[] | undefined,
-  daysBack: number,
+  period: PeriodKey,
 ): { label: string; value: number }[] {
-  if (!snapshots || snapshots.length === 0) return [];
-  const byDate = new Map(snapshots.map((s) => [s.date, s.value]));
-  const today = new Date();
-  const days: { label: string; value: number }[] = [];
-  for (let i = daysBack; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
-    days.push({ label: dateStr.slice(5), value: byDate.get(dateStr) ?? 0 });
+  const daily = buildDailySeries(snapshots, PERIOD_DAYS[period]);
+  if (daily.length === 0) return [];
+
+  if (period === "weekly") {
+    const buckets: { label: string; value: number }[] = [];
+    for (let i = 0; i < daily.length; i += 7) {
+      const chunk = daily.slice(i, i + 7);
+      if (chunk.length === 0) continue;
+      buckets.push({
+        label: chunk[chunk.length - 1].date.slice(5),
+        value: Math.max(...chunk.map((c) => c.value)),
+      });
+    }
+    return buckets;
   }
-  return days;
+
+  if (period === "monthly") {
+    const byMonth = new Map<string, number>();
+    for (const d of daily) {
+      const key = d.date.slice(0, 7); // "YYYY-MM"
+      byMonth.set(key, Math.max(byMonth.get(key) ?? 0, d.value));
+    }
+    return Array.from(byMonth.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => {
+        const monthIdx = Number(key.slice(5, 7)) - 1;
+        return { label: UZ_MONTH_SHORT[monthIdx] ?? key.slice(5), value };
+      });
+  }
+
+  // "daily" and "hourly" — one point per calendar day (the backend has no
+  // sub-day granularity yet, so "hourly" still resolves to a 1-day window).
+  return daily.map((d) => ({ label: d.date.slice(5), value: d.value }));
 }
 
 // First-vs-last snapshot in the selected period, as a percent — the
@@ -462,7 +515,7 @@ function ChannelStatsChart({
   const [pickerOpen, setPickerOpen] = useState(false);
   const cfg = LIVE_METRIC_CONFIG[metric];
   const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
-  const chartData = chartDataFor(snapshots, PERIOD_DAYS[period]);
+  const chartData = chartDataFor(snapshots, period);
   const hasRealHistory = chartData.length > 0;
   const gradientId = `mountain-${metric}`;
   const headline =
