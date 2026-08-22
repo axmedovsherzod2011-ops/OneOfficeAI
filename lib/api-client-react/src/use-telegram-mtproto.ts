@@ -28,10 +28,31 @@ export function useGetTelegramMtprotoStatus(options?: { refetchInterval?: number
 
 // --- auth flow -------------------------------------------------------------
 
+export type CodeDeliveryMethod = "app" | "sms" | "call" | "flash_call" | "other";
+
 export function useTelegramMtprotoSendCode() {
-  return useMutation<{ pendingId: number }, Error, { phoneNumber: string }>({
+  return useMutation<
+    { pendingId: number; deliveryMethod: CodeDeliveryMethod },
+    Error,
+    { phoneNumber: string }
+  >({
     mutationFn: (data) =>
       customFetch("/api/telegram-mtproto/send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+  });
+}
+
+export function useTelegramMtprotoResendCode() {
+  return useMutation<
+    { deliveryMethod: CodeDeliveryMethod },
+    Error,
+    { pendingId: number; phoneNumber: string }
+  >({
+    mutationFn: (data) =>
+      customFetch("/api/telegram-mtproto/resend-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),

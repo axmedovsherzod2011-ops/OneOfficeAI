@@ -97,6 +97,7 @@ import {
   useGetTelegramMtprotoStatus,
   useListTelegramMtprotoChannels,
   useTelegramMtprotoSendCode,
+  useTelegramMtprotoResendCode,
   useTelegramMtprotoVerifyCode,
   useTelegramMtprotoVerifyPassword,
   useTelegramMtprotoLogout,
@@ -1528,6 +1529,7 @@ function TelegramMtprotoConnectorCard() {
     enabled: Boolean(status?.connected),
   });
   const sendCode = useTelegramMtprotoSendCode();
+  const resendCode = useTelegramMtprotoResendCode();
   const verifyCode = useTelegramMtprotoVerifyCode();
   const verifyPassword = useTelegramMtprotoVerifyPassword();
   const logout = useTelegramMtprotoLogout();
@@ -1538,6 +1540,10 @@ function TelegramMtprotoConnectorCard() {
   const [password, setPassword] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [deliveryMethod, setDeliveryMethod] = useState<
+    "app" | "sms" | "call" | "flash_call" | "other" | null
+  >(null);
+  const [resendNotice, setResendNotice] = useState("");
 
   function resetFlow() {
     setStep("idle");
@@ -1545,6 +1551,8 @@ function TelegramMtprotoConnectorCard() {
     setPassword("");
     setPendingId(null);
     setError("");
+    setDeliveryMethod(null);
+    setResendNotice("");
   }
 
   async function handleSendCode() {
@@ -1552,9 +1560,23 @@ function TelegramMtprotoConnectorCard() {
     try {
       const result = await sendCode.mutateAsync({ phoneNumber: phone.trim() });
       setPendingId(result.pendingId);
+      setDeliveryMethod(result.deliveryMethod);
       setStep("code");
     } catch (err: any) {
       setError(err?.data?.error || "Kod yuborilmadi. Raqamni tekshirib qayta urining.");
+    }
+  }
+
+  async function handleResendCode() {
+    if (!pendingId) return;
+    setError("");
+    setResendNotice("");
+    try {
+      const result = await resendCode.mutateAsync({ pendingId, phoneNumber: phone.trim() });
+      setDeliveryMethod(result.deliveryMethod);
+      setResendNotice("Kod qayta yuborildi.");
+    } catch (err: any) {
+      setError(err?.data?.error || "Kod qayta yuborilmadi.");
     }
   }
 
@@ -1724,6 +1746,15 @@ function TelegramMtprotoConnectorCard() {
           )}
           {step === "code" && (
             <>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                {deliveryMethod === "app" &&
+                  "Kod Telegram ilovasining o'zidagi \"Telegram\" nomli tizim chat'iga yuborildi — ilovani oching va o'sha yerdan qarang (SMS emas)."}
+                {deliveryMethod === "sms" && "Kod SMS orqali yuborildi."}
+                {(deliveryMethod === "call" || deliveryMethod === "flash_call") &&
+                  "Kod telefon qo'ng'irog'i orqali yuboriladi/yuborildi."}
+                {(deliveryMethod === "other" || !deliveryMethod) &&
+                  "Telegram tanlagan usul bilan kod yuborildi."}
+              </p>
               <input
                 type="text"
                 inputMode="numeric"
@@ -1732,7 +1763,7 @@ function TelegramMtprotoConnectorCard() {
                 onChange={(e) => setCode(e.target.value)}
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
               />
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center flex-wrap">
                 <button
                   onClick={handleVerifyCode}
                   disabled={busy || !code.trim()}
@@ -1748,6 +1779,15 @@ function TelegramMtprotoConnectorCard() {
                   Bekor qilish
                 </button>
               </div>
+              <button
+                onClick={handleResendCode}
+                disabled={resendCode.isPending}
+                className="flex items-center gap-1.5 text-violet-300 text-xs hover:text-violet-200 disabled:opacity-40 transition"
+              >
+                {resendCode.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                Kod kelmadimi? Boshqa usul bilan yuborish
+              </button>
+              {resendNotice && <p className="text-emerald-300 text-xs">{resendNotice}</p>}
             </>
           )}
           {step === "password" && (

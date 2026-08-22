@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { isMtprotoConfigured } from "../telegram-mtproto/client";
 import {
   sendCode,
+  resendCode,
   verifyCode,
   verifyPassword,
   revoke,
@@ -133,7 +134,29 @@ router.post(
       res.status(400).json({ error: result.message });
       return;
     }
-    res.json({ pendingId: result.pendingId });
+    res.json({ pendingId: result.pendingId, deliveryMethod: result.deliveryMethod });
+  }),
+);
+
+router.post(
+  "/telegram-mtproto/resend-code",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const pendingId = Number(req.body?.pendingId);
+    const phone = String(req.body?.phoneNumber ?? "").trim();
+    if (!pendingId || !phone) {
+      res.status(400).json({ error: "Ma'lumotlar to'liq emas." });
+      return;
+    }
+
+    const result = await resendCode(userId, pendingId, phone);
+    if (result.status === "error") {
+      res.status(400).json({ error: result.message });
+      return;
+    }
+    res.json({ deliveryMethod: result.deliveryMethod });
   }),
 );
 

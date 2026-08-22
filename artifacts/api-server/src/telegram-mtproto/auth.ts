@@ -33,8 +33,32 @@ async function cleanupExpiredPending(): Promise<void> {
   }
 }
 
+// Which channel Telegram actually used to deliver the code — surfaced to
+// the UI so the person knows where to look (its own "Telegram" system chat
+// vs SMS vs a phone call) instead of guessing.
+export type CodeDeliveryMethod = "app" | "sms" | "call" | "flash_call" | "other";
+
+function deliveryMethodFromSentCode(sent: Api.auth.SentCode): CodeDeliveryMethod {
+  const type = sent.type;
+  if (type instanceof Api.auth.SentCodeTypeApp) return "app";
+  if (
+    type instanceof Api.auth.SentCodeTypeSms ||
+    type instanceof Api.auth.SentCodeTypeFragmentSms ||
+    type instanceof Api.auth.SentCodeTypeFirebaseSms ||
+    type instanceof Api.auth.SentCodeTypeSmsWord
+  )
+    return "sms";
+  if (type instanceof Api.auth.SentCodeTypeCall) return "call";
+  if (
+    type instanceof Api.auth.SentCodeTypeFlashCall ||
+    type instanceof Api.auth.SentCodeTypeMissedCall
+  )
+    return "flash_call";
+  return "other";
+}
+
 export type SendCodeResult =
-  | { status: "code_sent"; pendingId: number }
+  | { status: "code_sent"; pendingId: number; deliveryMethod: CodeDeliveryMethod }
   | { status: "error"; message: string };
 
 export async function sendCode(
@@ -58,6 +82,9 @@ export async function sendCode(
       return { status: "error", message: "Kod yuborilmadi. Qayta urinib ko'ring." };
     }
 
+    const deliveryMethod = deliveryMethodFromSentCode(sent);
+    console.log(`[mtproto] code sent via "${sent.type?.className}" (${deliveryMethod})`);
+
     // Session at this point is pre-auth (just DC/connection state) — still
     // encrypted at rest for consistency, even though it carries no login.
     const sessionEncrypted = encryptSessionString(client.session.save() as unknown as string);
@@ -74,7 +101,7 @@ export async function sendCode(
       })
       .returning({ id: telegramMtprotoPendingAuthTable.id });
 
-    return { status: "code_sent", pendingId: row.id };
+    return { status: "code_sent", pendingId: row.id, deliveryMethod };
   } catch (err: any) {
     console.error("[mtproto] sendCode failed", err?.errorMessage ?? err);
     return {
@@ -90,6 +117,65 @@ export type VerifyCodeResult =
   | { status: "authenticated" }
   | { status: "needs_password" }
   | { status: "error"; message: string };
+
+export type ResendCodeResult =
+  | { status: "code_sent"; deliveryMethod: CodeDeliveryMethod }
+  | { status: "error"; message: string };
+
+// Asks Telegram itself for a different delivery method — its own
+// auth.resendCode. Telegram decides the fallback (usually SMS or a call
+// after the in-app message), we don't control which; this is the only
+// legitimate way to change how the code arrives.
+export async function resendCode(
+  userId: number,
+  pendingId: number,
+  phoneNumber: string,
+): Promise<ResendCodeResult> {
+  const [pending] = await db
+    .select()
+    .from(telegramMtprotoPendingAuthTable)
+    .where(eq(telegramMtprotoPendingAuthTable.id, pendingId))
+    .limit(1);
+
+  if (!pending || pending.userId !== userId) {
+    return { status: "error", message: "Sessiya topilmadi. Qaytadan boshlang." };
+  }
+  if (pending.expiresAt < new Date()) {
+    return { status: "error", message: "Muddati tugagan. Qaytadan boshlang." };
+  }
+
+  const sessionString = decryptSessionString(pending.sessionEncrypted);
+  const client = await createMtprotoClient(sessionString);
+  try {
+    const sent = await client.invoke(
+      new Api.auth.ResendCode({
+        phoneNumber,
+        phoneCodeHash: pending.phoneCodeHash,
+      }),
+    );
+    if (!(sent instanceof Api.auth.SentCode)) {
+      return { status: "error", message: "Kod qayta yuborilmadi." };
+    }
+
+    const deliveryMethod = deliveryMethodFromSentCode(sent);
+    console.log(`[mtproto] code resent via "${sent.type?.className}" (${deliveryMethod})`);
+
+    // phoneCodeHash can change on resend — and the client's session state
+    // moved on too, so persist both.
+    const sessionEncrypted = encryptSessionString(client.session.save() as unknown as string);
+    await db
+      .update(telegramMtprotoPendingAuthTable)
+      .set({ phoneCodeHash: sent.phoneCodeHash, sessionEncrypted })
+      .where(eq(telegramMtprotoPendingAuthTable.id, pendingId));
+
+    return { status: "code_sent", deliveryMethod };
+  } catch (err: any) {
+    console.error("[mtproto] resendCode failed", err?.errorMessage ?? err);
+    return { status: "error", message: "Kod qayta yuborilmadi. Birozdan so'ng urinib ko'ring." };
+  } finally {
+    await client.disconnect().catch(() => {});
+  }
+}
 
 export async function verifyCode(
   userId: number,
