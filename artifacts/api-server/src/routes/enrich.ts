@@ -25,8 +25,8 @@ if (
 const geminiAi = process.env.GEMINI_API_KEY
   ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
-const IMAGE_MODEL = "gemini-3.1-flash-image-preview";
-const GEMINI_TEXT_MODEL = "gemini-2.5-flash";
+const IMAGE_MODEL = "gemini-3.1-flash-image";
+const GEMINI_TEXT_MODEL = "gemini-3.6-flash";
 
 // ---------------------------------------------------------------------------
 // Shared helper: fetch an external image's raw bytes, verifying it's really
@@ -94,7 +94,7 @@ async function withRetry<T>(
 // Provider #1: Groq (fastest, free, primary)
 // ---------------------------------------------------------------------------
 
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "openai/gpt-oss-120b";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 interface OpenAiCompatibleResponse {
@@ -143,7 +143,7 @@ async function callGroq(
 // Provider #2: Cerebras (very fast, free, ~14,400 req/day)
 // ---------------------------------------------------------------------------
 
-const CEREBRAS_MODEL = "llama-3.3-70b";
+const CEREBRAS_MODEL = "gpt-oss-120b";
 const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
 
 async function callCerebras(

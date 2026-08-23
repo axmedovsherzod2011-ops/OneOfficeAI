@@ -149,7 +149,7 @@ async function callGroq(
       Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-120b",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
@@ -186,7 +186,7 @@ async function callCerebras(
         Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b",
+        model: "gpt-oss-120b",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -220,7 +220,7 @@ async function callGeminiText(
     : null;
   if (!gemini) throw new Error("GEMINI_API_KEY sozlanmagan");
   const result = await gemini.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.6-flash",
     contents: [{ role: "user", parts: [{ text: userPrompt }] }],
     config: {
       systemInstruction: systemPrompt,
