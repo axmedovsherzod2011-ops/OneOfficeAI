@@ -27,7 +27,7 @@ function botChannelIdToMtprotoId(botChannelId: string): string {
   return botChannelId.startsWith("-100") ? botChannelId.slice(4) : botChannelId;
 }
 
-async function resolveInputChannel(
+export async function resolveInputChannel(
   client: TelegramClient,
   botChannelId: string,
 ): Promise<Api.InputPeerChannel | null> {
