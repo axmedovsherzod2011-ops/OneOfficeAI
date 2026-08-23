@@ -6,6 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 import type { HistoryPeriod } from "./use-telegram-stats-history";
+import { getListTelegramChannelsQueryKey } from "./generated/api";
 
 // --- status --------------------------------------------------------------
 
@@ -116,6 +117,23 @@ export function useListTelegramMtprotoChannels(options?: { enabled?: boolean }) 
     queryFn: ({ signal }) =>
       customFetch("/api/telegram-mtproto/channels", { method: "GET", signal }),
     enabled: options?.enabled ?? true,
+  });
+}
+
+// Turns one discovered channel into a normal telegram_channels row
+// (connectionType: "mtproto") so it shows up in the existing publish
+// picker right alongside bot-connected channels.
+export function useConnectTelegramMtprotoChannel() {
+  const queryClient = useQueryClient();
+  return useMutation<{ channel: unknown }, Error, { mtprotoChannelId: string }>({
+    mutationFn: ({ mtprotoChannelId }) =>
+      customFetch(`/api/telegram-mtproto/channels/${mtprotoChannelId}/connect`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      // Refresh whatever list the publish picker reads from.
+      queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+    },
   });
 }
 
