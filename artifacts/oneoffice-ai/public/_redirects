@@ -1,0 +1,8 @@
+# Cloudflare Pages serves static files first and only falls back to this
+# file when nothing matches. Without it, a direct/hard navigation (or a
+# page refresh) to a client-side route like /store/:slug — anything that
+# isn't a real static asset — 404s before React Router ever loads, since
+# there's no server-side route for it, only the client-side one defined in
+# App.tsx. This sends every non-asset path to index.html so the SPA's own
+# router can take over.
+/*  /index.html  200

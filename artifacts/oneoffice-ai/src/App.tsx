@@ -5894,7 +5894,7 @@ function StorefrontPage({ slug }: { slug: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
@@ -6129,7 +6129,7 @@ function ProductDetailPage({
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
