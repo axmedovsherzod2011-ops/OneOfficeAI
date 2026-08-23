@@ -26,6 +26,7 @@ import {
   User,
   Bell,
   Check,
+  Plus,
   X,
   ChevronRight,
   Image as ImageIcon,
@@ -1645,6 +1646,7 @@ function TelegramMtprotoConnectorCard() {
   });
   const { data: connectedChannels } = useListTelegramChannels();
   const connectChannel = useConnectTelegramMtprotoChannel();
+  const [connectingId, setConnectingId] = useState<string | null>(null);
   const sendCode = useTelegramMtprotoSendCode();
   const resendCode = useTelegramMtprotoResendCode();
   const verifyCode = useTelegramMtprotoVerifyCode();
@@ -1694,6 +1696,19 @@ function TelegramMtprotoConnectorCard() {
       setResendNotice("Kod qayta yuborildi.");
     } catch (err: any) {
       setError(err?.data?.error || "Kod qayta yuborilmadi.");
+    }
+  }
+
+  async function handleConnectChannel(mtprotoChannelId: string) {
+    setConnectingId(mtprotoChannelId);
+    try {
+      await connectChannel.mutateAsync({ mtprotoChannelId });
+    } catch {
+      // Errors here are rare (channel resolution failing server-side) and
+      // not worth a dedicated banner — the button just reverts to "+" and
+      // the person can try again.
+    } finally {
+      setConnectingId(null);
     }
   }
 
@@ -1825,22 +1840,24 @@ function TelegramMtprotoConnectorCard() {
                   </span>
                 )}
                 {connectedChannelIds.has(`-100${c.id}`) ? (
-                  <span className="shrink-0 flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1">
-                    <Check className="h-3 w-3" />
-                    Ulangan
+                  <span
+                    title="Publish uchun ulangan"
+                    className="shrink-0 flex items-center justify-center h-7 w-7 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
+                  >
+                    <Check className="h-3.5 w-3.5" />
                   </span>
                 ) : (
                   <button
-                    onClick={() =>
-                      connectChannel.mutate({ mtprotoChannelId: c.id })
-                    }
-                    disabled={connectChannel.isPending}
-                    className="shrink-0 flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:border-violet-500/40 hover:text-violet-300 transition"
+                    onClick={() => handleConnectChannel(c.id)}
+                    disabled={connectingId === c.id}
+                    title="Publish uchun ulash"
+                    className="shrink-0 flex items-center justify-center h-7 w-7 rounded-full bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 hover:border-violet-500/40 hover:text-violet-300 transition"
                   >
-                    {connectChannel.isPending && (
-                      <Loader2 className="h-3 w-3 animate-spin" />
+                    {connectingId === c.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="h-3.5 w-3.5" />
                     )}
-                    Publish uchun ulash
                   </button>
                 )}
               </div>
@@ -3389,7 +3406,7 @@ function ChannelBreakdownList({
 }: {
   botChannels?: { id: number; channelTitle: string; subscribers: number | null }[];
   mtprotoChannels?: {
-    channelRowId: number | null;
+    channelRowId: number;
     channelTitle: string;
     subscribers: number | null;
     views: number | null;
@@ -3397,42 +3414,15 @@ function ChannelBreakdownList({
   mtprotoConnected: boolean;
 }) {
   const viewsByChannel = new Map(
-    (mtprotoChannels ?? [])
-      .filter((c) => c.channelRowId !== null)
-      .map((c) => [c.channelRowId as number, c.views]),
+    (mtprotoChannels ?? []).map((c) => [c.channelRowId, c.views]),
   );
 
-  type Row = {
-    key: string;
-    title: string;
-    subscribers: number | null;
-    views: number | null;
-    botConnected: boolean;
-  };
-
-  const botRows: Row[] = (botChannels ?? []).map((ch) => ({
+  const rows = (botChannels ?? []).map((ch) => ({
     key: `bot-${ch.id}`,
     title: ch.channelTitle,
     subscribers: ch.subscribers,
     views: viewsByChannel.get(ch.id) ?? null,
-    botConnected: true,
   }));
-
-  // Channels the MTProto account administers but that were never connected
-  // through the bot (channelRowId === null, see stats.ts) — they have no
-  // telegram_channels row, so no per-post view tracking, but their live
-  // subscriber count is real and belongs in this list too.
-  const mtprotoOnlyRows: Row[] = (mtprotoChannels ?? [])
-    .filter((c) => c.channelRowId === null)
-    .map((c, i) => ({
-      key: `mtproto-${i}-${c.channelTitle}`,
-      title: c.channelTitle,
-      subscribers: c.subscribers,
-      views: null,
-      botConnected: false,
-    }));
-
-  const rows = [...botRows, ...mtprotoOnlyRows];
 
   if (rows.length === 0) {
     return null;
@@ -3457,9 +3447,6 @@ function ChannelBreakdownList({
                 <p className="text-sm text-white font-medium truncate">
                   {ch.title}
                 </p>
-                {!ch.botConnected && (
-                  <p className="text-[10px] text-slate-500">MTProto orqali</p>
-                )}
               </div>
               <div className="flex items-center gap-4 shrink-0 text-xs">
                 <span className="flex items-center gap-1.5 text-slate-300">
