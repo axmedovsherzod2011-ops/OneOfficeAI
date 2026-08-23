@@ -142,7 +142,7 @@ export function useConnectTelegramMtprotoChannel() {
 export type MtprotoChannelLiveStats = {
   // null for a channel the MTProto account administers but that isn't
   // connected through the bot flow — see stats.ts for why.
-  channelRowId: number | null;
+  channelRowId: number;
   channelTitle: string;
   subscribers: number | null;
   views: number | null;
