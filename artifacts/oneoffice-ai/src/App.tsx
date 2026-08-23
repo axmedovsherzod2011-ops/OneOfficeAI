@@ -79,8 +79,6 @@ import {
 import {
   useCreateProfile,
   useListTelegramChannels,
-  useGetTelegramConfig,
-  useGetTelegramLink,
   useDisconnectTelegramChannel,
   useGetTelegramLiveStats,
   useGetTelegramStatsHistory,
@@ -1482,171 +1480,69 @@ function CopyField({ value }: { value: string }) {
 // entirely opt-in, whenever they're ready.
 // ---------------------------------------------------------------------------
 
-// Telegram runs through ONE shared OneOffice bot for every user — nobody
-// creates their own bot or types in a token/chat id. Connecting a channel
-// is two taps, both inside Telegram itself:
-//   1) Open the bot via a one-time deep link and press Start — this links
-//      the person's Telegram account to their OneOffice account.
-//   2) Add the bot as administrator to any channel they own — Telegram
-//      notifies the bot the moment that happens, and the backend attaches
-//      the channel automatically. No limit on how many.
-function TelegramConnectorCard() {
-  const queryClient = useQueryClient();
-  const { data: config } = useGetTelegramConfig();
-  const {
-    data: channels,
-    isLoading,
-  } = useListTelegramChannels({
-    // Connecting a channel happens asynchronously (the person does it
-    // inside the Telegram app, then comes back) — a light poll picks it up
-    // without needing a manual refresh.
-    query: { refetchInterval: 5000 },
-  });
-  const { refetch: fetchLink, isFetching: linking } = useGetTelegramLink();
-  const disconnectChannel = useDisconnectTelegramChannel();
-  const [removingId, setRemovingId] = useState<number | null>(null);
-  const [linkError, setLinkError] = useState("");
-
-  const list = channels || [];
-
-  async function handleConnect() {
-    setLinkError("");
-    const result = await fetchLink();
-    if (result.data?.deepLink) {
-      window.open(result.data.deepLink, "_blank", "noopener,noreferrer");
-    } else {
-      setLinkError(
-        (result.error as any)?.data?.error ||
-          "Telegram hozircha ulanmayapti. Birozdan so'ng qayta urinib ko'ring.",
-      );
-    }
-  }
-
-  async function handleDisconnect(id: number) {
-    setRemovingId(id);
-    try {
-      await disconnectChannel.mutateAsync({ id });
-      queryClient.invalidateQueries({
-        queryKey: getListTelegramChannelsQueryKey(),
-      });
-    } finally {
-      setRemovingId(null);
-    }
-  }
-
-  return (
-    <Glass className="p-6">
-      <div className="flex items-start justify-between gap-4 mb-1">
-        <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
-            <Send className="h-5 w-5 text-blue-400" />
-          </div>
-          <div>
-            <h3 className="text-white font-semibold">Telegram</h3>
-            <p className="text-slate-500 text-xs mt-0.5">
-              {list.length} ta kanal ulangan
-            </p>
-          </div>
-        </div>
-        <button
-          data-testid="button-connect-telegram"
-          onClick={handleConnect}
-          disabled={linking || !config?.configured}
-          title={!config?.configured ? "Telegram hali serverda sozlanmagan" : ""}
-          className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
-        >
-          {linking ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Link2 className="h-3.5 w-3.5" />
-          )}
-          Ulash
-        </button>
-      </div>
-
-      {config && !config.configured && (
-        <p className="text-amber-300/80 text-xs mt-3">
-          Telegram ulanishi hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN
-          kerak).
-        </p>
-      )}
-      {linkError && (
-        <p className="text-rose-300 text-xs mt-3">{linkError}</p>
-      )}
-
-      <p className="text-slate-500 text-xs mt-3 leading-relaxed">
-        "Ulash"ni bosib botni Telegram'da ishga tushiring (Start), so'ng
-        istalgan kanalingizga botni <strong className="text-slate-300">administrator</strong> sifatida
-        qo'shing — kanal shu yerda avtomatik paydo bo'ladi.
-      </p>
-
-      {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
-        </div>
-      ) : list.length === 0 ? (
-        <p className="text-slate-500 text-sm mt-5">
-          Hali Telegram kanal ulanmagan.
-        </p>
-      ) : (
-        <div className="mt-5 divide-y divide-white/5">
-          {list.map((c: any) => (
-            <div
-              key={c.id}
-              className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="h-9 w-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                  <Radio className="h-4 w-4 text-emerald-400" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-white text-sm font-medium truncate">
-                    {c.channelTitle || "Nomsiz kanal"}
-                  </p>
-                  <p className="text-slate-500 text-xs mt-0.5 truncate">
-                    {c.channelUsername ? `@${c.channelUsername}` : "Shaxsiy kanal"}
-                  </p>
-                </div>
-              </div>
-              <button
-                data-testid={`button-disconnect-${c.id}`}
-                onClick={() => handleDisconnect(c.id)}
-                disabled={removingId === c.id}
-                className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
-              >
-                {removingId === c.id ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </Glass>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// TELEGRAM MTPROTO CONNECTOR CARD
-// A separate, additive flow — connecting here does NOT replace or affect
-// the bot connector above. This is a real Telegram account login
-// (phone -> code -> optional 2FA password), used only to read real
-// statistics (subscribers + post views) that the Bot API can't provide.
+// TELEGRAM CARD — single entry point in Connectors. No more bot-token
+// ("custom") connect flow: everything goes through MTProto (the person's
+// own Telegram account). Clicking the card opens a modal that either walks
+// through the phone/code/(2FA) login, or — once logged in — lists every
+// channel the account administers, with connected ones pinned to the top
+// (green) and a connect/disconnect toggle per channel. Disconnecting just
+// removes the telegram_channels row, so the channel naturally falls back
+// into the "ulash mumkin" list below (see TelegramConnectModal).
 // ---------------------------------------------------------------------------
 
 type MtprotoStep = "idle" | "phone" | "code" | "password";
 
-function TelegramMtprotoConnectorCard() {
+function TelegramCard() {
+  const [modalOpen, setModalOpen] = useState(false);
+  const { data: connectedChannels } = useListTelegramChannels();
+  const list = connectedChannels || [];
+
+  return (
+    <>
+      <Glass className="p-0 overflow-hidden">
+        <button
+          data-testid="button-open-telegram"
+          onClick={() => setModalOpen(true)}
+          className="w-full flex items-center justify-between gap-4 p-6 text-left hover:bg-white/[0.02] transition"
+        >
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+              <Send className="h-5 w-5 text-blue-400" />
+            </div>
+            <div>
+              <h3 className="text-white font-semibold">Telegram</h3>
+              <p className="text-slate-500 text-xs mt-0.5">
+                {list.length > 0 ? `${list.length} ta kanal ulangan` : "Ulanmagan"}
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
+        </button>
+      </Glass>
+      {modalOpen && <TelegramConnectModal onClose={() => setModalOpen(false)} />}
+    </>
+  );
+}
+
+function TelegramConnectModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const { data: status, isLoading: statusLoading } = useGetTelegramMtprotoStatus();
+  const connected = Boolean(status?.connected);
+
   const { data: channelsData, isLoading: channelsLoading } = useListTelegramMtprotoChannels({
-    enabled: Boolean(status?.connected),
+    enabled: connected,
   });
-  const { data: connectedChannels } = useListTelegramChannels();
+  const { data: connectedChannels } = useListTelegramChannels({
+    // Polls while the modal is open so a fresh connect/disconnect (or a
+    // channel added on the Telegram side) reflects here without a manual
+    // refresh.
+    query: { refetchInterval: 5000 },
+  });
   const connectChannel = useConnectTelegramMtprotoChannel();
+  const disconnectChannel = useDisconnectTelegramChannel();
   const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<number | null>(null);
+
   const sendCode = useTelegramMtprotoSendCode();
   const resendCode = useTelegramMtprotoResendCode();
   const verifyCode = useTelegramMtprotoVerifyCode();
@@ -1699,19 +1595,6 @@ function TelegramMtprotoConnectorCard() {
     }
   }
 
-  async function handleConnectChannel(mtprotoChannelId: string) {
-    setConnectingId(mtprotoChannelId);
-    try {
-      await connectChannel.mutateAsync({ mtprotoChannelId });
-    } catch {
-      // Errors here are rare (channel resolution failing server-side) and
-      // not worth a dedicated banner — the button just reverts to "+" and
-      // the person can try again.
-    } finally {
-      setConnectingId(null);
-    }
-  }
-
   async function handleVerifyCode() {
     if (!pendingId) return;
     setError("");
@@ -1751,233 +1634,306 @@ function TelegramMtprotoConnectorCard() {
   async function handleLogout() {
     await logout.mutateAsync();
     setPhone("");
+    queryClient.invalidateQueries({ queryKey: ["/api/telegram-mtproto/status"] });
   }
 
-  const connected = Boolean(status?.connected);
+  async function handleConnectChannel(mtprotoChannelId: string) {
+    setConnectingId(mtprotoChannelId);
+    try {
+      await connectChannel.mutateAsync({ mtprotoChannelId });
+      queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+    } catch {
+      // Rare (channel resolution failing server-side) — button just
+      // reverts and the person can try again.
+    } finally {
+      setConnectingId(null);
+    }
+  }
+
+  async function handleDisconnectChannel(rowId: number) {
+    setDisconnectingId(rowId);
+    try {
+      await disconnectChannel.mutateAsync({ id: rowId });
+      queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+    } finally {
+      setDisconnectingId(null);
+    }
+  }
+
   const channels = channelsData?.channels || [];
-  const connectedChannelIds = new Set(
-    (connectedChannels || [])
-      .filter((ch: any) => ch.connectionType === "mtproto")
-      .map((ch: any) => ch.channelId),
+  // Bot-format id ("-100...") for each discovered channel, matched against
+  // telegram_channels rows regardless of connectionType — a channel
+  // connected before this UI existed (connectionType "bot") still counts
+  // as connected here.
+  const connectedRowByChannelId = new Map(
+    (connectedChannels || []).map((ch: any) => [ch.channelId, ch]),
   );
   const busy = sendCode.isPending || verifyCode.isPending || verifyPassword.isPending;
 
-  return (
-    <Glass className="p-6">
-      <div className="flex items-start justify-between gap-4 mb-1">
-        <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
-            <KeyRound className="h-5 w-5 text-violet-400" />
+  const connectedRows = channels.filter((c) => connectedRowByChannelId.has(`-100${c.id}`));
+  const availableRows = channels.filter((c) => !connectedRowByChannelId.has(`-100${c.id}`));
+
+  function ChannelRow({ c, isConnected }: { c: (typeof channels)[number]; isConnected: boolean }) {
+    const row = connectedRowByChannelId.get(`-100${c.id}`);
+    return (
+      <div
+        className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-3 ${
+          isConnected
+            ? "border-emerald-500/30 bg-emerald-500/[0.08]"
+            : "border-white/5 bg-white/[0.03]"
+        }`}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 border ${
+              isConnected
+                ? "bg-emerald-500/10 border-emerald-500/30"
+                : "bg-violet-500/10 border-violet-500/30"
+            }`}
+          >
+            <Radio className={`h-4 w-4 ${isConnected ? "text-emerald-400" : "text-violet-400"}`} />
           </div>
-          <div>
-            <h3 className="text-white font-semibold">Telegram MTProto</h3>
-            <p className="text-slate-500 text-xs mt-0.5">
-              {statusLoading
-                ? "Tekshirilmoqda..."
-                : connected
-                  ? "Ulangan — real statistika uchun"
-                  : "Ulanmagan"}
+          <div className="min-w-0">
+            <p className="text-white text-sm font-medium truncate">{c.title}</p>
+            <p className="text-slate-500 text-xs mt-0.5 truncate">
+              {c.username ? `@${c.username}` : "Shaxsiy kanal"}
+              {c.membersCount != null ? ` · ${c.membersCount.toLocaleString()} a'zo` : ""}
             </p>
           </div>
         </div>
-        {connected && (
+        {isConnected ? (
           <button
-            onClick={handleLogout}
-            disabled={logout.isPending}
-            className="shrink-0 flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 px-4 py-2.5 rounded-xl text-sm font-medium hover:border-rose-500/30 hover:text-rose-300 transition"
+            onClick={() => row && handleDisconnectChannel(row.id)}
+            disabled={!row || disconnectingId === row?.id}
+            title="Uzish"
+            className="shrink-0 flex items-center justify-center h-8 w-8 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-rose-500/15 hover:border-rose-500/30 hover:text-rose-300 disabled:opacity-40 transition"
           >
-            {logout.isPending ? (
+            {row && disconnectingId === row.id ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <LogOut className="h-3.5 w-3.5" />
+              <Check className="h-3.5 w-3.5" />
             )}
-            Uzish
+          </button>
+        ) : (
+          <button
+            onClick={() => handleConnectChannel(c.id)}
+            disabled={connectingId === c.id}
+            title="Ulash"
+            className="shrink-0 flex items-center justify-center h-8 w-8 rounded-full bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 hover:border-violet-500/40 hover:text-violet-300 transition"
+          >
+            {connectingId === c.id ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
           </button>
         )}
       </div>
+    );
+  }
 
-      <p className="text-slate-500 text-xs mt-3 leading-relaxed">
-        Bu — botdan mustaqil, alohida ulanish: haqiqiy Telegram hisobingizga
-        kirasiz (bot emas). Faqat obunachilar va post views kabi{" "}
-        <strong className="text-slate-300">real statistikani</strong> o'qish
-        uchun ishlatiladi — kanal ulanishi va publish qilish hamon botga
-        bog'liq bo'lib qoladi.
-      </p>
-
-      {error && <p className="text-rose-300 text-xs mt-3">{error}</p>}
-
-      {connected ? (
-        channelsLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
-          </div>
-        ) : channels.length === 0 ? (
-          <p className="text-slate-500 text-sm mt-5">
-            Bu hisob hech qanday kanalda admin emas.
-          </p>
-        ) : (
-          <div className="mt-5 divide-y divide-white/5">
-            {channels.map((c) => (
-              <div
-                key={c.id}
-                className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-9 w-9 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-center justify-center shrink-0">
-                    <Radio className="h-4 w-4 text-violet-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-white text-sm font-medium truncate">{c.title}</p>
-                    <p className="text-slate-500 text-xs mt-0.5 truncate">
-                      {c.username ? `@${c.username}` : "Shaxsiy kanal"}
-                      {c.membersCount != null ? ` · ${c.membersCount.toLocaleString()} a'zo` : ""}
-                    </p>
-                  </div>
-                </div>
-                {c.isCreator && (
-                  <span className="shrink-0 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">
-                    Egasi
-                  </span>
-                )}
-                {connectedChannelIds.has(`-100${c.id}`) ? (
-                  <span
-                    title="Publish uchun ulangan"
-                    className="shrink-0 flex items-center justify-center h-7 w-7 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => handleConnectChannel(c.id)}
-                    disabled={connectingId === c.id}
-                    title="Publish uchun ulash"
-                    className="shrink-0 flex items-center justify-center h-7 w-7 rounded-full bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 hover:border-violet-500/40 hover:text-violet-300 transition"
-                  >
-                    {connectingId === c.id ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Plus className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                )}
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="w-full max-w-md my-4">
+        <Glass className="p-6 max-h-[85vh] flex flex-col">
+          <div className="flex items-start justify-between gap-4 mb-1 shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+                <Send className="h-5 w-5 text-blue-400" />
               </div>
-            ))}
-          </div>
-        )
-      ) : step === "idle" ? (
-        <button
-          data-testid="button-connect-mtproto"
-          onClick={() => setStep("phone")}
-          className="mt-5 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
-        >
-          <Link2 className="h-3.5 w-3.5" />
-          Ulash
-        </button>
-      ) : (
-        <div className="mt-5 space-y-3 max-w-sm">
-          {step === "phone" && (
-            <>
-              <input
-                type="tel"
-                placeholder="+998901234567"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSendCode}
-                  disabled={busy || !phone.trim()}
-                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
-                >
-                  {sendCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Kod yuborish
-                </button>
-                <button
-                  onClick={resetFlow}
-                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
-                >
-                  Bekor qilish
-                </button>
+              <div>
+                <h3 className="text-white font-semibold">Telegram</h3>
+                <p className="text-slate-500 text-xs mt-0.5">
+                  {statusLoading
+                    ? "Tekshirilmoqda..."
+                    : connected
+                      ? "Ulangan"
+                      : "Ulanmagan"}
+                </p>
               </div>
-            </>
-          )}
-          {step === "code" && (
-            <>
-              <p className="text-slate-400 text-xs leading-relaxed">
-                {deliveryMethod === "app" &&
-                  "Kod Telegram ilovasining o'zidagi \"Telegram\" nomli tizim chat'iga yuborildi — ilovani oching va o'sha yerdan qarang (SMS emas)."}
-                {deliveryMethod === "sms" && "Kod SMS orqali yuborildi."}
-                {(deliveryMethod === "call" || deliveryMethod === "flash_call") &&
-                  "Kod telefon qo'ng'irog'i orqali yuboriladi/yuborildi."}
-                {(deliveryMethod === "other" || !deliveryMethod) &&
-                  "Telegram tanlagan usul bilan kod yuborildi."}
-              </p>
-              <input
-                type="text"
-                inputMode="numeric"
-                placeholder="Telegramdan kelgan kod"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
-              />
-              <div className="flex gap-2 items-center flex-wrap">
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {connected && (
                 <button
-                  onClick={handleVerifyCode}
-                  disabled={busy || !code.trim()}
-                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                  onClick={handleLogout}
+                  disabled={logout.isPending}
+                  title="Hisobni uzish"
+                  className="flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 px-3 py-2 rounded-xl text-xs font-medium hover:border-rose-500/30 hover:text-rose-300 transition"
                 >
-                  {verifyCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Tasdiqlash
+                  {logout.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <LogOut className="h-3.5 w-3.5" />
+                  )}
+                  Uzish
                 </button>
-                <button
-                  onClick={resetFlow}
-                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
-                >
-                  Bekor qilish
-                </button>
-              </div>
-              <button
-                onClick={handleResendCode}
-                disabled={resendCode.isPending}
-                className="flex items-center gap-1.5 text-violet-300 text-xs hover:text-violet-200 disabled:opacity-40 transition"
-              >
-                {resendCode.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
-                Kod kelmadimi? Boshqa usul bilan yuborish
+              )}
+              <button onClick={onClose} className="text-slate-400 hover:text-white p-1">
+                <X className="h-5 w-5" />
               </button>
-              {resendNotice && <p className="text-emerald-300 text-xs">{resendNotice}</p>}
-            </>
+            </div>
+          </div>
+
+          {!connected && (
+            <p className="text-slate-500 text-xs mt-3 leading-relaxed shrink-0">
+              Kanallaringizni ulash uchun haqiqiy Telegram hisobingizga
+              kiring — bot emas, o'zingizning hisobingiz.
+            </p>
           )}
-          {step === "password" && (
-            <>
-              <input
-                type="password"
-                placeholder="2FA parol"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleVerifyPassword}
-                  disabled={busy || !password}
-                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
-                >
-                  {verifyPassword.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Tasdiqlash
-                </button>
-                <button
-                  onClick={resetFlow}
-                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
-                >
-                  Bekor qilish
-                </button>
-              </div>
-            </>
+
+          {error && <p className="text-rose-300 text-xs mt-3 shrink-0">{error}</p>}
+
+          {connected ? (
+            <div className="mt-5 overflow-y-auto -mx-1 px-1 space-y-5">
+              {channelsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+                </div>
+              ) : channels.length === 0 ? (
+                <p className="text-slate-500 text-sm">
+                  Bu hisob hech qanday kanalda admin emas.
+                </p>
+              ) : (
+                <>
+                  {connectedRows.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] uppercase tracking-wide text-emerald-400/80 font-medium">
+                        Ulangan
+                      </p>
+                      {connectedRows.map((c) => (
+                        <ChannelRow key={c.id} c={c} isConnected />
+                      ))}
+                    </div>
+                  )}
+                  {availableRows.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] uppercase tracking-wide text-slate-500 font-medium">
+                        Ulash mumkin
+                      </p>
+                      {availableRows.map((c) => (
+                        <ChannelRow key={c.id} c={c} isConnected={false} />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ) : step === "idle" ? (
+            <button
+              data-testid="button-connect-mtproto"
+              onClick={() => setStep("phone")}
+              className="mt-5 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition self-start"
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              Ulash
+            </button>
+          ) : (
+            <div className="mt-5 space-y-3">
+              {step === "phone" && (
+                <>
+                  <input
+                    type="tel"
+                    placeholder="+998901234567"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSendCode}
+                      disabled={busy || !phone.trim()}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                    >
+                      {sendCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Kod yuborish
+                    </button>
+                    <button
+                      onClick={resetFlow}
+                      className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                </>
+              )}
+              {step === "code" && (
+                <>
+                  <p className="text-slate-400 text-xs leading-relaxed">
+                    {deliveryMethod === "app" &&
+                      "Kod Telegram ilovasining o'zidagi \"Telegram\" nomli tizim chat'iga yuborildi — ilovani oching va o'sha yerdan qarang (SMS emas)."}
+                    {deliveryMethod === "sms" && "Kod SMS orqali yuborildi."}
+                    {(deliveryMethod === "call" || deliveryMethod === "flash_call") &&
+                      "Kod telefon qo'ng'irog'i orqali yuboriladi/yuborildi."}
+                    {(deliveryMethod === "other" || !deliveryMethod) &&
+                      "Telegram tanlagan usul bilan kod yuborildi."}
+                  </p>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="Telegramdan kelgan kod"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+                  />
+                  <div className="flex gap-2 items-center flex-wrap">
+                    <button
+                      onClick={handleVerifyCode}
+                      disabled={busy || !code.trim()}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                    >
+                      {verifyCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Tasdiqlash
+                    </button>
+                    <button
+                      onClick={resetFlow}
+                      className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleResendCode}
+                    disabled={resendCode.isPending}
+                    className="flex items-center gap-1.5 text-violet-300 text-xs hover:text-violet-200 disabled:opacity-40 transition"
+                  >
+                    {resendCode.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                    Kod kelmadimi? Boshqa usul bilan yuborish
+                  </button>
+                  {resendNotice && <p className="text-emerald-300 text-xs">{resendNotice}</p>}
+                </>
+              )}
+              {step === "password" && (
+                <>
+                  <input
+                    type="password"
+                    placeholder="2FA parol"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleVerifyPassword}
+                      disabled={busy || !password}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                    >
+                      {verifyPassword.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Tasdiqlash
+                    </button>
+                    <button
+                      onClick={resetFlow}
+                      className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
-        </div>
-      )}
-    </Glass>
+        </Glass>
+      </div>
+    </div>
   );
 }
 
@@ -2052,9 +2008,7 @@ function ConnectorsPage({
         </div>
       )}
 
-      <TelegramConnectorCard />
-
-      <TelegramMtprotoConnectorCard />
+      <TelegramCard />
 
       <InstagramConnectorCard />
 
