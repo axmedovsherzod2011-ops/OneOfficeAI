@@ -3413,16 +3413,24 @@ function ChannelBreakdownList({
   }[];
   mtprotoConnected: boolean;
 }) {
-  const viewsByChannel = new Map(
-    (mtprotoChannels ?? []).map((c) => [c.channelRowId, c.views]),
+  const mtprotoByChannel = new Map(
+    (mtprotoChannels ?? []).map((c) => [c.channelRowId, c]),
   );
 
-  const rows = (botChannels ?? []).map((ch) => ({
-    key: `bot-${ch.id}`,
-    title: ch.channelTitle,
-    subscribers: ch.subscribers,
-    views: viewsByChannel.get(ch.id) ?? null,
-  }));
+  // Prefer MTProto's per-channel count — it resolves every connected
+  // channel (bot- or mtproto-connectionType) via the account's own admin
+  // access, whereas the bot API's count only ever works for a channel the
+  // bot itself is a member/admin of. Falling back to the bot API value
+  // keeps things working before MTProto is connected at all.
+  const rows = (botChannels ?? []).map((ch) => {
+    const m = mtprotoByChannel.get(ch.id);
+    return {
+      key: `bot-${ch.id}`,
+      title: ch.channelTitle,
+      subscribers: m?.subscribers ?? ch.subscribers,
+      views: m?.views ?? null,
+    };
+  });
 
   if (rows.length === 0) {
     return null;
@@ -3504,15 +3512,30 @@ function Dashboard({ goCreate, user }: any) {
     enabled: mtprotoConnected,
     refetchInterval: 30000,
   });
+  // Separate fetch (own period) so the subscribers chart can use MTProto's
+  // history too — it's the only history source that covers every connected
+  // channel (bot- and mtproto-connectionType alike, see
+  // getMtprotoStatsHistoryForUser), whereas the bot-API history below only
+  // ever reflects channels the bot itself could read a member count for.
+  const { data: mtprotoSubscriberHistory } = useGetTelegramMtprotoStatsHistory(subscribersPeriod, {
+    enabled: mtprotoConnected,
+    refetchInterval: 30000,
+  });
 
   const viewsSnapshots = mtprotoHistory?.snapshots.map((s) => ({
     date: s.date,
     value: s.views,
   }));
-  const subscribersSnapshots = historyData?.snapshots.map((s) => ({
-    date: s.date,
-    value: s.subscribers,
-  }));
+  const subscribersSnapshots =
+    mtprotoConnected && mtprotoSubscriberHistory
+      ? mtprotoSubscriberHistory.snapshots.map((s) => ({
+          date: s.date,
+          value: s.subscribers,
+        }))
+      : historyData?.snapshots.map((s) => ({
+          date: s.date,
+          value: s.subscribers,
+        }));
 
   const topChannel = (mtprotoLive?.channels ?? [])
     .filter((c: { views: number | null }) => c.views != null)
