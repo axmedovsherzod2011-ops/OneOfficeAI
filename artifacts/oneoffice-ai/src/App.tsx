@@ -99,6 +99,7 @@ import {
   type ProductItem,
   useGetTelegramMtprotoStatus,
   useListTelegramMtprotoChannels,
+  useConnectTelegramMtprotoChannel,
   useTelegramMtprotoSendCode,
   useTelegramMtprotoResendCode,
   useTelegramMtprotoVerifyCode,
@@ -1642,6 +1643,8 @@ function TelegramMtprotoConnectorCard() {
   const { data: channelsData, isLoading: channelsLoading } = useListTelegramMtprotoChannels({
     enabled: Boolean(status?.connected),
   });
+  const { data: connectedChannels } = useListTelegramChannels();
+  const connectChannel = useConnectTelegramMtprotoChannel();
   const sendCode = useTelegramMtprotoSendCode();
   const resendCode = useTelegramMtprotoResendCode();
   const verifyCode = useTelegramMtprotoVerifyCode();
@@ -1737,6 +1740,11 @@ function TelegramMtprotoConnectorCard() {
 
   const connected = Boolean(status?.connected);
   const channels = channelsData?.channels || [];
+  const connectedChannelIds = new Set(
+    (connectedChannels || [])
+      .filter((ch: any) => ch.connectionType === "mtproto")
+      .map((ch: any) => ch.channelId),
+  );
   const busy = sendCode.isPending || verifyCode.isPending || verifyPassword.isPending;
 
   return (
@@ -1815,6 +1823,25 @@ function TelegramMtprotoConnectorCard() {
                   <span className="shrink-0 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">
                     Egasi
                   </span>
+                )}
+                {connectedChannelIds.has(`-100${c.id}`) ? (
+                  <span className="shrink-0 flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1">
+                    <Check className="h-3 w-3" />
+                    Ulangan
+                  </span>
+                ) : (
+                  <button
+                    onClick={() =>
+                      connectChannel.mutate({ mtprotoChannelId: c.id })
+                    }
+                    disabled={connectChannel.isPending}
+                    className="shrink-0 flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:border-violet-500/40 hover:text-violet-300 transition"
+                  >
+                    {connectChannel.isPending && (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    )}
+                    Publish uchun ulash
+                  </button>
                 )}
               </div>
             ))}
