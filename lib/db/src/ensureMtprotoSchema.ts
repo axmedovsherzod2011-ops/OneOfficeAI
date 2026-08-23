@@ -51,4 +51,9 @@ export async function ensureMtprotoSchema(): Promise<void> {
     ALTER TABLE "channel_stat_snapshots"
       ADD COLUMN IF NOT EXISTS "views" integer;
   `);
+
+  await pool.query(`
+    ALTER TABLE "telegram_channels"
+      ADD COLUMN IF NOT EXISTS "connection_type" text NOT NULL DEFAULT 'bot';
+  `);
 }
