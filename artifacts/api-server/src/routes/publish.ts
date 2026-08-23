@@ -8,6 +8,7 @@ import {
 import { and, eq } from "drizzle-orm";
 import { getBotToken } from "../telegram/bot";
 import { trackPublishedPost } from "../telegram/postTracker";
+import { publishViaMtproto } from "../telegram-mtproto/publish";
 
 const router = Router();
 
@@ -360,52 +361,83 @@ router.post("/publish", async (req, res) => {
   }
 
   const channelId = channel.channelId;
-  let botToken: string;
-  try {
-    botToken = getBotToken();
-  } catch {
-    res.status(400).json({
-      error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN).",
-    });
-    return;
-  }
 
   let telegramMessageId: number | undefined;
 
-  try {
-    const resolvedImages = (
-      await Promise.all(requestedUrls.map((url) => resolveImage(url)))
-    ).filter((img): img is ResolvedImage => img !== null);
+  if (channel.connectionType === "mtproto") {
+    // MTProto-connected channel (the user's own account, not the bot) —
+    // getBotToken() is never called on this path, so it works even if
+    // TELEGRAM_BOT_TOKEN isn't set, and even if the bot was never added
+    // to this particular channel.
+    try {
+      const resolvedImages = (
+        await Promise.all(requestedUrls.map((url) => resolveImage(url)))
+      ).filter((img): img is ResolvedImage => img !== null);
 
-    let outcome:
-      | { ok: true; messageId?: number }
-      | { ok: false; error: string };
-
-    if (resolvedImages.length >= 2) {
-      outcome = await sendPhotoAlbum(botToken, channelId, text, resolvedImages);
-    } else if (resolvedImages.length === 1) {
-      outcome = await sendSinglePhoto(
-        botToken,
+      const outcome = await publishViaMtproto(
+        userId,
         channelId,
         text,
-        resolvedImages[0],
+        resolvedImages.map((img) => ({ buffer: img.buffer, ext: img.ext })),
       );
-    } else {
-      // No images resolved (either none were requested, or all failed to
-      // load) — fall back to a text-only post rather than failing outright.
-      outcome = await sendTextMessage(botToken, channelId, text);
-    }
 
-    if (!outcome.ok) {
-      res.status(400).json({ error: outcome.error });
+      if (!outcome.ok) {
+        res.status(400).json({ error: outcome.error });
+        return;
+      }
+      telegramMessageId = outcome.messageId;
+    } catch {
+      res.status(400).json({
+        error: "MTProto orqali yuborishda xatolik. Ulanishni tekshiring.",
+      });
       return;
     }
-    telegramMessageId = outcome.messageId;
-  } catch {
-    res.status(400).json({
-      error: "Failed to reach Telegram API. Check your internet connection.",
-    });
-    return;
+  } else {
+    let botToken: string;
+    try {
+      botToken = getBotToken();
+    } catch {
+      res.status(400).json({
+        error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN).",
+      });
+      return;
+    }
+
+    try {
+      const resolvedImages = (
+        await Promise.all(requestedUrls.map((url) => resolveImage(url)))
+      ).filter((img): img is ResolvedImage => img !== null);
+
+      let outcome:
+        | { ok: true; messageId?: number }
+        | { ok: false; error: string };
+
+      if (resolvedImages.length >= 2) {
+        outcome = await sendPhotoAlbum(botToken, channelId, text, resolvedImages);
+      } else if (resolvedImages.length === 1) {
+        outcome = await sendSinglePhoto(
+          botToken,
+          channelId,
+          text,
+          resolvedImages[0],
+        );
+      } else {
+        // No images resolved (either none were requested, or all failed to
+        // load) — fall back to a text-only post rather than failing outright.
+        outcome = await sendTextMessage(botToken, channelId, text);
+      }
+
+      if (!outcome.ok) {
+        res.status(400).json({ error: outcome.error });
+        return;
+      }
+      telegramMessageId = outcome.messageId;
+    } catch {
+      res.status(400).json({
+        error: "Failed to reach Telegram API. Check your internet connection.",
+      });
+      return;
+    }
   }
 
   // In-memory only (never the database) — lets the live stats endpoint
@@ -415,7 +447,9 @@ router.post("/publish", async (req, res) => {
   // Persisted row — this is what telegram-mtproto/stats.ts joins on
   // (postsTable.telegramChannelId + telegramMessageId) to fetch real view
   // counts. Without this row the MTProto dashboard has nothing to look up
-  // and always reports 0 views, even once a session is connected.
+  // and always reports 0 views, even once a session is connected. Written
+  // the same way regardless of which credential (bot or MTProto) actually
+  // sent the message — the join only cares about telegramMessageId.
   try {
     await db.insert(postsTable).values({
       userId,
