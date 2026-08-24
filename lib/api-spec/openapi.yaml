@@ -274,6 +274,81 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /products/{id}/research:
+    get:
+      operationId: getProductResearch
+      tags: [products]
+      summary: Fetch the cached Professional Product Card for a product, if it exists
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Cached research found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductResearchResult"
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Product not researched yet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      operationId: researchProduct
+      tags: [products]
+      summary: >-
+        Run (or force-refresh with ?force=true) the one-time deep AI
+        research pass for a product and cache the resulting Professional
+        Product Card. Idempotent without ?force=true.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Research card (freshly generated or cached)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductResearchResult"
+        "400":
+          description: Product missing required fields (name/price)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Product not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: All AI providers unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /connectors/instagram/config:
     get:
       operationId: getInstagramConfig
@@ -452,6 +527,12 @@ components:
           type: string
         notes:
           type: string
+        productId:
+          type: integer
+          description: >-
+            When set, the enrichment reuses (or creates once, then caches)
+            this product's deep-research Professional Product Card instead
+            of running the AI/web-search pipeline on every call.
 
     EnrichedSpecs:
       type: object
@@ -462,6 +543,8 @@ components:
           type: string
         priceDiffPercent:
           type: number
+        headline:
+          type: string
         description:
           type: string
         usageGuide:
@@ -473,6 +556,51 @@ components:
         extras:
           type: string
         lifehacks:
+          type: string
+        hashtags:
+          type: string
+        searchTitle:
+          type: string
+        searchKeywords:
+          type: string
+        viewHook:
+          type: string
+        buyHeadline:
+          type: string
+        buyCta:
+          type: string
+        popularNames:
+          type: array
+          items:
+            type: string
+
+    ProductSource:
+      type: object
+      required:
+        - title
+        - url
+      properties:
+        title:
+          type: string
+        url:
+          type: string
+
+    ProductResearchResult:
+      type: object
+      required:
+        - cached
+        - card
+        - sources
+      properties:
+        cached:
+          type: boolean
+        card:
+          $ref: "#/components/schemas/EnrichedSpecs"
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductSource"
+        researchedAt:
           type: string
 
     ProductImage:
@@ -506,6 +634,9 @@ components:
             $ref: "#/components/schemas/ProductImage"
         enriched:
           $ref: "#/components/schemas/EnrichedSpecs"
+        cached:
+          type: boolean
+          description: True when the post was built from an already-researched product (no AI call made).
 
     ImageSearchResult:
       type: object

@@ -9,6 +9,7 @@ import storeRouter from "./store";
 import publishRouter from "./publish";
 import enrichRouter from "./enrich";
 import productsRouter from "./products";
+import productResearchRouter from "./productResearch";
 import youtubeRouter from "./youtube";
 import telegramMtprotoRouter from "./telegramMtproto";
 
@@ -24,6 +25,7 @@ router.use(storeRouter);
 router.use(publishRouter);
 router.use(enrichRouter);
 router.use(productsRouter);
+router.use(productResearchRouter);
 router.use(youtubeRouter);
 router.use(telegramMtprotoRouter);
 

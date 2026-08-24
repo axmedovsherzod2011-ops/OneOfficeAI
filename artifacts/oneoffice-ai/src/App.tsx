@@ -2905,10 +2905,30 @@ function ProductForm({
   const [images, setImages] = useState<string[]>(initial?.images ?? []);
   const [error, setError] = useState("");
 
+  const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
   const createProduct = useCreateProduct();
   const updateProduct = useUpdateProduct();
   const saving = createProduct.isPending || updateProduct.isPending;
+
+  // Fire-and-forget: as soon as a product is saved as "active" with a name
+  // + price, kick off its one-time deep AI research in the background (not
+  // awaited — the user doesn't wait for this). By the time they open
+  // "Create Post" for it, the Professional Product Card is already cached
+  // and post generation is instant instead of re-running AI/search.
+  async function triggerBackgroundResearch(productId: number) {
+    try {
+      const token = await firebaseUser?.getIdToken();
+      if (!token) return;
+      void fetch(`/api/products/${productId}/research`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      // Best-effort — a failed background trigger just means the first
+      // "Create Post" for this product falls back to researching inline.
+    }
+  }
 
   async function save(status: "draft" | "active") {
     setError("");
@@ -2927,12 +2947,17 @@ function ProductForm({
       status,
     };
     try {
+      let savedId = initial?.id;
       if (isEdit && initial) {
         await updateProduct.mutateAsync({ id: initial.id, data });
       } else {
-        await createProduct.mutateAsync({ data });
+        const created = await createProduct.mutateAsync({ data });
+        savedId = (created as any)?.id;
       }
       queryClient.invalidateQueries({ queryKey: getListProductsQueryKey() });
+      if (status === "active" && savedId && name.trim() && sellPrice.trim()) {
+        void triggerBackgroundResearch(savedId);
+      }
       onSaved();
     } catch (err: any) {
       setError(
@@ -3807,7 +3832,7 @@ function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any
   );
 }
 
-function Generating({ form, onDone, onError }: any) {
+function Generating({ form, product, onDone, onError }: any) {
   const [step, setStep] = useState(0);
   const total = PIPELINE_STEPS.length;
   const enrichProduct = useEnrichProduct();
@@ -3829,6 +3854,10 @@ function Generating({ form, onDone, onError }: any) {
           price: form.price,
           category: form.category,
           notes: form.notes || "",
+          // When this post is for a saved inventory product, the backend
+          // reuses (or creates once, then caches) that product's deep
+          // research — every post after the first is instant and free.
+          ...(product?.id ? { productId: product.id } : {}),
         },
       })
       .then((data) => {
@@ -4216,6 +4245,71 @@ function Results({
                 {enriched.lifehacks}
               </p>
             </div>
+          )}
+        </Glass>
+      )}
+
+      {/* ── PROFESSIONAL PRODUCT CARD: search / view / buy ── */}
+      {(enriched.viewHook || enriched.buyCta || enriched.searchKeywords || (enriched.popularNames && enriched.popularNames.length > 0)) && (
+        <Glass className="p-6 space-y-5">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-400" />
+            <h3 className="text-white font-semibold">
+              Professional Product Card
+            </h3>
+          </div>
+
+          {enriched.popularNames && enriched.popularNames.length > 0 && (
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">
+                Internetda topilgan mashhur nomlar
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {enriched.popularNames.map((n: string, i: number) => (
+                  <span
+                    key={i}
+                    className="text-xs bg-white/5 border border-white/10 text-slate-300 rounded-full px-3 py-1"
+                  >
+                    {n}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {enriched.searchKeywords && (
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">
+                🔍 Qidiruv uchun kalit so'zlar
+              </p>
+              <p className="text-slate-300 text-sm leading-relaxed">
+                {enriched.searchKeywords}
+              </p>
+            </div>
+          )}
+
+          {enriched.viewHook && (
+            <div className="bg-white/5 rounded-xl p-4">
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">
+                👀 E'tibor tortish uchun (view)
+              </p>
+              <p className="text-white text-sm">{enriched.viewHook}</p>
+            </div>
+          )}
+
+          {enriched.buyCta && (
+            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
+              <p className="text-xs text-emerald-300 mb-1.5 font-medium uppercase tracking-wider">
+                🛒 Sotib olishga undash (buy)
+              </p>
+              <p className="text-slate-200 text-sm">{enriched.buyCta}</p>
+            </div>
+          )}
+
+          {enrichData?.cached && (
+            <p className="text-xs text-slate-500">
+              ⚡ Ushbu mahsulot avval tahlil qilingan — natija keshdan olindi (AI qayta chaqirilmadi).
+            </p>
           )}
         </Glass>
       )}
@@ -5727,6 +5821,7 @@ function AppShell() {
             {flow === "generating" && (
               <Generating
                 form={form}
+                product={selectedProduct}
                 onDone={handleGenerateDone}
                 onError={handleGenerateError}
               />

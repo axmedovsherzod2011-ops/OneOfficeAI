@@ -11,7 +11,7 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
-import { ensureMtprotoSchema } from "@workspace/db";
+import { ensureMtprotoSchema, ensureProductResearchSchema } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -34,6 +34,15 @@ if (Number.isNaN(port) || port <= 0) {
 // half-created schema; it's a fast no-op on every boot after the first.
 await ensureMtprotoSchema().catch((err) => {
   logger.error({ err }, "ensureMtprotoSchema failed — mtproto routes will 500 until this is fixed");
+});
+
+// Creates the product_research table if it doesn't exist yet. Same
+// boot-time-DDL reasoning as ensureMtprotoSchema above.
+await ensureProductResearchSchema().catch((err) => {
+  logger.error(
+    { err },
+    "ensureProductResearchSchema failed — product research caching will 500 until this is fixed",
+  );
 });
 
 app.listen(port, (err) => {
