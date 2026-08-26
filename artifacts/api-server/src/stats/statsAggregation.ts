@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
 import { channelStatSnapshotsTable } from "@workspace/db/schema";
-import { eq, gte } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Every value in channel_stat_snapshots is a POINT-IN-TIME CUMULATIVE
