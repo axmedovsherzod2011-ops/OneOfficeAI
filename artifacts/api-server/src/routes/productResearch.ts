@@ -140,10 +140,10 @@ router.post("/products/:id/research", async (req, res) => {
 
     await db
       .insert(productResearchTable)
-      .values({ productId: id, userId, card, sources })
+      .values({ productId: id, userId, card: card as unknown as Record<string, unknown>, sources })
       .onConflictDoUpdate({
         target: productResearchTable.productId,
-        set: { card, sources, status: "ready", updatedAt: new Date() },
+        set: { card: card as unknown as Record<string, unknown>, sources, status: "ready", updatedAt: new Date() },
       });
 
     res.json({ cached: false, card, sources, images });
@@ -153,6 +153,78 @@ router.post("/products/:id/research", async (req, res) => {
       error: "AI xizmatlari hozir band yoki mavjud emas. Iltimos, bir necha daqiqadan so'ng qayta urinib ko'ring.",
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /products/:id/research — lets the seller edit the copy fields of an
+// already-researched card by hand (searchTitle, searchKeywords, viewHook,
+// buyHeadline, buyCta, popularNames). The AI-found market data (marketPrice,
+// specs, sources) is left as the AI found it — only the copy the AI wrote
+// is meant to be human-editable here. Every post generated afterwards reads
+// this same cached row, so an edit here is what shows up in the next post,
+// with no re-research needed.
+// ---------------------------------------------------------------------------
+
+const EDITABLE_CARD_FIELDS = [
+  "searchTitle",
+  "searchKeywords",
+  "viewHook",
+  "buyHeadline",
+  "buyCta",
+  "popularNames",
+] as const;
+
+router.patch("/products/:id/research", async (req, res) => {
+  const userId = await getCurrentUserId(req);
+  if (!userId) {
+    res.status(401).json({ error: "Tizimga kirilmagan." });
+    return;
+  }
+
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Invalid product id" });
+    return;
+  }
+
+  const [existing] = await db
+    .select()
+    .from(productResearchTable)
+    .where(and(eq(productResearchTable.productId, id), eq(productResearchTable.userId, userId)))
+    .limit(1);
+
+  if (!existing) {
+    res.status(404).json({ error: "Bu mahsulot hali tahlil qilinmagan." });
+    return;
+  }
+
+  const patch: Record<string, unknown> = {};
+  for (const field of EDITABLE_CARD_FIELDS) {
+    if (!(field in (req.body ?? {}))) continue;
+    const value = (req.body as Record<string, unknown>)[field];
+    if (field === "popularNames") {
+      if (!Array.isArray(value)) {
+        res.status(400).json({ error: "popularNames ro'yxat (array) bo'lishi kerak." });
+        return;
+      }
+      patch[field] = value.map((v) => String(v)).filter(Boolean).slice(0, 5);
+    } else {
+      if (typeof value !== "string") {
+        res.status(400).json({ error: `${field} matn (string) bo'lishi kerak.` });
+        return;
+      }
+      patch[field] = value;
+    }
+  }
+
+  const updatedCard = { ...(existing.card as Record<string, unknown>), ...patch };
+
+  await db
+    .update(productResearchTable)
+    .set({ card: updatedCard, updatedAt: new Date() })
+    .where(eq(productResearchTable.id, existing.id));
+
+  res.json({ card: updatedCard, sources: existing.sources, researchedAt: new Date().toISOString() });
 });
 
 export default router;
