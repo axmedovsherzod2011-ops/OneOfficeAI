@@ -631,7 +631,14 @@ function ChannelStatsChart({
           <div className="h-full flex items-center justify-center">
             <Loader2 className="h-6 w-6 text-slate-500 animate-spin" />
           </div>
-        ) : chartData.length === 0 ? (
+        ) : !hasRealHistory ? (
+          // Every bucket is 0 — either no buckets came back at all, or
+          // tracking is so new that no window has two real snapshots to
+          // diff yet (e.g. right after this feature ships, every period
+          // — daily, weekly, even yearly — starts before our one and
+          // only snapshot). A flat 0-line chart across a 5-year axis
+          // reads as "broken", not "no data yet", so show the honest
+          // empty state instead of rendering a misleadingly flat line.
           <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-500">
             <BarChart3 className="h-8 w-8 opacity-40" />
             <p className="text-xs max-w-[220px]">
