@@ -190,10 +190,41 @@ export async function getStatsSummary(
     return sum;
   }
 
+  // The earliest snapshot we actually have for each channel. Before that
+  // instant, the channel's true value at any point in time is genuinely
+  // unknown to us — it is NOT "0 subscribers" or "0 views", it's just
+  // untracked. valueAt() above has no choice but to treat "no reading yet"
+  // as a 0 contribution (there is nothing else it can do for a running
+  // sum), but that means a naive (endVal - startVal) for the bucket that
+  // straddles a channel's very first snapshot silently computes
+  // (currentCumulativeTotal - 0) — dumping weeks of prior, untracked
+  // accumulation into that single bucket as if it all happened *in* that
+  // bucket. That's exactly the false "everything spiked today" chart.
+  //
+  // Fix: a bucket only gets a real delta once its periodStart itself is
+  // at-or-after the earliest snapshot we have (i.e. both ends of the
+  // subtraction are grounded in an actual reading). Any bucket whose
+  // window starts before we had any tracking data yet reports value: 0 —
+  // an honest "no data to compare against" rather than a fabricated jump.
+  // Real, non-zero deltas start appearing naturally from the first full
+  // bucket after tracking began, once two consecutive real snapshots
+  // exist to subtract.
+  let earliestSnapshotAt: Date | null = null;
+  for (const list of byChannel.values()) {
+    const first = list[0];
+    if (first && (earliestSnapshotAt === null || first.capturedAt < earliestSnapshotAt)) {
+      earliestSnapshotAt = first.capturedAt;
+    }
+  }
+  function isGrounded(boundary: Date): boolean {
+    return earliestSnapshotAt !== null && boundary.getTime() >= earliestSnapshotAt.getTime();
+  }
+
   const buckets: StatsBucket[] = windows.map((w) => {
     const endVal = valueAt(new Date(w.periodEnd));
     const startVal = valueAt(new Date(w.periodStart));
-    return { ...w, value: endVal - startVal, cumulativeAtEnd: endVal };
+    const value = isGrounded(new Date(w.periodStart)) ? endVal - startVal : 0;
+    return { ...w, value, cumulativeAtEnd: endVal };
   });
 
   const startOfToday = new Date(now);
@@ -210,8 +241,8 @@ export async function getStatsSummary(
     metric,
     source,
     buckets,
-    todayValue: nowVal - startOfTodayVal,
-    yesterdayValue: startOfTodayVal - startOfYesterdayVal,
+    todayValue: isGrounded(startOfToday) ? nowVal - startOfTodayVal : 0,
+    yesterdayValue: isGrounded(startOfYesterday) ? startOfTodayVal - startOfYesterdayVal : 0,
     allTimeTotal: nowVal,
   };
 }
