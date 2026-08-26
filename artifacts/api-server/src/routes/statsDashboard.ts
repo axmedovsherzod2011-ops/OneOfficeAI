@@ -27,6 +27,8 @@ const VALID_METRICS: StatsMetric[] = ["subscribers", "views"];
 
 // ---------------------------------------------------------------------------
 // GET /api/stats/dashboard?metric=views|subscribers&granularity=hour|day|week|month|year
+// (mounted under /api by app.ts — this file's own path is just
+// /stats/dashboard, matching every other route file in this directory)
 //
 // The single source of truth for every dashboard number that claims to be
 // "just this period" — today vs yesterday, last 24 hours, last 7 days,
@@ -41,7 +43,7 @@ const VALID_METRICS: StatsMetric[] = ["subscribers", "views"];
 // (it's the more complete channel list) and falls back to bot_api.
 // ---------------------------------------------------------------------------
 router.get(
-  "/api/stats/dashboard",
+  "/stats/dashboard",
   handle(async (req, res) => {
     const { userId: firebaseUid } = getAuth(req);
     if (!firebaseUid) {

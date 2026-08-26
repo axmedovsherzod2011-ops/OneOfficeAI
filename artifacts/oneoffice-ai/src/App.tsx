@@ -627,7 +627,11 @@ function ChannelStatsChart({
       )}
 
       <div className="h-56 -ml-2">
-        {chartData.length === 0 ? (
+        {isLoading && chartData.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="h-6 w-6 text-slate-500 animate-spin" />
+          </div>
+        ) : chartData.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-500">
             <BarChart3 className="h-8 w-8 opacity-40" />
             <p className="text-xs max-w-[220px]">
