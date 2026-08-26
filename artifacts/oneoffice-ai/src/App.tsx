@@ -99,6 +99,8 @@ import {
   useGetTelegramMtprotoStatus,
   useListTelegramMtprotoChannels,
   useConnectTelegramMtprotoChannel,
+  useGetProductResearch,
+  useUpdateProductResearch,
   useTelegramMtprotoSendCode,
   useTelegramMtprotoResendCode,
   useTelegramMtprotoVerifyCode,
@@ -1937,84 +1939,10 @@ function TelegramConnectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ConnectorsPage({
-  instagramNotice,
-  onDismissInstagramNotice,
-  vkNotice,
-  onDismissVkNotice,
-  youtubeNotice,
-  onDismissYoutubeNotice,
-}: {
-  instagramNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissInstagramNotice?: () => void;
-  vkNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissVkNotice?: () => void;
-  youtubeNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissYoutubeNotice?: () => void;
-}) {
+function ConnectorsPage() {
   return (
     <div className="p-6 md:p-10 max-w-2xl space-y-6">
-      {instagramNotice && (
-        <div
-          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
-            instagramNotice.type === "success"
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-          }`}
-        >
-          <span>{instagramNotice.message}</span>
-          <button
-            onClick={onDismissInstagramNotice}
-            className="shrink-0 opacity-70 hover:opacity-100 transition"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {vkNotice && (
-        <div
-          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
-            vkNotice.type === "success"
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-          }`}
-        >
-          <span>{vkNotice.message}</span>
-          <button
-            onClick={onDismissVkNotice}
-            className="shrink-0 opacity-70 hover:opacity-100 transition"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {youtubeNotice && (
-        <div
-          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
-            youtubeNotice.type === "success"
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-          }`}
-        >
-          <span>{youtubeNotice.message}</span>
-          <button
-            onClick={onDismissYoutubeNotice}
-            className="shrink-0 opacity-70 hover:opacity-100 transition"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
       <TelegramCard />
-
-      <InstagramConnectorCard />
-
-      <VkConnectorCard />
-
-      <YoutubeConnectorCard />
     </div>
   );
 }
@@ -2911,6 +2839,51 @@ function ProductForm({
   const updateProduct = useUpdateProduct();
   const saving = createProduct.isPending || updateProduct.isPending;
 
+  // AI card (view/edit) — only meaningful once the product already exists
+  // and has been researched at least once.
+  const { data: research } = useGetProductResearch(initial?.id, { enabled: isEdit });
+  const updateResearch = useUpdateProductResearch(initial?.id);
+  const [cardEditing, setCardEditing] = useState(false);
+  const [cardSearchTitle, setCardSearchTitle] = useState("");
+  const [cardSearchKeywords, setCardSearchKeywords] = useState("");
+  const [cardViewHook, setCardViewHook] = useState("");
+  const [cardBuyHeadline, setCardBuyHeadline] = useState("");
+  const [cardBuyCta, setCardBuyCta] = useState("");
+  const [cardPopularNames, setCardPopularNames] = useState("");
+
+  // Populate the editable fields once the cached card loads (or reloads
+  // after a save) — but only while the person isn't actively mid-edit, so
+  // a background refetch never clobbers what they're typing.
+  useEffect(() => {
+    if (!research || cardEditing) return;
+    setCardSearchTitle(research.card.searchTitle ?? "");
+    setCardSearchKeywords(research.card.searchKeywords ?? "");
+    setCardViewHook(research.card.viewHook ?? "");
+    setCardBuyHeadline(research.card.buyHeadline ?? "");
+    setCardBuyCta(research.card.buyCta ?? "");
+    setCardPopularNames((research.card.popularNames ?? []).join(", "));
+  }, [research, cardEditing]);
+
+  async function saveCard() {
+    try {
+      await updateResearch.mutateAsync({
+        searchTitle: cardSearchTitle.trim(),
+        searchKeywords: cardSearchKeywords.trim(),
+        viewHook: cardViewHook.trim(),
+        buyHeadline: cardBuyHeadline.trim(),
+        buyCta: cardBuyCta.trim(),
+        popularNames: cardPopularNames
+          .split(",")
+          .map((n) => n.trim())
+          .filter(Boolean)
+          .slice(0, 5),
+      });
+      setCardEditing(false);
+    } catch {
+      // updateResearch.error already renders below — nothing else to do.
+    }
+  }
+
   // Fire-and-forget: as soon as a product is saved as "active" with a name
   // + price, kick off its one-time deep AI research in the background (not
   // awaited — the user doesn't wait for this). By the time they open
@@ -3072,6 +3045,124 @@ function ProductForm({
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
             />
           </div>
+
+          {isEdit && research && (
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-violet-300">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  AI kartasi — postlarda ishlatiladigan matnlar
+                </div>
+                {!cardEditing && (
+                  <button
+                    type="button"
+                    onClick={() => setCardEditing(true)}
+                    className="text-xs text-violet-300 hover:text-violet-200 transition"
+                  >
+                    Tahrirlash
+                  </button>
+                )}
+              </div>
+
+              {cardEditing ? (
+                <>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Qidiruv nomi
+                    </label>
+                    <input
+                      value={cardSearchTitle}
+                      onChange={(e) => setCardSearchTitle(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Kalit so'zlar
+                    </label>
+                    <input
+                      value={cardSearchKeywords}
+                      onChange={(e) => setCardSearchKeywords(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      E'tibor tortuvchi jumla
+                    </label>
+                    <input
+                      value={cardViewHook}
+                      onChange={(e) => setCardViewHook(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Xarid sarlavhasi
+                    </label>
+                    <input
+                      value={cardBuyHeadline}
+                      onChange={(e) => setCardBuyHeadline(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Harakatga chaqiruv (CTA)
+                    </label>
+                    <input
+                      value={cardBuyCta}
+                      onChange={(e) => setCardBuyCta(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Mashhur nomlar (vergul bilan ajrating)
+                    </label>
+                    <input
+                      value={cardPopularNames}
+                      onChange={(e) => setCardPopularNames(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  {updateResearch.isError && (
+                    <p className="text-rose-400 text-xs">Saqlashda xatolik yuz berdi.</p>
+                  )}
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={saveCard}
+                      disabled={updateResearch.isPending}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-3.5 py-2 rounded-lg text-xs font-medium transition"
+                    >
+                      {updateResearch.isPending && (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      )}
+                      Saqlash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCardEditing(false)}
+                      className="text-slate-400 text-xs px-2 py-2 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-1.5 text-xs text-slate-300">
+                  {research.card.viewHook && <p>{research.card.viewHook}</p>}
+                  {research.card.buyCta && (
+                    <p className="text-slate-400">{research.card.buyCta}</p>
+                  )}
+                  {!research.card.viewHook && !research.card.buyCta && (
+                    <p className="text-slate-500">Hali to'ldirilmagan.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {error && (
@@ -5923,16 +6014,7 @@ function AppShell() {
           />
         )}
 
-        {navView === "connectors" && (
-          <ConnectorsPage
-            instagramNotice={instagramNotice}
-            onDismissInstagramNotice={() => setInstagramNotice(null)}
-            vkNotice={vkNotice}
-            onDismissVkNotice={() => setVkNotice(null)}
-            youtubeNotice={youtubeNotice}
-            onDismissYoutubeNotice={() => setYoutubeNotice(null)}
-          />
-        )}
+        {navView === "connectors" && <ConnectorsPage />}
         {navView === "shopfront" && <ShopFrontPage />}
         {navView === "settings" && (
           <SettingsPage onOpenConnectors={goToConnectors} />
