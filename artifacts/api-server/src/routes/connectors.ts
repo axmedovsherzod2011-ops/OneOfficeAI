@@ -9,6 +9,7 @@ import {
 import { and, eq, asc, gte, desc } from "drizzle-orm";
 import { createLinkToken, getBotIdentity, isTelegramConfigured } from "../telegram/bot";
 import { getSubscriberCount } from "../telegram/liveStats";
+import { recordHourlySnapshot, getStatsSummary, type Granularity } from "../stats/statsAggregation";
 
 const router = Router();
 
@@ -240,43 +241,14 @@ router.get(
       }),
     );
 
-    // Persist today's snapshot for each channel (upsert by date).
-    // Fire-and-forget — never block the response on this.
-    const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    // Persist this capture as an hourly snapshot for each channel (upsert
+    // by channel+hour+source=bot_api). Fire-and-forget — never block the
+    // response on this.
     for (const ch of perChannel) {
       if (ch.subscribers == null) continue;
-      db.select()
-        .from(channelStatSnapshotsTable)
-        .where(
-          and(
-            eq(channelStatSnapshotsTable.channelRowId, ch.id),
-            eq(channelStatSnapshotsTable.snapshotDate, today),
-            // Scoped to bot_api explicitly — once telegram-mtproto/stats.ts
-            // starts writing its own source="mtproto" rows for the same
-            // channel/date (parallel-run comparison), this upsert must
-            // never touch those rows or vice versa.
-            eq(channelStatSnapshotsTable.source, "bot_api"),
-          ),
-        )
-        .limit(1)
-        .then(async ([existing]) => {
-          if (existing) {
-            await db
-              .update(channelStatSnapshotsTable)
-              .set({ subscribers: ch.subscribers! })
-              .where(eq(channelStatSnapshotsTable.id, existing.id));
-          } else {
-            await db.insert(channelStatSnapshotsTable).values({
-              channelRowId: ch.id,
-              snapshotDate: today,
-              subscribers: ch.subscribers!,
-              source: "bot_api",
-            });
-          }
-        })
-        .catch((e) =>
-          console.warn("[stats snapshot] upsert failed (non-fatal):", e),
-        );
+      recordHourlySnapshot(ch.id, "bot_api", { subscribers: ch.subscribers }).catch((e) =>
+        console.warn("[stats snapshot] upsert failed (non-fatal):", e),
+      );
     }
 
     const totalSubscribers = perChannel.reduce(

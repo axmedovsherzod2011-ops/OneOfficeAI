@@ -81,7 +81,6 @@ import {
   useListTelegramChannels,
   useDisconnectTelegramChannel,
   useGetTelegramLiveStats,
-  useGetTelegramStatsHistory,
   getListTelegramChannelsQueryKey,
   useGetInstagramConfig,
   useListInstagramAccounts,
@@ -107,7 +106,6 @@ import {
   useTelegramMtprotoVerifyPassword,
   useTelegramMtprotoLogout,
   useGetTelegramMtprotoLiveStats,
-  useGetTelegramMtprotoStatsHistory,
 } from "@workspace/api-client-react";
 
 import {
@@ -351,7 +349,7 @@ function Glass({
 // ---------------------------------------------------------------------------
 
 type LiveMetric = "views" | "subscribers";
-type PeriodKey = "hourly" | "daily" | "weekly" | "monthly";
+type PeriodKey = "hourly" | "daily" | "weekly" | "monthly" | "yearly";
 
 const LIVE_METRIC_CONFIG: Record<
   LiveMetric,
@@ -370,20 +368,20 @@ const LIVE_METRIC_CONFIG: Record<
 };
 
 const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
-  { key: "hourly", label: "Soatlar bo'yicha" },
-  { key: "daily", label: "Kunlar bo'yicha" },
-  { key: "weekly", label: "Haftalar bo'yicha" },
-  { key: "monthly", label: "Oylar bo'yicha" },
+  { key: "hourly", label: "Oxirgi 24 soat" },
+  { key: "daily", label: "Oxirgi 7 kun" },
+  { key: "weekly", label: "Oxirgi 5 hafta" },
+  { key: "monthly", label: "Oxirgi 6 oy" },
+  { key: "yearly", label: "Oxirgi 5 yil" },
 ];
 
-// Mirrors the backend's period -> daysBack mapping (telegramMtproto.ts /
-// connectors.ts) so the chart's date axis always spans exactly the same
-// window the snapshots were queried for.
-const PERIOD_DAYS: Record<PeriodKey, number> = {
-  hourly: 1,
-  daily: 30,
-  weekly: 42,
-  monthly: 365,
+// Frontend period key -> backend /api/stats/dashboard granularity value.
+const PERIOD_TO_GRANULARITY: Record<PeriodKey, string> = {
+  hourly: "hour",
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
 };
 
 function ChartTooltip({ active, payload, label, metricLabel }: any) {
@@ -409,91 +407,88 @@ const UZ_MONTH_SHORT = [
   "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek",
 ];
 
-// Builds one row per calendar day across the selected period's window,
-// filling gaps with 0 (see chartDataFor's comment for why).
-function buildDailySeries(
-  snapshots: { date: string; value: number }[] | undefined,
-  daysBack: number,
-): { date: string; value: number }[] {
-  if (!snapshots || snapshots.length === 0) return [];
-  const byDate = new Map(snapshots.map((s) => [s.date, s.value]));
-  const today = new Date();
-  const days: { date: string; value: number }[] = [];
-  for (let i = daysBack; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
-    days.push({ date: dateStr, value: byDate.get(dateStr) ?? 0 });
-  }
-  return days;
+// One bucket from GET /api/stats/dashboard — value is ALREADY a delta (new
+// activity strictly within [periodStart, periodEnd)), never a raw
+// cumulative reading. See statsAggregation.ts on the backend for why that
+// distinction is the entire point of this endpoint.
+interface StatsBucket {
+  periodStart: string;
+  periodEnd: string;
+  value: number;
+  cumulativeAtEnd: number;
 }
 
-// Real snapshot data only — no synthetic/demo fallback of any kind. But once
-// there's at least one real snapshot (i.e. a post has actually gone out),
-// we pad the rest of the selected period's date range with explicit 0s
-// rather than showing an empty state — a brand-new channel's chart should
-// read as "flat at zero, then a real jump", not "no data" for a period that
-// legitimately had zero activity. Still returns [] when there's truly no
-// history yet, so the empty state stays for that case.
-//
-// Labels/grouping adapt to the selected period rather than always showing
-// one point per calendar day: weekly buckets 7 days into one point (label =
-// the week's last date), monthly buckets by calendar month (label = short
-// Uzbek month name). Bucket value is the max seen in that bucket — these
-// are point-in-time counters (subscriber/view totals), not deltas, so a
-// gap day padded to 0 should never pull a bucket's value back down.
-function chartDataFor(
-  snapshots: { date: string; value: number }[] | undefined,
+interface StatsDashboardResponse {
+  granularity: string;
+  metric: string;
+  source: string;
+  buckets: StatsBucket[];
+  todayValue: number;
+  yesterdayValue: number;
+  allTimeTotal: number;
+  notConnected?: boolean;
+}
+
+// Fetches the period-correct bucket series + today/yesterday comparison for
+// one metric. A thin custom hook (not a generated api-client-react hook)
+// since this route doesn't go through openapi codegen.
+function useStatsDashboard(
+  metric: LiveMetric,
+  period: PeriodKey,
+  enabled: boolean,
+) {
+  const { user: firebaseUser } = useAuth();
+  const granularity = PERIOD_TO_GRANULARITY[period];
+  return useQuery<StatsDashboardResponse>({
+    queryKey: ["stats-dashboard", metric, granularity],
+    enabled,
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(
+        apiUrl(`/api/stats/dashboard?metric=${metric}&granularity=${granularity}`),
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) throw new Error("Statistikani yuklashda xatolik.");
+      return res.json();
+    },
+  });
+}
+
+function labelForBucket(periodStartIso: string, period: PeriodKey): string {
+  const d = new Date(periodStartIso);
+  if (period === "hourly") return `${String(d.getHours()).padStart(2, "0")}:00`;
+  if (period === "yearly") return String(d.getFullYear());
+  if (period === "monthly") return UZ_MONTH_SHORT[d.getMonth()] ?? "";
+  // daily / weekly — short date
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Real bucket data only — each point is that exact period's own new
+// activity (a delta), never a cumulative total. An empty/all-zero series
+// just means no snapshots have been captured yet for that window (a brand
+// new channel, or the scheduler hasn't completed its first hourly pass).
+function chartDataForBuckets(
+  buckets: StatsBucket[] | undefined,
   period: PeriodKey,
 ): { label: string; value: number }[] {
-  const daily = buildDailySeries(snapshots, PERIOD_DAYS[period]);
-  if (daily.length === 0) return [];
-
-  if (period === "weekly") {
-    const buckets: { label: string; value: number }[] = [];
-    for (let i = 0; i < daily.length; i += 7) {
-      const chunk = daily.slice(i, i + 7);
-      if (chunk.length === 0) continue;
-      buckets.push({
-        label: chunk[chunk.length - 1].date.slice(5),
-        value: Math.max(...chunk.map((c) => c.value)),
-      });
-    }
-    return buckets;
-  }
-
-  if (period === "monthly") {
-    const byMonth = new Map<string, number>();
-    for (const d of daily) {
-      const key = d.date.slice(0, 7); // "YYYY-MM"
-      byMonth.set(key, Math.max(byMonth.get(key) ?? 0, d.value));
-    }
-    return Array.from(byMonth.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => {
-        const monthIdx = Number(key.slice(5, 7)) - 1;
-        return { label: UZ_MONTH_SHORT[monthIdx] ?? key.slice(5), value };
-      });
-  }
-
-  // "daily" and "hourly" — one point per calendar day (the backend has no
-  // sub-day granularity yet, so "hourly" still resolves to a 1-day window).
-  return daily.map((d) => ({ label: d.date.slice(5), value: d.value }));
+  if (!buckets || buckets.length === 0) return [];
+  return buckets.map((b) => ({ label: labelForBucket(b.periodStart, period), value: b.value }));
 }
 
-// First-vs-last snapshot in the selected period, as a percent — the
-// "+3.2% shu hafta" badge next to a chart's headline. Real snapshots only,
-// same as chartDataFor; returns null when there isn't enough real history
-// yet rather than showing a misleading 0%.
-function growthFor(
-  snapshots?: { date: string; value: number }[],
+// Most-recent-period vs previous-period, both already period-isolated
+// deltas — this is the correct "+3.2% shu hafta" comparison (today vs
+// yesterday, this week vs last week, etc.), never a cumulative-total
+// comparison.
+function growthForBuckets(
+  buckets?: StatsBucket[],
 ): { percent: number; direction: "up" | "down" | "flat" } | null {
-  if (!snapshots || snapshots.length < 2) return null;
-  const first = snapshots[0].value;
-  const last = snapshots[snapshots.length - 1].value;
-  if (first === 0) return last === 0 ? { percent: 0, direction: "flat" } : null;
-  const percent = ((last - first) / first) * 100;
-  const direction = percent > 0.05 ? "up" : percent < -0.05 ? "down" : "flat";
+  if (!buckets || buckets.length < 2) return null;
+  const prev = buckets[buckets.length - 2].value;
+  const last = buckets[buckets.length - 1].value;
+  if (prev === 0) return last === 0 ? { percent: 0, direction: "flat" } : null;
+  const percent = ((last - prev) / Math.abs(prev)) * 100;
+  const direction = percent > 0.5 ? "up" : percent < -0.5 ? "down" : "flat";
   return { percent, direction };
 }
 
@@ -502,7 +497,9 @@ function ChannelStatsChart({
   currentValue,
   isLive,
   isLoading,
-  snapshots,
+  buckets,
+  todayValue,
+  yesterdayValue,
   period,
   onPeriodChange,
 }: {
@@ -510,19 +507,33 @@ function ChannelStatsChart({
   currentValue?: number;
   isLive: boolean;
   isLoading: boolean;
-  snapshots?: { date: string; value: number }[];
+  buckets?: StatsBucket[];
+  todayValue?: number;
+  yesterdayValue?: number;
   period: PeriodKey;
   onPeriodChange: (period: PeriodKey) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const cfg = LIVE_METRIC_CONFIG[metric];
   const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
-  const chartData = chartDataFor(snapshots, period);
-  const hasRealHistory = chartData.length > 0;
+  const chartData = chartDataForBuckets(buckets, period);
+  const hasRealHistory = chartData.some((d) => d.value !== 0);
   const gradientId = `mountain-${metric}`;
   const headline =
     currentValue === undefined ? (isLoading ? "…" : "—") : currentValue.toLocaleString();
-  const growth = growthFor(snapshots);
+  const growth = growthForBuckets(buckets);
+
+  // "bugun 2k emas, bugun alohida 1k" — today's and yesterday's own new
+  // activity, side by side, never the all-time cumulative total above.
+  const todayVsYesterday =
+    todayValue !== undefined && yesterdayValue !== undefined
+      ? (() => {
+          if (yesterdayValue === 0) {
+            return todayValue === 0 ? null : { percent: null as number | null };
+          }
+          return { percent: ((todayValue - yesterdayValue) / Math.abs(yesterdayValue)) * 100 };
+        })()
+      : null;
 
   return (
     <Glass className="p-6">
@@ -571,14 +582,14 @@ function ChannelStatsChart({
         </div>
       </div>
 
-      <div className="flex items-baseline gap-2 mb-4 flex-wrap">
+      <div className="flex items-baseline gap-2 mb-1 flex-wrap">
         <span className="text-2xl font-bold text-white">{headline}</span>
         <span className="flex items-center gap-1.5 text-xs text-slate-400">
           <span
             className="h-0.5 w-4 rounded-full inline-block"
             style={{ backgroundColor: cfg.color }}
           />
-          {cfg.label}
+          {cfg.label} (jami)
         </span>
         {growth && growth.direction !== "flat" && (
           <span
@@ -594,10 +605,26 @@ function ChannelStatsChart({
               <TrendingDown className="h-3 w-3" />
             )}
             {growth.percent > 0 ? "+" : ""}
-            {growth.percent.toFixed(1)}% ({currentLabel.toLowerCase()})
+            {growth.percent.toFixed(1)}%
           </span>
         )}
       </div>
+
+      {todayValue !== undefined && yesterdayValue !== undefined && (
+        <p className="text-xs text-slate-500 mb-4">
+          Bugun:{" "}
+          <span className="text-slate-300 font-medium">{todayValue.toLocaleString()}</span>
+          {" · "}Kecha:{" "}
+          <span className="text-slate-300 font-medium">{yesterdayValue.toLocaleString()}</span>
+          {todayVsYesterday?.percent != null && (
+            <span className={todayVsYesterday.percent >= 0 ? "text-emerald-400" : "text-rose-400"}>
+              {" "}
+              ({todayVsYesterday.percent > 0 ? "+" : ""}
+              {todayVsYesterday.percent.toFixed(1)}%)
+            </span>
+          )}
+        </p>
+      )}
 
       <div className="h-56 -ml-2">
         {chartData.length === 0 ? (
@@ -2893,7 +2920,7 @@ function ProductForm({
     try {
       const token = await firebaseUser?.getIdToken();
       if (!token) return;
-      void fetch(`/api/products/${productId}/research`, {
+      void fetch(apiUrl(`/api/products/${productId}/research`), {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -3405,16 +3432,34 @@ function DashboardSummaryCards({
   totalViews,
   viewsKnown,
   topChannel,
+  todaySubscribers,
+  yesterdaySubscribers,
+  todayViews,
+  yesterdayViews,
 }: {
   totalSubscribers?: number;
   totalViews?: number;
   viewsKnown: boolean;
   topChannel?: { title: string; views: number } | null;
+  todaySubscribers?: number;
+  yesterdaySubscribers?: number;
+  todayViews?: number;
+  yesterdayViews?: number;
 }) {
   const engagement =
     viewsKnown && totalViews !== undefined && totalSubscribers
       ? totalViews / totalSubscribers
       : null;
+
+  // "bugun 2k emas, bugun alohida 1k" — each card's own today-vs-yesterday
+  // line, right under the all-time total, so the two numbers are never
+  // confused with each other.
+  function todayLine(today?: number, yesterday?: number): string | undefined {
+    if (today === undefined) return undefined;
+    const parts = [`Bugun: ${today.toLocaleString()}`];
+    if (yesterday !== undefined) parts.push(`Kecha: ${yesterday.toLocaleString()}`);
+    return parts.join(" · ");
+  }
 
   const cards = [
     {
@@ -3422,12 +3467,14 @@ function DashboardSummaryCards({
       color: "#22d3ee",
       label: "Jami obunachilar",
       value: totalSubscribers !== undefined ? totalSubscribers.toLocaleString() : "—",
+      sub: todayLine(todaySubscribers, yesterdaySubscribers),
     },
     {
       icon: Eye,
       color: "#a78bfa",
       label: "Jami ko'rishlar",
       value: viewsKnown && totalViews !== undefined ? totalViews.toLocaleString() : "—",
+      sub: viewsKnown ? todayLine(todayViews, yesterdayViews) : undefined,
     },
     {
       icon: BarChart3,
@@ -3562,13 +3609,6 @@ function Dashboard({ goCreate, user }: any) {
     query: { refetchInterval: 30000 },
   });
 
-  // Fetch real subscriber history — triggers a fresh snapshot upsert on the
-  // backend each time the live stats are polled, so history accumulates
-  // automatically over time without any extra user action.
-  const { data: historyData } = useGetTelegramStatsHistory(subscribersPeriod, {
-    refetchInterval: 30000,
-  });
-
   const { data: mtprotoStatus } = useGetTelegramMtprotoStatus();
   const mtprotoConnected = Boolean(mtprotoStatus?.connected);
 
@@ -3578,34 +3618,13 @@ function Dashboard({ goCreate, user }: any) {
     enabled: mtprotoConnected,
     refetchInterval: 30000,
   });
-  const { data: mtprotoHistory } = useGetTelegramMtprotoStatsHistory(viewsPeriod, {
-    enabled: mtprotoConnected,
-    refetchInterval: 30000,
-  });
-  // Separate fetch (own period) so the subscribers chart can use MTProto's
-  // history too — it's the only history source that covers every connected
-  // channel (bot- and mtproto-connectionType alike, see
-  // getMtprotoStatsHistoryForUser), whereas the bot-API history below only
-  // ever reflects channels the bot itself could read a member count for.
-  const { data: mtprotoSubscriberHistory } = useGetTelegramMtprotoStatsHistory(subscribersPeriod, {
-    enabled: mtprotoConnected,
-    refetchInterval: 30000,
-  });
 
-  const viewsSnapshots = mtprotoHistory?.snapshots.map((s) => ({
-    date: s.date,
-    value: s.views,
-  }));
-  const subscribersSnapshots =
-    mtprotoConnected && mtprotoSubscriberHistory
-      ? mtprotoSubscriberHistory.snapshots.map((s) => ({
-          date: s.date,
-          value: s.subscribers,
-        }))
-      : historyData?.snapshots.map((s) => ({
-          date: s.date,
-          value: s.subscribers,
-        }));
+  // Period-correct bucket series + today/yesterday, straight from
+  // /api/stats/dashboard — every number here is already isolated to its
+  // own window (see statsAggregation.ts), so nothing downstream needs to
+  // re-derive deltas from cumulative snapshots itself.
+  const viewsStats = useStatsDashboard("views", viewsPeriod, mtprotoConnected);
+  const subscribersStats = useStatsDashboard("subscribers", subscribersPeriod, true);
 
   const topChannel = (mtprotoLive?.channels ?? [])
     .filter((c: { views: number | null }) => c.views != null)
@@ -3644,6 +3663,10 @@ function Dashboard({ goCreate, user }: any) {
         totalViews={mtprotoLive?.totalViews}
         viewsKnown={mtprotoConnected}
         topChannel={topChannel ? { title: topChannel.channelTitle, views: topChannel.views ?? 0 } : null}
+        todaySubscribers={subscribersStats.data?.todayValue}
+        yesterdaySubscribers={subscribersStats.data?.yesterdayValue}
+        todayViews={mtprotoConnected ? viewsStats.data?.todayValue : undefined}
+        yesterdayViews={mtprotoConnected ? viewsStats.data?.yesterdayValue : undefined}
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -3651,8 +3674,10 @@ function Dashboard({ goCreate, user }: any) {
           metric="views"
           currentValue={mtprotoLive?.totalViews}
           isLive={mtprotoConnected && Boolean(mtprotoLive)}
-          isLoading={mtprotoConnected && mtprotoLoading}
-          snapshots={viewsSnapshots}
+          isLoading={mtprotoConnected && (mtprotoLoading || viewsStats.isLoading)}
+          buckets={viewsStats.data?.buckets}
+          todayValue={mtprotoConnected ? viewsStats.data?.todayValue : undefined}
+          yesterdayValue={mtprotoConnected ? viewsStats.data?.yesterdayValue : undefined}
           period={viewsPeriod}
           onPeriodChange={setViewsPeriod}
         />
@@ -3660,8 +3685,10 @@ function Dashboard({ goCreate, user }: any) {
           metric="subscribers"
           currentValue={totalSubscribers}
           isLive={Boolean(data) || (mtprotoConnected && Boolean(mtprotoLive))}
-          isLoading={isLoading}
-          snapshots={subscribersSnapshots}
+          isLoading={isLoading || subscribersStats.isLoading}
+          buckets={subscribersStats.data?.buckets}
+          todayValue={subscribersStats.data?.todayValue}
+          yesterdayValue={subscribersStats.data?.yesterdayValue}
           period={subscribersPeriod}
           onPeriodChange={setSubscribersPeriod}
         />

@@ -12,6 +12,7 @@ import productsRouter from "./products";
 import productResearchRouter from "./productResearch";
 import youtubeRouter from "./youtube";
 import telegramMtprotoRouter from "./telegramMtproto";
+import statsDashboardRouter from "./statsDashboard";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(productsRouter);
 router.use(productResearchRouter);
 router.use(youtubeRouter);
 router.use(telegramMtprotoRouter);
+router.use(statsDashboardRouter);
 
 export default router;

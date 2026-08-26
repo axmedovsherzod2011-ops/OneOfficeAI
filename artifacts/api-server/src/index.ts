@@ -11,7 +11,8 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
-import { ensureMtprotoSchema, ensureProductResearchSchema } from "@workspace/db";
+import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema } from "@workspace/db";
+import { startStatsScheduler } from "./scheduler/statsScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -45,6 +46,15 @@ await ensureProductResearchSchema().catch((err) => {
   );
 });
 
+// Adds channel_stat_snapshots.captured_at / .hour_bucket if they don't
+// exist yet. Same boot-time-DDL reasoning as the two above.
+await ensureStatsSchema().catch((err) => {
+  logger.error(
+    { err },
+    "ensureStatsSchema failed — hour/day/week/month/year dashboard stats will be inaccurate until this is fixed",
+  );
+});
+
 app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
@@ -58,4 +68,10 @@ app.listen(port, (err) => {
   // Without this call, promoting the bot to admin in a channel is
   // invisible to the server — Telegram has nowhere to send that event.
   void ensureTelegramWebhook();
+
+  // Captures an hourly subscribers/views snapshot for every user in the
+  // background, independent of anyone having the dashboard open — this is
+  // what makes a real "last 24 hours" chart possible instead of only ever
+  // having whatever irregular gaps a user's own visits happened to leave.
+  startStatsScheduler();
 });

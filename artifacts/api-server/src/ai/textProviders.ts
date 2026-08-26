@@ -27,7 +27,7 @@ export const geminiAi = process.env.GEMINI_API_KEY
   : null;
 
 export const IMAGE_MODEL = "gemini-3.1-flash-image";
-const GEMINI_TEXT_MODEL = "gemini-3.6-flash";
+export const GEMINI_TEXT_MODEL = "gemini-3.6-flash";
 
 // ---------------------------------------------------------------------------
 // Retry helper for transient API errors (503 overloaded, 429 rate limit,

@@ -136,6 +136,7 @@ router.post("/products/:id/research", async (req, res) => {
       price: product.sellPrice,
       category: product.category,
       notes: product.description,
+      imageUrl: product.images?.[0],
     });
 
     await db

@@ -215,6 +215,7 @@ router.post("/enrich", async (req, res) => {
             price,
             category,
             notes,
+            imageUrl: product.images?.[0],
           });
 
           await db

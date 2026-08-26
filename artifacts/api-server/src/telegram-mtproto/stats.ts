@@ -10,6 +10,7 @@ import {
 import { eq, and } from "drizzle-orm";
 import { createMtprotoClient } from "./client";
 import { decryptSessionString } from "./sessionCrypto";
+import { recordHourlySnapshot } from "../stats/statsAggregation";
 
 // ---------------------------------------------------------------------------
 // Real per-post view counts via the raw MTProto method
@@ -157,32 +158,7 @@ export async function recordMtprotoSubscriberSnapshot(
   channelRowId: number,
   subscribers: number,
 ): Promise<void> {
-  const today = new Date().toISOString().slice(0, 10);
-  const [existing] = await db
-    .select()
-    .from(channelStatSnapshotsTable)
-    .where(
-      and(
-        eq(channelStatSnapshotsTable.channelRowId, channelRowId),
-        eq(channelStatSnapshotsTable.snapshotDate, today),
-        eq(channelStatSnapshotsTable.source, "mtproto"),
-      ),
-    )
-    .limit(1);
-
-  if (existing) {
-    await db
-      .update(channelStatSnapshotsTable)
-      .set({ subscribers })
-      .where(eq(channelStatSnapshotsTable.id, existing.id));
-  } else {
-    await db.insert(channelStatSnapshotsTable).values({
-      channelRowId,
-      snapshotDate: today,
-      subscribers,
-      source: "mtproto",
-    });
-  }
+  await recordHourlySnapshot(channelRowId, "mtproto", { subscribers });
 }
 
 export interface ParityRow {
@@ -290,7 +266,6 @@ export async function getMtprotoLiveStatsForUser(userId: number): Promise<LiveSt
     }
 
     const results: MtprotoChannelLiveStats[] = [];
-    const today = new Date().toISOString().slice(0, 10);
 
     for (const channel of channels) {
       const targetId = botChannelIdToMtprotoId(channel.channelId);
@@ -336,42 +311,13 @@ export async function getMtprotoLiveStatsForUser(userId: number): Promise<LiveSt
         views,
       });
 
-      // Persist today's mtproto snapshot (upsert by channel+date+source),
-      // same fire-and-forget-tolerant pattern used elsewhere — failures
-      // here must never break the response.
+      // Persist this capture as an hourly snapshot (upsert by
+      // channel+hour+source) — failures here must never break the response.
       try {
-        const [existing] = await db
-          .select()
-          .from(channelStatSnapshotsTable)
-          .where(
-            and(
-              eq(channelStatSnapshotsTable.channelRowId, channel.id),
-              eq(channelStatSnapshotsTable.snapshotDate, today),
-              eq(channelStatSnapshotsTable.source, "mtproto"),
-            ),
-          )
-          .limit(1);
-
-        const patch = {
-          ...(subscribers != null ? { subscribers } : {}),
-          ...(views != null ? { views } : {}),
-        };
-        if (existing) {
-          if (Object.keys(patch).length > 0) {
-            await db
-              .update(channelStatSnapshotsTable)
-              .set(patch)
-              .where(eq(channelStatSnapshotsTable.id, existing.id));
-          }
-        } else {
-          await db.insert(channelStatSnapshotsTable).values({
-            channelRowId: channel.id,
-            snapshotDate: today,
-            subscribers: subscribers ?? 0,
-            views: views ?? null,
-            source: "mtproto",
-          });
-        }
+        const patch: { subscribers?: number; views?: number } = {};
+        if (subscribers != null) patch.subscribers = subscribers;
+        if (views != null) patch.views = views;
+        await recordHourlySnapshot(channel.id, "mtproto", patch);
       } catch (err) {
         console.warn("[mtproto snapshot] upsert failed (non-fatal):", err);
       }

@@ -1,4 +1,4 @@
-import { generateText } from "./textProviders";
+import { generateText, geminiAi, fetchImageBuffer, withRetry, GEMINI_TEXT_MODEL } from "./textProviders";
 import {
   searchProductWebInfo,
   searchProductImages,
@@ -89,6 +89,59 @@ interface ResearchInput {
   price: string;
   category: string;
   notes?: string;
+  // The seller's own uploaded product photo (URL or data: URI). When
+  // present, we ask Gemini vision to identify exactly what's in the frame
+  // BEFORE searching — the seller-typed name is often vague or wrong
+  // ("quloqchin" for a specific model), so grounding the search queries in
+  // what the photo actually shows finds far more precise results.
+  imageUrl?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Vision step: look at the product's own photo and describe, literally and
+// specifically, what it is (type/brand/model/color/distinguishing marks).
+// Best-effort — any failure (no Gemini key, bad URL, model refusal) just
+// means research proceeds without it, same as before this existed.
+// ---------------------------------------------------------------------------
+
+async function identifyProductFromImage(imageUrl: string): Promise<string | null> {
+  if (!geminiAi) return null;
+  try {
+    let base64: string;
+    let mimeType: string;
+    const dataUrlMatch = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1];
+      base64 = dataUrlMatch[2];
+    } else {
+      const img = await fetchImageBuffer(imageUrl);
+      if (!img) return null;
+      mimeType = img.contentType;
+      base64 = img.buffer.toString("base64");
+    }
+
+    const result = await withRetry(() =>
+      geminiAi!.models.generateContent({
+        model: GEMINI_TEXT_MODEL,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { data: base64, mimeType } },
+              {
+                text: "Look at this product photo taken by an online seller. In one short literal sentence, identify exactly what it is: precise product type, visible brand/model if any, color, and any distinguishing feature. This will be used as a search-engine query, not marketing copy — be plain and specific, not promotional. If the photo doesn't show a clear product, say so briefly. Plain text only, no markdown, no quotes.",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const text = result.text?.trim();
+    return text || null;
+  } catch (err) {
+    console.warn("Rasm orqali mahsulotni aniqlash muvaffaqiyatsiz, davom etamiz:", err);
+    return null;
+  }
 }
 
 // Dedupe search hits by domain so the AI context isn't dominated by 5 near-
@@ -127,23 +180,29 @@ export interface ResearchResult {
   // handed back so the caller can show something immediately on a fresh
   // (non-cached) research run.
   images: DdgImage[];
+  // What the vision step saw in the seller's photo, if anything — surfaced
+  // so callers/UI can show *why* certain search results were picked.
+  visualIdentification: string | null;
 }
 
 export async function runProductResearch(input: ResearchInput): Promise<ResearchResult> {
-  const { name, price, category, notes } = input;
+  const { name, price, category, notes, imageUrl } = input;
+
+  const visualId = imageUrl ? await identifyProductFromImage(imageUrl) : null;
 
   const baseQuery = [name, notes, category].filter(Boolean).join(" ");
   const queries = [
     baseQuery,
+    ...(visualId ? [visualId] : []),
     `${name} sharh review`,
     `${name} narxi price`,
     `${name} tiktok instagram`,
-    ...CURATED_SOURCES.map((site) => `site:${site} ${name}`),
+    ...CURATED_SOURCES.map((site) => `site:${site} ${visualId || name}`),
   ];
 
   const [resultsPerQuery, images] = await Promise.all([
     Promise.all(queries.map((q) => searchProductWebInfo(q, 3))),
-    searchProductImages(`${name} product photo`, 8),
+    searchProductImages(`${visualId || name} product photo`, 8),
   ]);
 
   const allSnippets = resultsPerQuery.flat();
@@ -170,6 +229,7 @@ ${
     ? `Real web search results about this exact product, gathered from general search + curated marketplaces + review/virality signals:\n${webContext}`
     : `No usable web search results were found for this product — write based on general knowledge of this product category, and keep specific claims (dimensions, weight, specs) conservative/typical rather than inventing precise details.`
 }
+${visualId ? `\nVisual identification from the seller's own product photo (trust this over a vague seller-typed name if they conflict — it's what the camera actually saw): ${visualId}` : ""}
 
 Return a JSON object with these exact keys:
 {
@@ -219,7 +279,7 @@ Do not write a full post yourself — just fill in these fields, each standalone
       : [],
   };
 
-  return { card, sources, images };
+  return { card, sources, images, visualIdentification: visualId };
 }
 
 // ---------------------------------------------------------------------------
