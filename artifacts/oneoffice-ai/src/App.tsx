@@ -3298,7 +3298,7 @@ function ProductCard({
   const thumb = product.images?.[0];
   return (
     <Glass className="p-2.5 sm:p-4 flex flex-col">
-      <div className="relative rounded-lg sm:rounded-xl overflow-hidden bg-white/5 aspect-square mb-2 sm:mb-3 flex items-center justify-center">
+      <div className="relative rounded-lg sm:rounded-xl overflow-hidden bg-white/5 aspect-[3/4] mb-2 sm:mb-3 flex items-center justify-center">
         {thumb ? (
           <img src={thumb} alt={product.name} className="w-full h-full object-cover" />
         ) : (
@@ -3973,7 +3973,7 @@ function ProductPicker({
         onClick={() => onPick(p)}
         className="text-left rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 hover:border-violet-400/40 transition p-3"
       >
-        <div className="relative rounded-xl overflow-hidden bg-white/5 aspect-square mb-2.5 flex items-center justify-center">
+        <div className="relative rounded-xl overflow-hidden bg-white/5 aspect-[3/4] mb-2.5 flex items-center justify-center">
           {thumb ? (
             <img src={thumb} alt={p.name} className="w-full h-full object-cover" />
           ) : (
@@ -6489,7 +6489,7 @@ function StorefrontPage({ slug }: { slug: string }) {
                 onClick={() => setLocation(`/store/${slug}/product/${p.id}`)}
                 className="!rounded-2xl overflow-hidden group hover:border-white/20 transition cursor-pointer"
               >
-                <div className="relative aspect-square overflow-hidden bg-white/5">
+                <div className="relative aspect-[3/4] overflow-hidden bg-white/5">
                   {p.images?.[0] ? (
                     <img
                       src={p.images[0]}
@@ -6558,6 +6558,20 @@ function ProductDetailPage({
   const [, setLocation] = useLocation();
   const [activeIndex, setActiveIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const carouselRef = useRef<HTMLDivElement>(null);
+
+  function handleCarouselScroll() {
+    const el = carouselRef.current;
+    if (!el || el.clientWidth === 0) return;
+    setActiveIndex(Math.round(el.scrollLeft / el.clientWidth));
+  }
+
+  function scrollCarouselTo(i: number) {
+    const el = carouselRef.current;
+    if (!el) return;
+    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    setActiveIndex(i);
+  }
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [orderResult, setOrderResult] = useState<{ orderNumber: string; totalAmount: string; currency: string } | null>(null);
@@ -6670,23 +6684,49 @@ function ProductDetailPage({
       </div>
 
       <div className="max-w-2xl mx-auto">
-        <div className="relative aspect-square bg-white/5">
-          {images.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => setLightboxOpen(true)}
-              className="w-full h-full cursor-zoom-in"
-              aria-label="Rasmni to'liq ekranda ochish"
-            >
-              <img
-                src={images[activeIndex]}
-                alt={product.name}
-                className="w-full h-full object-cover"
-              />
-            </button>
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <ImageIcon className="h-8 w-8 text-slate-600" />
+        <div className="relative">
+          <div
+            ref={carouselRef}
+            onScroll={handleCarouselScroll}
+            className="flex overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden"
+            style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+          >
+            {images.length > 0 ? (
+              images.map((src, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    setActiveIndex(i);
+                    setLightboxOpen(true);
+                  }}
+                  className="shrink-0 w-full snap-center aspect-[3/4] bg-white/5 cursor-zoom-in"
+                  aria-label="Rasmni to'liq ekranda ochish"
+                >
+                  <img
+                    src={src}
+                    alt={`${product.name} ${i + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+              ))
+            ) : (
+              <div className="shrink-0 w-full snap-center aspect-[3/4] bg-white/5 flex items-center justify-center">
+                <ImageIcon className="h-8 w-8 text-slate-600" />
+              </div>
+            )}
+          </div>
+
+          {images.length > 1 && (
+            <div className="absolute bottom-3 left-0 right-0 flex items-center justify-center gap-1.5">
+              {images.map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 rounded-full transition-all ${
+                    i === activeIndex ? "w-4 bg-white" : "w-1.5 bg-white/40"
+                  }`}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -6696,7 +6736,7 @@ function ProductDetailPage({
             {images.map((src, i) => (
               <button
                 key={i}
-                onClick={() => setActiveIndex(i)}
+                onClick={() => scrollCarouselTo(i)}
                 className={`shrink-0 h-16 w-16 rounded-xl overflow-hidden border-2 transition ${
                   i === activeIndex
                     ? "border-violet-400"
@@ -6705,7 +6745,7 @@ function ProductDetailPage({
               >
                 <img
                   src={src}
-                  alt={`${product.name} ${i + 1}`}
+                  alt={`${product.name} thumb ${i + 1}`}
                   className="w-full h-full object-cover"
                 />
               </button>
