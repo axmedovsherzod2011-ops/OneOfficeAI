@@ -126,6 +126,7 @@ router.get(
         currency: productsTable.currency,
         description: productsTable.description,
         images: productsTable.images,
+        createdAt: productsTable.createdAt,
       })
       .from(productsTable)
       .where(

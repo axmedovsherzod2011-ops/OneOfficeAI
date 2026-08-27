@@ -6580,54 +6580,83 @@ function StorefrontPage({ slug }: { slug: string }) {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-            {filtered.map((p: any) => (
-              <Glass
-                key={p.id}
-                onClick={() => setLocation(`/store/${slug}/product/${p.id}`)}
-                className="!rounded-2xl overflow-hidden group hover:border-white/20 transition cursor-pointer"
-              >
-                <div className="relative aspect-[3/4] overflow-hidden bg-white/5">
-                  {p.images?.[0] ? (
-                    <img
-                      src={p.images[0]}
-                      alt={p.name}
-                      className="w-full h-full object-cover transition duration-500 group-hover:scale-105"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <ImageIcon className="h-6 w-6 text-slate-600" />
-                    </div>
-                  )}
-                  {p.images?.length > 1 && (
-                    <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium font-mono bg-black/50 backdrop-blur-sm text-white">
-                      <ImageIcon className="h-3 w-3" /> {p.images.length}
-                    </span>
-                  )}
-                  {p.sellPrice && (
-                    <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full pl-2 pr-3 py-1 text-xs font-semibold font-mono bg-gradient-to-r from-violet-500 to-blue-500 text-white shadow-lg shadow-violet-900/30">
-                      <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
-                      {p.sellPrice} {p.currency || "UZS"}
-                    </span>
-                  )}
-                </div>
-                <div className="p-3.5">
-                  {p.category && (
-                    <p className="font-mono text-xs uppercase tracking-wide mb-1 text-violet-400/80">
-                      {p.category}
+          // "Pro card" — restructured after Uzum.uz's actual product-card
+          // anatomy (image → price, bold and dominant → title, 2 lines →
+          // status badges), adapted to our own dark violet/blue glass
+          // brand instead of copying Uzum's white theme. Two deliberate
+          // departures from the old card: (1) price moves OUT of a small
+          // pill overlaid on the image and into its own full-width,
+          // bold line below the image — on Uzum the price is the single
+          // most prominent line on the whole card, bigger than the
+          // title, not a corner badge; (2) the per-card category label
+          // and description snippet are dropped — Uzum's grid cards never
+          // repeat the category (the filter pills above already carry
+          // that) and never show body copy, only image + price + title
+          // + status badges, which keeps the grid scannable at a glance.
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {filtered.map((p: any) => {
+              const isNew =
+                p.createdAt &&
+                Date.now() - new Date(p.createdAt).getTime() < 3 * 24 * 60 * 60 * 1000;
+              return (
+                <Glass
+                  key={p.id}
+                  onClick={() => setLocation(`/store/${slug}/product/${p.id}`)}
+                  className="!rounded-2xl overflow-hidden group hover:border-violet-400/30 transition cursor-pointer"
+                >
+                  <div className="relative aspect-[3/4] overflow-hidden bg-white/5">
+                    {p.images?.[0] ? (
+                      <img
+                        src={p.images[0]}
+                        alt={p.name}
+                        className="w-full h-full object-cover transition duration-500 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <ImageIcon className="h-6 w-6 text-slate-600" />
+                      </div>
+                    )}
+
+                    {/* Status badges — top-left, stacked like Uzum's
+                        ORIGINAL / Yangilik corner badges. */}
+                    {isNew && (
+                      <span className="absolute top-3 left-3 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold font-mono uppercase tracking-wide bg-emerald-500 text-white shadow-lg shadow-emerald-900/30">
+                        <Sparkles className="h-2.5 w-2.5" /> Yangi
+                      </span>
+                    )}
+
+                    {/* Image count — top-right, unchanged position. */}
+                    {p.images?.length > 1 && (
+                      <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium font-mono bg-black/50 backdrop-blur-sm text-white">
+                        <ImageIcon className="h-3 w-3" /> {p.images.length}
+                      </span>
+                    )}
+
+                    {/* Bottom scrim so a busy photo never fights the
+                        content block right below it — a subtle,
+                        professional finishing touch Uzum's own cards
+                        use via a soft image-to-white gradient; ours
+                        fades to the same slate the content area sits
+                        on instead of white, to stay on-brand. */}
+                    <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-slate-950/40 to-transparent pointer-events-none" />
+                  </div>
+
+                  <div className="p-3.5">
+                    {p.sellPrice && (
+                      <p className="flex items-baseline gap-1 text-[15px] font-bold text-white">
+                        {p.sellPrice}
+                        <span className="text-xs font-semibold text-slate-400">
+                          {p.currency || "UZS"}
+                        </span>
+                      </p>
+                    )}
+                    <p className="text-sm text-slate-300 leading-snug line-clamp-2 mt-1">
+                      {p.name}
                     </p>
-                  )}
-                  <p className="text-sm font-medium text-white truncate">
-                    {p.name}
-                  </p>
-                  {p.description && (
-                    <p className="text-xs mt-1 text-slate-500 line-clamp-2">
-                      {p.description}
-                    </p>
-                  )}
-                </div>
-              </Glass>
-            ))}
+                  </div>
+                </Glass>
+              );
+            })}
           </div>
         )}
 
