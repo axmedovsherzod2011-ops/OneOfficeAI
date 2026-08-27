@@ -416,6 +416,7 @@ interface StatsBucket {
   periodEnd: string;
   value: number;
   cumulativeAtEnd: number;
+  grounded: boolean;
 }
 
 interface StatsDashboardResponse {
@@ -426,6 +427,7 @@ interface StatsDashboardResponse {
   todayValue: number;
   yesterdayValue: number;
   allTimeTotal: number;
+  hasGroundedHistory: boolean;
   notConnected?: boolean;
 }
 
@@ -500,6 +502,7 @@ function ChannelStatsChart({
   buckets,
   todayValue,
   yesterdayValue,
+  hasGroundedHistory,
   period,
   onPeriodChange,
 }: {
@@ -510,6 +513,7 @@ function ChannelStatsChart({
   buckets?: StatsBucket[];
   todayValue?: number;
   yesterdayValue?: number;
+  hasGroundedHistory?: boolean;
   period: PeriodKey;
   onPeriodChange: (period: PeriodKey) => void;
 }) {
@@ -517,7 +521,12 @@ function ChannelStatsChart({
   const cfg = LIVE_METRIC_CONFIG[metric];
   const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
   const chartData = chartDataForBuckets(buckets, period);
-  const hasRealHistory = chartData.some((d) => d.value !== 0);
+  // NOT "does some bucket have a nonzero value" — a run of real, grounded
+  // 0-value buckets (tracking is live, nothing simply changed in that
+  // window) is completely legitimate and must render as a normal chart.
+  // Only "we have no grounded bucket at all" means there's truly nothing
+  // to plot yet.
+  const hasRealHistory = Boolean(hasGroundedHistory);
   const gradientId = `mountain-${metric}`;
   const headline =
     currentValue === undefined ? (isLoading ? "…" : "—") : currentValue.toLocaleString();
@@ -3689,6 +3698,7 @@ function Dashboard({ goCreate, user }: any) {
           buckets={viewsStats.data?.buckets}
           todayValue={mtprotoConnected ? viewsStats.data?.todayValue : undefined}
           yesterdayValue={mtprotoConnected ? viewsStats.data?.yesterdayValue : undefined}
+          hasGroundedHistory={mtprotoConnected ? viewsStats.data?.hasGroundedHistory : false}
           period={viewsPeriod}
           onPeriodChange={setViewsPeriod}
         />
@@ -3700,6 +3710,7 @@ function Dashboard({ goCreate, user }: any) {
           buckets={subscribersStats.data?.buckets}
           todayValue={subscribersStats.data?.todayValue}
           yesterdayValue={subscribersStats.data?.yesterdayValue}
+          hasGroundedHistory={subscribersStats.data?.hasGroundedHistory}
           period={subscribersPeriod}
           onPeriodChange={setSubscribersPeriod}
         />

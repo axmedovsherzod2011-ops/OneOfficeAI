@@ -90,6 +90,7 @@ router.get(
         todayValue: 0,
         yesterdayValue: 0,
         allTimeTotal: 0,
+        hasGroundedHistory: false,
         notConnected: true,
       });
       return;

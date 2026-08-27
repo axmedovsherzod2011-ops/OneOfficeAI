@@ -102,6 +102,13 @@ function buildBucketWindows(granularity: Granularity, now: Date): BucketWindow[]
 export interface StatsBucket extends BucketWindow {
   value: number; // NEW activity within this exact window only (a delta)
   cumulativeAtEnd: number; // the raw running total as of periodEnd, for reference
+  // True when this bucket's delta is backed by a real snapshot at (or
+  // before) periodStart — i.e. `value` is a genuine, trustworthy number
+  // (even when that number happens to be 0, because nothing changed in
+  // this window). False means periodStart predates our first-ever
+  // snapshot, so `value` was forced to 0 for lack of anything to compare
+  // against — that 0 means "unknown", not "no activity".
+  grounded: boolean;
 }
 
 export interface StatsSummary {
@@ -117,6 +124,12 @@ export interface StatsSummary {
   // Most recent known cumulative reading (subscribers gauge / all-time
   // views total).
   allTimeTotal: number;
+  // True iff at least one bucket above is `grounded`. The UI uses this —
+  // NOT "is every bucket's value 0?" — to decide between rendering the
+  // real chart (0-valued buckets included; 0 is a legitimate, meaningful
+  // reading) and showing the "hali ma'lumot yo'q" empty state (which
+  // belongs only to genuinely untracked periods).
+  hasGroundedHistory: boolean;
 }
 
 type Row = { capturedAt: Date; subscribers: number; views: number | null };
@@ -135,10 +148,11 @@ export async function getStatsSummary(
       granularity,
       metric,
       source,
-      buckets: windows.map((w) => ({ ...w, value: 0, cumulativeAtEnd: 0 })),
+      buckets: windows.map((w) => ({ ...w, value: 0, cumulativeAtEnd: 0, grounded: false })),
       todayValue: 0,
       yesterdayValue: 0,
       allTimeTotal: 0,
+      hasGroundedHistory: false,
     };
   }
 
@@ -223,8 +237,9 @@ export async function getStatsSummary(
   const buckets: StatsBucket[] = windows.map((w) => {
     const endVal = valueAt(new Date(w.periodEnd));
     const startVal = valueAt(new Date(w.periodStart));
-    const value = isGrounded(new Date(w.periodStart)) ? endVal - startVal : 0;
-    return { ...w, value, cumulativeAtEnd: endVal };
+    const grounded = isGrounded(new Date(w.periodStart));
+    const value = grounded ? endVal - startVal : 0;
+    return { ...w, value, cumulativeAtEnd: endVal, grounded };
   });
 
   const startOfToday = new Date(now);
@@ -244,6 +259,7 @@ export async function getStatsSummary(
     todayValue: isGrounded(startOfToday) ? nowVal - startOfTodayVal : 0,
     yesterdayValue: isGrounded(startOfYesterday) ? startOfTodayVal - startOfYesterdayVal : 0,
     allTimeTotal: nowVal,
+    hasGroundedHistory: buckets.some((b) => b.grounded),
   };
 }
 
