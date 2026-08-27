@@ -5048,6 +5048,23 @@ function AppShell() {
     retry: 1,
   });
 
+  // Public storefront slug — same query key as StoreConnectorCard, so this
+  // is a cache-share, not a duplicate request. Used to build the
+  // per-product order link that gets folded into freshly generated post
+  // text below (see handleGenerateDone).
+  const { data: storeConfig } = useQuery({
+    queryKey: ["store-config"],
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch("/api/connectors/store/config", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Failed to load store config");
+      return res.json();
+    },
+    enabled: !!firebaseUser,
+  });
+
   // Connected Telegram channels — fetched once a profile exists. Post
   // creation reads from this (via `channels` below) to let the person pick
   // which channel to publish to; Connectors/Profile/Sidebar all share the
@@ -5369,6 +5386,24 @@ function AppShell() {
   }
 
   function handleGenerateDone(data: any) {
+    // Fold in a direct "order this exact product" link — but only when the
+    // post is for a real saved product (picked from Inventory, so it has an
+    // id) that's actually "active" (drafts don't exist on the public
+    // storefront yet, so linking one would 404) and the seller's storefront
+    // slug has loaded. Manually-typed posts (no selectedProduct) are left
+    // untouched — there's no product page to link to.
+    if (
+      selectedProduct?.id &&
+      selectedProduct.status === "active" &&
+      storeConfig?.slug &&
+      data?.postText
+    ) {
+      const orderUrl = `${window.location.origin}/store/${storeConfig.slug}/product/${selectedProduct.id}`;
+      data = {
+        ...data,
+        postText: `${data.postText}\n\n🛍 Onlayn buyurtma: ${orderUrl}`,
+      };
+    }
     setEnrichData(data);
     setFlow("results");
   }
