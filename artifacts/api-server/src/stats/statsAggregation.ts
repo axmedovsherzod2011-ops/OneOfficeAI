@@ -209,20 +209,24 @@ export async function getStatsSummary(
   // unknown to us — it is NOT "0 subscribers" or "0 views", it's just
   // untracked. valueAt() above has no choice but to treat "no reading yet"
   // as a 0 contribution (there is nothing else it can do for a running
-  // sum), but that means a naive (endVal - startVal) for the bucket that
-  // straddles a channel's very first snapshot silently computes
+  // sum), but that means a naive (endVal - startVal) for a window that
+  // starts before tracking began silently computes
   // (currentCumulativeTotal - 0) — dumping weeks of prior, untracked
-  // accumulation into that single bucket as if it all happened *in* that
-  // bucket. That's exactly the false "everything spiked today" chart.
+  // accumulation into that single window as if it all happened *in* it.
+  // That's the false "everything spiked today" chart this module exists
+  // to prevent.
   //
-  // Fix: a bucket only gets a real delta once its periodStart itself is
-  // at-or-after the earliest snapshot we have (i.e. both ends of the
-  // subtraction are grounded in an actual reading). Any bucket whose
-  // window starts before we had any tracking data yet reports value: 0 —
-  // an honest "no data to compare against" rather than a fabricated jump.
-  // Real, non-zero deltas start appearing naturally from the first full
-  // bucket after tracking began, once two consecutive real snapshots
-  // exist to subtract.
+  // The fix is NOT "if periodStart isn't grounded, report 0" — that
+  // over-corrects: a window like "kecha" (yesterday, 00:00-24:00) can
+  // start before tracking began but still END well after it, meaning
+  // most of that window WAS genuinely tracked and its real growth is
+  // fully knowable — reporting flat 0 for it throws away real, known
+  // data. Instead: clamp the window's effective start forward to
+  // earliestSnapshotAt whenever periodStart falls before it (but leave
+  // periodEnd untouched) — so the delta measures exactly the tracked
+  // portion of the window, never the untracked portion. A window that
+  // ends at-or-before earliestSnapshotAt has no tracked portion at all
+  // and correctly reports 0.
   let earliestSnapshotAt: Date | null = null;
   for (const list of byChannel.values()) {
     const first = list[0];
@@ -230,16 +234,28 @@ export async function getStatsSummary(
       earliestSnapshotAt = first.capturedAt;
     }
   }
-  function isGrounded(boundary: Date): boolean {
-    return earliestSnapshotAt !== null && boundary.getTime() >= earliestSnapshotAt.getTime();
+  // Real, meaningful signal exists for this window iff any part of it is
+  // at-or-after our first-ever snapshot.
+  function isGrounded(periodEnd: Date): boolean {
+    return earliestSnapshotAt !== null && periodEnd.getTime() > earliestSnapshotAt.getTime();
+  }
+  // The delta for [periodStart, periodEnd], restricted to only the
+  // portion of that window we actually have tracking data for.
+  function trackedDelta(periodStart: Date, periodEnd: Date): number {
+    if (!isGrounded(periodEnd)) return 0;
+    const effectiveStart =
+      earliestSnapshotAt !== null && periodStart.getTime() < earliestSnapshotAt.getTime()
+        ? earliestSnapshotAt
+        : periodStart;
+    return valueAt(periodEnd) - valueAt(effectiveStart);
   }
 
   const buckets: StatsBucket[] = windows.map((w) => {
-    const endVal = valueAt(new Date(w.periodEnd));
-    const startVal = valueAt(new Date(w.periodStart));
-    const grounded = isGrounded(new Date(w.periodStart));
-    const value = grounded ? endVal - startVal : 0;
-    return { ...w, value, cumulativeAtEnd: endVal, grounded };
+    const periodStart = new Date(w.periodStart);
+    const periodEnd = new Date(w.periodEnd);
+    const grounded = isGrounded(periodEnd);
+    const value = trackedDelta(periodStart, periodEnd);
+    return { ...w, value, cumulativeAtEnd: valueAt(periodEnd), grounded };
   });
 
   const startOfToday = new Date(now);
@@ -248,16 +264,14 @@ export async function getStatsSummary(
   startOfYesterday.setDate(startOfYesterday.getDate() - 1);
 
   const nowVal = valueAt(now);
-  const startOfTodayVal = valueAt(startOfToday);
-  const startOfYesterdayVal = valueAt(startOfYesterday);
 
   return {
     granularity,
     metric,
     source,
     buckets,
-    todayValue: isGrounded(startOfToday) ? nowVal - startOfTodayVal : 0,
-    yesterdayValue: isGrounded(startOfYesterday) ? startOfTodayVal - startOfYesterdayVal : 0,
+    todayValue: trackedDelta(startOfToday, now),
+    yesterdayValue: trackedDelta(startOfYesterday, startOfToday),
     allTimeTotal: nowVal,
     hasGroundedHistory: buckets.some((b) => b.grounded),
   };
