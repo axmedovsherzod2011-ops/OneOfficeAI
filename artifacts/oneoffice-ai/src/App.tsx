@@ -5646,6 +5646,23 @@ function AppShell() {
     retry: 1,
   });
 
+  // Public storefront slug — same query key as StoreConnectorCard, so this
+  // is a cache-share, not a duplicate request. Used to build the
+  // per-product order link that gets folded into post text (see
+  // handleGenerateDone / handleApprove below).
+  const { data: storeConfig } = useQuery({
+    queryKey: ["store-config"],
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/connectors/store/config"), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Failed to load store config");
+      return res.json();
+    },
+    enabled: !!firebaseUser,
+  });
+
   // Connected Telegram channels — fetched once a profile exists. Post
   // creation reads from this (via `channels` below) to let the person pick
   // which channel to publish to; Connectors/Profile/Sidebar all share the
@@ -5663,6 +5680,13 @@ function AppShell() {
       enabled: !!profile,
     },
   });
+
+  // Ensures the "order this product" link (see handleApprove) always has
+  // somewhere to write to — create a brand-new product for posts made via
+  // Skip/manual entry, or flip a picked Draft to Active right before
+  // publishing.
+  const createProduct = useCreateProduct();
+  const updateProduct = useUpdateProduct();
 
   const [navView, setNavView] = useState("dashboard");
   const [flow, setFlow] = useState("product");
@@ -5968,6 +5992,25 @@ function AppShell() {
   }
 
   function handleGenerateDone(data: any) {
+    // Fold in a direct "order this exact product" link — but only when the
+    // post is for a real saved product (picked from Inventory, so it has an
+    // id) that's actually "active" (drafts don't exist on the public
+    // storefront yet, so linking one would 404) and the seller's storefront
+    // slug has loaded. This is the fast path for the common case; the
+    // Skip/manual and Draft cases are covered as a safety net in
+    // handleApprove right before publishing (see below).
+    if (
+      selectedProduct?.id &&
+      selectedProduct.status === "active" &&
+      storeConfig?.slug &&
+      data?.postText
+    ) {
+      const orderUrl = `${window.location.origin}/store/${storeConfig.slug}/product/${selectedProduct.id}`;
+      data = {
+        ...data,
+        postText: `${data.postText}\n\n🛍 Onlayn buyurtma: ${orderUrl}`,
+      };
+    }
     setEnrichData(data);
     setFlow("results");
   }
@@ -5977,7 +6020,7 @@ function AppShell() {
     setFlow("results"); // Show results even on error with fallback text
   }
 
-  function handleApprove() {
+  async function handleApprove() {
     if (selectedChannelIds.length === 0) {
       setShowPreview(false);
       setPublishError("Post qilishdan oldin kamida bitta Telegram kanal tanlang.");
@@ -5985,6 +6028,61 @@ function AppShell() {
     }
     setShowPreview(false);
     setPublishError("");
+
+    // Guarantee an order link at the bottom of the actual published
+    // message — not just when a product happened to be pre-selected and
+    // active at generation time. Covers every path into Create Post:
+    //  - "Skip" / typed manually → no product exists yet, create one now
+    //    (with whatever images were picked) so it's orderable.
+    //  - picked a Draft from Inventory → publishing it publicly means it
+    //    should also go live on the storefront, so promote it to Active.
+    //  - already an Active product → link was already added after
+    //    generation; this just avoids adding it twice.
+    try {
+      let product = selectedProduct;
+      const productImageUrls = (selectedImages || []).map((img: any) => img.url);
+
+      if (!product?.id) {
+        product = await createProduct.mutateAsync({
+          data: {
+            name: form.name,
+            category: form.category,
+            sellPrice: form.price,
+            currency: form.currency as any,
+            description: form.notes || "",
+            images: productImageUrls,
+            status: "active",
+          },
+        });
+        setSelectedProduct(product);
+        queryClient.invalidateQueries({ queryKey: getListProductsQueryKey() });
+      } else if (product.status !== "active") {
+        product = await updateProduct.mutateAsync({
+          id: product.id,
+          data: { status: "active" },
+        });
+        setSelectedProduct(product);
+        queryClient.invalidateQueries({ queryKey: getListProductsQueryKey() });
+      }
+
+      if (product?.id && storeConfig?.slug && enrichData?.postText) {
+        const orderUrl = `${window.location.origin}/store/${storeConfig.slug}/product/${product.id}`;
+        if (!enrichData.postText.includes(orderUrl)) {
+          setEnrichData({
+            ...enrichData,
+            postText: `${enrichData.postText}\n\n🛍 Onlayn buyurtma: ${orderUrl}`,
+          });
+        }
+      }
+    } catch (err: any) {
+      setPublishError(
+        err?.data?.error ||
+          err?.message ||
+          "Mahsulotni saqlab bo'lmadi. Qayta urinib ko'ring.",
+      );
+      return;
+    }
+
     setFlow("publishing");
   }
 
