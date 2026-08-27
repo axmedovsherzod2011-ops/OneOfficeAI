@@ -11,7 +11,7 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
-import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema } from "@workspace/db";
+import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema } from "@workspace/db";
 import { startStatsScheduler } from "./scheduler/statsScheduler";
 
 const rawPort = process.env["PORT"];
@@ -53,6 +53,12 @@ await ensureStatsSchema().catch((err) => {
     { err },
     "ensureStatsSchema failed — hour/day/week/month/year dashboard stats will be inaccurate until this is fixed",
   );
+});
+
+// Creates the orders table if it doesn't exist yet. Same no-shell-access
+// reasoning as the ensure*Schema calls above.
+await ensureOrdersSchema().catch((err) => {
+  logger.error({ err }, "ensureOrdersSchema failed — storefront checkout and the Orders page will 500 until this is fixed");
 });
 
 app.listen(port, (err) => {

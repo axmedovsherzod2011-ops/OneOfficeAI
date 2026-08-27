@@ -310,3 +310,4 @@ export * from "./schema";
 export { ensureMtprotoSchema } from "./ensureMtprotoSchema";
 export { ensureProductResearchSchema } from "./ensureProductResearchSchema";
 export { ensureStatsSchema } from "./ensureStatsSchema";
+export { ensureOrdersSchema } from "./ensureOrdersSchema";
