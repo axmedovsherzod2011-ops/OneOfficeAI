@@ -261,12 +261,21 @@ function proxyImage(url: string): string {
   return `/api/images/proxy?url=${encodeURIComponent(url)}`;
 }
 
-// Reads an uploaded photo, downsizes it (long edge capped at 1600px) and
-// re-encodes as JPEG before turning it into a base64 data URL. Phone
-// camera photos are routinely 3-8MB — without this, selecting a handful of
-// them for a product would blow past the request body limit and take
-// forever to upload on a slow connection.
-function resizeImageFile(file: File, maxDim = 1600, quality = 0.82): Promise<string> {
+// Reads an uploaded photo and re-encodes it as a JPEG at a fixed
+// 1080x1440 (3:4 portrait) canvas — cropped-to-cover like a real
+// marketplace listing photo, so every product image is the exact same
+// size and aspect ratio everywhere it's shown (inventory grid, storefront
+// grid, product detail, order line items), regardless of what the seller
+// originally shot on their phone.
+const PRODUCT_IMAGE_WIDTH = 1080;
+const PRODUCT_IMAGE_HEIGHT = 1440;
+
+function resizeImageFile(
+  file: File,
+  targetWidth = PRODUCT_IMAGE_WIDTH,
+  targetHeight = PRODUCT_IMAGE_HEIGHT,
+  quality = 0.85,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = reject;
@@ -274,19 +283,9 @@ function resizeImageFile(file: File, maxDim = 1600, quality = 0.82): Promise<str
       const img = new Image();
       img.onerror = reject;
       img.onload = () => {
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
         const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext("2d");
         if (!ctx) {
           // Canvas unsupported for some reason — fall back to the
@@ -294,7 +293,22 @@ function resizeImageFile(file: File, maxDim = 1600, quality = 0.82): Promise<str
           resolve(reader.result as string);
           return;
         }
-        ctx.drawImage(img, 0, 0, width, height);
+
+        // "Cover" crop, same idea as CSS object-fit: cover — scale so the
+        // source fully covers the 1080x1440 frame, then crop whichever
+        // dimension overflows, centered, instead of stretching/distorting.
+        const sourceRatio = img.width / img.height;
+        const targetRatio = targetWidth / targetHeight;
+        let sx = 0, sy = 0, sw = img.width, sh = img.height;
+        if (sourceRatio > targetRatio) {
+          sw = img.height * targetRatio;
+          sx = (img.width - sw) / 2;
+        } else if (sourceRatio < targetRatio) {
+          sh = img.width / targetRatio;
+          sy = (img.height - sh) / 2;
+        }
+
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight);
         resolve(canvas.toDataURL("image/jpeg", quality));
       };
       img.src = reader.result as string;
@@ -4380,12 +4394,7 @@ function Results({
     e.target.value = "";
     if (!file) return;
 
-    const dataUrl: string = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+    const dataUrl = await resizeImageFile(file);
 
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const title = form.name || "Yuklangan rasm";
