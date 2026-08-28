@@ -155,6 +155,13 @@ router.get(
         ...p,
         composition: card?.composition ?? "",
         instructions: card?.usageGuide ?? "",
+        // Same content that already goes into a Telegram post for this
+        // product (see buildPostText) — surfaced here too, as plain
+        // ready-to-read text, so a buyer sees the exact same "why buy
+        // this" info a channel post would show them, right on the
+        // product page, before they ever have to ask.
+        extras: card?.extras ?? "",
+        lifehacks: card?.lifehacks ?? "",
       };
     });
 

@@ -6915,6 +6915,10 @@ function StorefrontPage({ slug }: { slug: string }) {
 // product's details, with a back arrow that returns to the storefront grid.
 // ---------------------------------------------------------------------------
 
+// Always-visible info section — deliberately NOT a click-to-expand
+// accordion. The buyer shouldn't have to tap anything to see why they'd
+// buy this: it should read exactly like the same product's Telegram post
+// already does (see buildPostText) — ready text, right there.
 function ProductInfoSection({
   title,
   icon: Icon,
@@ -6924,22 +6928,12 @@ function ProductInfoSection({
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
-      >
-        <span className="flex items-center gap-2 text-sm font-medium text-white">
-          <Icon className="h-4 w-4 text-violet-400" /> {title}
-        </span>
-        <ChevronDown
-          className={`h-4 w-4 text-slate-500 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      {open && <div className="px-4 pb-4">{children}</div>}
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+      <div className="flex items-center gap-2 text-sm font-medium text-white mb-2.5">
+        <Icon className="h-4 w-4 text-violet-400" /> {title}
+      </div>
+      {children}
     </div>
   );
 }
@@ -7175,9 +7169,12 @@ function ProductDetailPage({
           )}
         </div>
 
-        {/* Pro info — Uzum-style expandable sections (Xarakteristikalar /
-            Tarkib / Foydalanish bo'yicha ko'rsatma / Yetkazib berish),
-            each rendered only if the seller actually filled it in. */}
+        {/* Info sections — same content a Telegram post for this product
+            already shows (see buildPostText), always visible here too, no
+            tap required: a buyer should get everything they'd need before
+            ordering right on this page, not have to open anything. Each
+            section only renders if the seller/AI research actually has
+            content for it. */}
         <div className="px-4 pb-4 space-y-2">
           {Array.isArray(product.characteristics) && product.characteristics.length > 0 && (
             <ProductInfoSection title="Xarakteristikalar" icon={Layers}>
@@ -7193,6 +7190,14 @@ function ProductDetailPage({
             </ProductInfoSection>
           )}
 
+          {product.extras && (
+            <ProductInfoSection title="Xususiyatlar" icon={Package}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.extras}
+              </p>
+            </ProductInfoSection>
+          )}
+
           {product.composition && (
             <ProductInfoSection title="Tarkib" icon={FileText}>
               <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
@@ -7205,6 +7210,14 @@ function ProductDetailPage({
             <ProductInfoSection title="Foydalanish bo'yicha ko'rsatma" icon={ClipboardCheck}>
               <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
                 {product.instructions}
+              </p>
+            </ProductInfoSection>
+          )}
+
+          {product.lifehacks && (
+            <ProductInfoSection title="Lifehack" icon={Sparkles}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.lifehacks}
               </p>
             </ProductInfoSection>
           )}
