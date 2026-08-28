@@ -15,6 +15,13 @@ export const PRODUCT_STATUSES = ["draft", "active"] as const;
 // same way.
 export const PRODUCT_CURRENCIES = ["USD", "UZS", "RUB"] as const;
 
+// One spec row in the storefront's "Xarakteristika" table, e.g.
+// {label: "Rang", value: "Qora"}. Free-form on purpose — sellers sell
+// everything from electronics to food, so a fixed spec schema per
+// category isn't realistic here; this is the same approach Uzum's own
+// seller-supplied characteristics use.
+export type ProductCharacteristic = { label: string; value: string };
+
 export const productsTable = pgTable("products", {
   id: serial("id").primaryKey(),
   userId: integer("user_id")
@@ -37,6 +44,18 @@ export const productsTable = pgTable("products", {
   // Uploaded image URLs, in display order. Empty until at least one image
   // is attached.
   images: jsonb("images").$type<string[]>().notNull().default([]),
+  // The four "pro card" info sections shown on the storefront product
+  // page (like Uzum's Xarakteristika / Tarkib / Ko'rsatma / Yetkazib
+  // berish tabs) — all optional, all separate from the short marketing
+  // `description` above so a seller can fill in as much or as little
+  // structured detail as they have.
+  characteristics: jsonb("characteristics")
+    .$type<ProductCharacteristic[]>()
+    .notNull()
+    .default([]),
+  composition: text("composition").notNull().default(""),
+  instructions: text("instructions").notNull().default(""),
+  deliveryInfo: text("delivery_info").notNull().default(""),
   status: text("status", { enum: PRODUCT_STATUSES }).notNull().default("draft"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

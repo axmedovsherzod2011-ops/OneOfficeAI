@@ -5,6 +5,7 @@
  */
 import type { ProductStatus } from './productStatus';
 import type { ProductCurrency } from './productCurrency';
+import type { ProductCharacteristic } from './productCharacteristic';
 
 export interface CreateProductInput {
   name?: string;
@@ -15,4 +16,8 @@ export interface CreateProductInput {
   description?: string;
   images?: string[];
   status?: ProductStatus;
+  characteristics?: ProductCharacteristic[];
+  composition?: string;
+  instructions?: string;
+  deliveryInfo?: string;
 }

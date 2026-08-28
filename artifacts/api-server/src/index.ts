@@ -11,7 +11,7 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
-import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema } from "@workspace/db";
+import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema } from "@workspace/db";
 import { startStatsScheduler } from "./scheduler/statsScheduler";
 
 const rawPort = process.env["PORT"];
@@ -59,6 +59,17 @@ await ensureStatsSchema().catch((err) => {
 // reasoning as the ensure*Schema calls above.
 await ensureOrdersSchema().catch((err) => {
   logger.error({ err }, "ensureOrdersSchema failed — storefront checkout and the Orders page will 500 until this is fixed");
+});
+
+// Adds products.characteristics / .composition / .instructions /
+// .delivery_info if they don't exist yet. Same no-shell-access reasoning
+// as the ensure*Schema calls above — this one ALTERs the existing
+// products table rather than creating a new one.
+await ensureProductProInfoSchema().catch((err) => {
+  logger.error(
+    { err },
+    "ensureProductProInfoSchema failed — product characteristics/composition/instructions/delivery info will 500 until this is fixed",
+  );
 });
 
 app.listen(port, (err) => {

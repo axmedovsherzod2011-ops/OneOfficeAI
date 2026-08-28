@@ -183,6 +183,14 @@ export const ListProductsQueryParams = zod.object({
 
 export const ProductCurrency = zod.enum(['USD', 'UZS', 'RUB'])
 
+/**
+ * One spec row in the product's "Xarakteristika" table, e.g. {label:"Rang", value:"Qora"}.
+ */
+export const ProductCharacteristic = zod.object({
+  "label": zod.string().max(60),
+  "value": zod.string().max(200)
+})
+
 export const ProductItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
@@ -193,7 +201,11 @@ export const ProductItem = zod.object({
   "description": zod.string(),
   "images": zod.array(zod.string()),
   "status": ProductStatus,
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "characteristics": zod.array(ProductCharacteristic),
+  "composition": zod.string(),
+  "instructions": zod.string(),
+  "deliveryInfo": zod.string()
 })
 
 export const ListProductsResponse = zod.array(ProductItem)
@@ -209,7 +221,11 @@ export const CreateProductBody = zod.object({
   "currency": ProductCurrency.optional(),
   "description": zod.string().max(2000).optional(),
   "images": zod.array(zod.string()).max(10).optional(),
-  "status": ProductStatus.optional()
+  "status": ProductStatus.optional(),
+  "characteristics": zod.array(ProductCharacteristic).max(40).optional(),
+  "composition": zod.string().max(3000).optional(),
+  "instructions": zod.string().max(3000).optional(),
+  "deliveryInfo": zod.string().max(2000).optional()
 })
 
 export const CreateProductResponse = ProductItem
@@ -225,7 +241,11 @@ export const UpdateProductBody = zod.object({
   "currency": ProductCurrency.optional(),
   "description": zod.string().max(2000).optional(),
   "images": zod.array(zod.string()).max(10).optional(),
-  "status": ProductStatus.optional()
+  "status": ProductStatus.optional(),
+  "characteristics": zod.array(ProductCharacteristic).max(40).optional(),
+  "composition": zod.string().max(3000).optional(),
+  "instructions": zod.string().max(3000).optional(),
+  "deliveryInfo": zod.string().max(2000).optional()
 })
 
 export const UpdateProductResponse = ProductItem

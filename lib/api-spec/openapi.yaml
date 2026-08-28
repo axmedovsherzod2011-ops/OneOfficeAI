@@ -711,6 +711,18 @@ components:
       type: string
       enum: [USD, UZS, RUB]
 
+    ProductCharacteristic:
+      type: object
+      description: One spec row in the product's "Xarakteristika" table, e.g. {label:"Rang", value:"Qora"}.
+      required:
+        - label
+        - value
+      properties:
+        label:
+          type: string
+        value:
+          type: string
+
     ProductItem:
       type: object
       required:
@@ -724,6 +736,10 @@ components:
         - images
         - status
         - createdAt
+        - characteristics
+        - composition
+        - instructions
+        - deliveryInfo
       properties:
         id:
           type: integer
@@ -747,6 +763,20 @@ components:
           $ref: "#/components/schemas/ProductStatus"
         createdAt:
           type: string
+        characteristics:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductCharacteristic"
+          description: Spec table ("Xarakteristika") shown on the storefront product page.
+        composition:
+          type: string
+          description: "Tarkib / sostav — materials or ingredients."
+        instructions:
+          type: string
+          description: "Foydalanish bo'yicha ko'rsatma / instruksiya."
+        deliveryInfo:
+          type: string
+          description: "Yetkazib berish haqida ma'lumot (dostavka muddati, hududlar, shartlar)."
 
     CreateProductInput:
       type: object
@@ -769,6 +799,16 @@ components:
             type: string
         status:
           $ref: "#/components/schemas/ProductStatus"
+        characteristics:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductCharacteristic"
+        composition:
+          type: string
+        instructions:
+          type: string
+        deliveryInfo:
+          type: string
 
     UpdateProductInput:
       type: object
@@ -791,3 +831,13 @@ components:
             type: string
         status:
           $ref: "#/components/schemas/ProductStatus"
+        characteristics:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductCharacteristic"
+        composition:
+          type: string
+        instructions:
+          type: string
+        deliveryInfo:
+          type: string

@@ -127,6 +127,10 @@ router.get(
         description: productsTable.description,
         images: productsTable.images,
         createdAt: productsTable.createdAt,
+        characteristics: productsTable.characteristics,
+        composition: productsTable.composition,
+        instructions: productsTable.instructions,
+        deliveryInfo: productsTable.deliveryInfo,
       })
       .from(productsTable)
       .where(

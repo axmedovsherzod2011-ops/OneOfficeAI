@@ -39,6 +39,10 @@ function serializeProduct(p: typeof productsTable.$inferSelect) {
     images: p.images,
     status: p.status,
     createdAt: p.createdAt.toISOString(),
+    characteristics: p.characteristics,
+    composition: p.composition,
+    instructions: p.instructions,
+    deliveryInfo: p.deliveryInfo,
   };
 }
 
@@ -94,7 +98,7 @@ router.post("/products", async (req, res) => {
     return;
   }
 
-  const { name, category, costPrice, sellPrice, currency, description, images, status } =
+  const { name, category, costPrice, sellPrice, currency, description, images, status, characteristics, composition, instructions, deliveryInfo } =
     parsed.data;
 
   const [product] = await db
@@ -109,6 +113,10 @@ router.post("/products", async (req, res) => {
       description: description ?? "",
       images: images ?? [],
       status: status ?? "draft",
+      characteristics: characteristics ?? [],
+      composition: composition ?? "",
+      instructions: instructions ?? "",
+      deliveryInfo: deliveryInfo ?? "",
     })
     .returning();
 

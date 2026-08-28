@@ -76,6 +76,7 @@ import {
   Users,
   TrendingDown,
   Layers,
+  Truck,
 } from "lucide-react";
 
 import {
@@ -2896,6 +2897,12 @@ function ProductForm({
   const [currency, setCurrency] = useState(initial?.currency ?? "UZS");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [images, setImages] = useState<string[]>(initial?.images ?? []);
+  const [characteristics, setCharacteristics] = useState<{ label: string; value: string }[]>(
+    initial?.characteristics ?? [],
+  );
+  const [composition, setComposition] = useState(initial?.composition ?? "");
+  const [instructions, setInstructions] = useState(initial?.instructions ?? "");
+  const [deliveryInfo, setDeliveryInfo] = useState(initial?.deliveryInfo ?? "");
   const [error, setError] = useState("");
 
   const { user: firebaseUser } = useAuth();
@@ -2983,6 +2990,12 @@ function ProductForm({
       description: description.trim(),
       images,
       status,
+      characteristics: characteristics
+        .map((c) => ({ label: c.label.trim(), value: c.value.trim() }))
+        .filter((c) => c.label && c.value),
+      composition: composition.trim(),
+      instructions: instructions.trim(),
+      deliveryInfo: deliveryInfo.trim(),
     };
     try {
       let savedId = initial?.id;
@@ -3109,6 +3122,110 @@ function ProductForm({
               rows={3}
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
             />
+          </div>
+
+          {/* Pro info — the structured sections the storefront's product
+              page shows (Xarakteristika / Sostav / Instruksiya /
+              Dostavka), separate from the marketing blurb above. All
+              optional: a seller fills in as much as they actually have,
+              and any section left empty just doesn't render on the
+              buyer-facing page. */}
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-4">
+            <div className="flex items-center gap-1.5 text-xs text-slate-400">
+              <Layers className="h-3.5 w-3.5" /> Pro ma'lumot (ixtiyoriy) — vitrinada
+              alohida bo'limlar sifatida ko'rinadi
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 block">
+                Xarakteristika
+              </label>
+              <div className="space-y-2">
+                {characteristics.map((row, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input
+                      value={row.label}
+                      onChange={(e) => {
+                        const next = [...characteristics];
+                        next[i] = { ...next[i], label: e.target.value };
+                        setCharacteristics(next);
+                      }}
+                      placeholder="Nomi (masalan: Rang)"
+                      className="w-2/5 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+                    />
+                    <input
+                      value={row.value}
+                      onChange={(e) => {
+                        const next = [...characteristics];
+                        next[i] = { ...next[i], value: e.target.value };
+                        setCharacteristics(next);
+                      }}
+                      placeholder="Qiymati (masalan: Qora)"
+                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCharacteristics(characteristics.filter((_, j) => j !== i))
+                      }
+                      className="shrink-0 h-9 w-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                {characteristics.length < 40 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCharacteristics([...characteristics, { label: "", value: "" }])
+                    }
+                    className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 transition"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Xususiyat qo'shish
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 block">
+                Tarkib / Sostav
+              </label>
+              <textarea
+                value={composition}
+                onChange={(e) => setComposition(e.target.value)}
+                placeholder="Masalan: 100% paxta, yoki mahsulot tarkibidagi ingredientlar..."
+                rows={2}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 block">
+                Foydalanish bo'yicha ko'rsatma
+              </label>
+              <textarea
+                value={instructions}
+                onChange={(e) => setInstructions(e.target.value)}
+                placeholder="Mahsulotdan qanday foydalanish, parvarish qilish kabi ko'rsatmalar..."
+                rows={2}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
+                <Truck className="h-3 w-3" /> Yetkazib berish haqida
+              </label>
+              <textarea
+                value={deliveryInfo}
+                onChange={(e) => setDeliveryInfo(e.target.value)}
+                placeholder="Yetkazib berish muddati, hududlar, shartlar..."
+                rows={2}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
+              />
+            </div>
           </div>
 
           {isEdit && research && (
@@ -6675,6 +6792,35 @@ function StorefrontPage({ slug }: { slug: string }) {
 // product's details, with a back arrow that returns to the storefront grid.
 // ---------------------------------------------------------------------------
 
+function ProductInfoSection({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-medium text-white">
+          <Icon className="h-4 w-4 text-violet-400" /> {title}
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 text-slate-500 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </div>
+  );
+}
+
 function ProductDetailPage({
   slug,
   productId,
@@ -6903,6 +7049,49 @@ function ProductDetailPage({
             <p className="text-sm mt-3 text-slate-400 leading-relaxed">
               {product.description}
             </p>
+          )}
+        </div>
+
+        {/* Pro info — Uzum-style expandable sections (Xarakteristikalar /
+            Tarkib / Foydalanish bo'yicha ko'rsatma / Yetkazib berish),
+            each rendered only if the seller actually filled it in. */}
+        <div className="px-4 pb-4 space-y-2">
+          {Array.isArray(product.characteristics) && product.characteristics.length > 0 && (
+            <ProductInfoSection title="Xarakteristikalar" icon={Layers}>
+              <div className="divide-y divide-white/5">
+                {product.characteristics.map((c: { label: string; value: string }, i: number) => (
+                  <div key={i} className="flex items-baseline gap-3 py-2 text-sm">
+                    <span className="text-slate-500 shrink-0">{c.label}</span>
+                    <span className="flex-1 border-b border-dotted border-white/10 translate-y-[-3px]" />
+                    <span className="text-white text-right">{c.value}</span>
+                  </div>
+                ))}
+              </div>
+            </ProductInfoSection>
+          )}
+
+          {product.composition && (
+            <ProductInfoSection title="Tarkib" icon={FileText}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.composition}
+              </p>
+            </ProductInfoSection>
+          )}
+
+          {product.instructions && (
+            <ProductInfoSection title="Foydalanish bo'yicha ko'rsatma" icon={ClipboardCheck}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.instructions}
+              </p>
+            </ProductInfoSection>
+          )}
+
+          {product.deliveryInfo && (
+            <ProductInfoSection title="Yetkazib berish" icon={Truck}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.deliveryInfo}
+              </p>
+            </ProductInfoSection>
           )}
         </div>
       </div>
