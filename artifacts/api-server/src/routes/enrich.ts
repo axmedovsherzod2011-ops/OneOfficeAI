@@ -196,7 +196,7 @@ router.post("/enrich", async (req, res) => {
 
         if (cached && cached.status === "ready") {
           const card = cached.card as unknown as ProductCard;
-          const postText = buildPostText(name, price, card);
+          const postText = buildPostText(name, price, card, product.deliveryInfo);
           res.json({
             postText,
             images: [], // product's own saved images (product.images) are shown by the frontend directly
@@ -226,7 +226,7 @@ router.post("/enrich", async (req, res) => {
               set: { card, sources, status: "ready", updatedAt: new Date() },
             });
 
-          const postText = buildPostText(name, price, card);
+          const postText = buildPostText(name, price, card, product.deliveryInfo);
           res.json({ postText, images, enriched: card, cached: false });
           return;
         } catch (err) {

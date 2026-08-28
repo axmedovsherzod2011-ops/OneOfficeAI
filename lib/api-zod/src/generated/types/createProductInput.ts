@@ -17,7 +17,5 @@ export interface CreateProductInput {
   images?: string[];
   status?: ProductStatus;
   characteristics?: ProductCharacteristic[];
-  composition?: string;
-  instructions?: string;
   deliveryInfo?: string;
 }

@@ -203,8 +203,6 @@ export const ProductItem = zod.object({
   "status": ProductStatus,
   "createdAt": zod.string(),
   "characteristics": zod.array(ProductCharacteristic),
-  "composition": zod.string(),
-  "instructions": zod.string(),
   "deliveryInfo": zod.string()
 })
 
@@ -223,8 +221,6 @@ export const CreateProductBody = zod.object({
   "images": zod.array(zod.string()).max(10).optional(),
   "status": ProductStatus.optional(),
   "characteristics": zod.array(ProductCharacteristic).max(40).optional(),
-  "composition": zod.string().max(3000).optional(),
-  "instructions": zod.string().max(3000).optional(),
   "deliveryInfo": zod.string().max(2000).optional()
 })
 
@@ -243,8 +239,6 @@ export const UpdateProductBody = zod.object({
   "images": zod.array(zod.string()).max(10).optional(),
   "status": ProductStatus.optional(),
   "characteristics": zod.array(ProductCharacteristic).max(40).optional(),
-  "composition": zod.string().max(3000).optional(),
-  "instructions": zod.string().max(3000).optional(),
   "deliveryInfo": zod.string().max(2000).optional()
 })
 

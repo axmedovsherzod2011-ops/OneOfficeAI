@@ -8,6 +8,7 @@ import {
   CreateProductBody,
   UpdateProductBody,
 } from "@workspace/api-zod";
+import { generateText } from "../ai/textProviders";
 
 const router = Router();
 
@@ -39,9 +40,13 @@ function serializeProduct(p: typeof productsTable.$inferSelect) {
     images: p.images,
     status: p.status,
     createdAt: p.createdAt.toISOString(),
+    // Seller-entered spec table — stays a real product column.
     characteristics: p.characteristics,
-    composition: p.composition,
-    instructions: p.instructions,
+    // Composition ("Tarkib/Sostav") and usage instructions are NOT read
+    // from here — they live in product_research.card, the one-time
+    // AI+web-search pass. GET /api/store/:slug joins that in for the
+    // public storefront; this seller-facing endpoint doesn't need them
+    // since ProductForm's "AI card" panel fetches research separately.
     deliveryInfo: p.deliveryInfo,
   };
 }
@@ -83,6 +88,14 @@ router.get("/products", async (req, res) => {
 // POST /products — create a product. Saving from the New Product form as a
 // draft (incomplete fields ok) or as a finished product both hit this same
 // endpoint — the only difference is the `status` field.
+//
+// Delivery info: if the caller didn't send an explicit deliveryInfo AND
+// this seller already has a saved default (from a previous "barcha
+// mahsulotlarga saqlash" choice — see POST /products/:id/delivery-info
+// below), it's applied here immediately. The frontend checks the returned
+// product's deliveryInfo: non-empty means "already handled, recalled the
+// saved default, don't ask again"; empty means "first time, show the
+// delivery modal".
 // ---------------------------------------------------------------------------
 
 router.post("/products", async (req, res) => {
@@ -98,8 +111,18 @@ router.post("/products", async (req, res) => {
     return;
   }
 
-  const { name, category, costPrice, sellPrice, currency, description, images, status, characteristics, composition, instructions, deliveryInfo } =
+  const { name, category, costPrice, sellPrice, currency, description, images, status, characteristics, deliveryInfo } =
     parsed.data;
+
+  let effectiveDeliveryInfo = deliveryInfo ?? "";
+  if (!effectiveDeliveryInfo) {
+    const [user] = await db
+      .select({ defaultDeliveryInfo: usersTable.defaultDeliveryInfo })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
+    effectiveDeliveryInfo = user?.defaultDeliveryInfo ?? "";
+  }
 
   const [product] = await db
     .insert(productsTable)
@@ -114,9 +137,7 @@ router.post("/products", async (req, res) => {
       images: images ?? [],
       status: status ?? "draft",
       characteristics: characteristics ?? [],
-      composition: composition ?? "",
-      instructions: instructions ?? "",
-      deliveryInfo: deliveryInfo ?? "",
+      deliveryInfo: effectiveDeliveryInfo,
     })
     .returning();
 
@@ -164,6 +185,90 @@ router.patch("/products/:id", async (req, res) => {
   }
 
   res.json(serializeProduct(updated));
+});
+
+// ---------------------------------------------------------------------------
+// POST /products/:id/delivery-info — the "smart delivery" step shown in a
+// modal right after a product is created. The seller types delivery info
+// in their own words; that raw text is rewritten into clean storefront copy
+// by AI before saving (the seller never sees this as an "AI step" — it just
+// looks like their text got saved, polished).
+//
+// scope:
+//   "this"  — apply the polished text to this product only.
+//   "all"   — apply it to this product AND save it as this seller's default
+//             (users.defaultDeliveryInfo), so POST /products above silently
+//             reuses it for every future product — no modal, no re-asking,
+//             no re-generating, exactly the recall behavior asked for.
+//   "skip"  — leave this product's deliveryInfo empty. rawText not required.
+// ---------------------------------------------------------------------------
+
+router.post("/products/:id/delivery-info", async (req, res) => {
+  const userId = await getCurrentUserId(req);
+  if (!userId) {
+    res.status(401).json({ error: "Tizimga kirilmagan." });
+    return;
+  }
+
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Invalid product id" });
+    return;
+  }
+
+  const { rawText, scope } = req.body as { rawText?: string; scope?: string };
+  if (scope !== "this" && scope !== "all" && scope !== "skip") {
+    res.status(400).json({ error: "scope 'this', 'all' yoki 'skip' bo'lishi kerak." });
+    return;
+  }
+
+  const [product] = await db
+    .select({ id: productsTable.id })
+    .from(productsTable)
+    .where(and(eq(productsTable.id, id), eq(productsTable.userId, userId)))
+    .limit(1);
+
+  if (!product) {
+    res.status(404).json({ error: "Mahsulot topilmadi." });
+    return;
+  }
+
+  if (scope === "skip") {
+    res.json({ deliveryInfo: "" });
+    return;
+  }
+
+  const trimmedRaw = (rawText ?? "").trim();
+  if (!trimmedRaw) {
+    res.status(400).json({ error: "Yetkazib berish haqida matn kiriting." });
+    return;
+  }
+
+  let polished: string;
+  try {
+    polished = await generateText(
+      "You turn a seller's rough, informally-written delivery/shipping note into clean, professional storefront copy in Uzbek. Keep every concrete fact the seller gave (timeframes, regions/cities, cost, conditions) — never invent new facts, never drop any they gave. Just rewrite it clearly and politely, 1-4 short sentences or short bullet lines. Plain text only, no markdown, no quotes, no preamble.",
+      `Seller's raw note about delivery:\n"${trimmedRaw}"`,
+    );
+    polished = polished.trim();
+  } catch (err) {
+    console.error("Delivery info polish failed, saving the seller's raw text as-is:", err);
+    polished = trimmedRaw;
+  }
+
+  await db
+    .update(productsTable)
+    .set({ deliveryInfo: polished, updatedAt: new Date() })
+    .where(and(eq(productsTable.id, id), eq(productsTable.userId, userId)));
+
+  if (scope === "all") {
+    await db
+      .update(usersTable)
+      .set({ defaultDeliveryInfo: polished })
+      .where(eq(usersTable.id, userId));
+  }
+
+  res.json({ deliveryInfo: polished });
 });
 
 // ---------------------------------------------------------------------------

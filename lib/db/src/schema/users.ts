@@ -22,6 +22,13 @@ export const usersTable = pgTable("users", {
   // This is how the bot's webhook knows which OneOffice account to attach
   // a newly-admin'd channel to — no token or chat id ever entered by hand.
   telegramUserId: text("telegram_user_id").unique(),
+  // AI-polished delivery text this seller has chosen to reuse across
+  // every future product, set from the "barcha mahsulotlarga saqlash"
+  // choice in the post-creation delivery-info modal. When present, a
+  // newly created product's own deliveryInfo is pre-filled from this —
+  // no modal shown, the seller just sees it already applied. Null until
+  // that choice is made at least once.
+  defaultDeliveryInfo: text("default_delivery_info"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

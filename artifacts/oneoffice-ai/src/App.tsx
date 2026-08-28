@@ -2880,6 +2880,23 @@ function ProductImagePicker({
   );
 }
 
+// Shared by ProductForm (right after creating/saving a product) and
+// InventoryPage (a one-time sweep over existing products on page load) —
+// see productResearch.ts's route comment for why this is safe to call
+// repeatedly: without a cached row yet it runs the real research once and
+// caches it; with one already cached it's an instant, cheap no-op.
+async function triggerProductResearch(productId: number, token: string): Promise<void> {
+  try {
+    await fetch(apiUrl(`/api/products/${productId}/research`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    // Best-effort — a failed trigger just means research runs inline the
+    // next time something needs it (Create Post, or the next reload).
+  }
+}
+
 function ProductForm({
   initial,
   onCancel,
@@ -2900,10 +2917,10 @@ function ProductForm({
   const [characteristics, setCharacteristics] = useState<{ label: string; value: string }[]>(
     initial?.characteristics ?? [],
   );
-  const [composition, setComposition] = useState(initial?.composition ?? "");
-  const [instructions, setInstructions] = useState(initial?.instructions ?? "");
-  const [deliveryInfo, setDeliveryInfo] = useState(initial?.deliveryInfo ?? "");
   const [error, setError] = useState("");
+  // Delivery modal — shown right after a brand-new product is created
+  // (never on edit) when the seller doesn't already have a saved default.
+  const [deliveryModalProductId, setDeliveryModalProductId] = useState<number | null>(null);
 
   const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
@@ -2965,10 +2982,7 @@ function ProductForm({
     try {
       const token = await firebaseUser?.getIdToken();
       if (!token) return;
-      void fetch(apiUrl(`/api/products/${productId}/research`), {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await triggerProductResearch(productId, token);
     } catch {
       // Best-effort — a failed background trigger just means the first
       // "Create Post" for this product falls back to researching inline.
@@ -2993,21 +3007,29 @@ function ProductForm({
       characteristics: characteristics
         .map((c) => ({ label: c.label.trim(), value: c.value.trim() }))
         .filter((c) => c.label && c.value),
-      composition: composition.trim(),
-      instructions: instructions.trim(),
-      deliveryInfo: deliveryInfo.trim(),
     };
     try {
       let savedId = initial?.id;
+      let createdDeliveryInfo = "";
       if (isEdit && initial) {
         await updateProduct.mutateAsync({ id: initial.id, data });
       } else {
         const created = await createProduct.mutateAsync({ data });
         savedId = (created as any)?.id;
+        createdDeliveryInfo = (created as any)?.deliveryInfo ?? "";
       }
       queryClient.invalidateQueries({ queryKey: getListProductsQueryKey() });
       if (status === "active" && savedId && name.trim() && sellPrice.trim()) {
         void triggerBackgroundResearch(savedId);
+      }
+      // Only for a brand-new product saved as active, and only when it
+      // didn't already get a recalled default delivery text from the
+      // backend (see POST /products — that's the "eski textni chaqirish"
+      // silent-reuse path): ask once, via the modal, instead of calling
+      // onSaved() immediately.
+      if (!isEdit && status === "active" && savedId && !createdDeliveryInfo) {
+        setDeliveryModalProductId(savedId);
+        return;
       }
       onSaved();
     } catch (err: any) {
@@ -3124,107 +3146,68 @@ function ProductForm({
             />
           </div>
 
-          {/* Pro info — the structured sections the storefront's product
-              page shows (Xarakteristika / Sostav / Instruksiya /
-              Dostavka), separate from the marketing blurb above. All
-              optional: a seller fills in as much as they actually have,
-              and any section left empty just doesn't render on the
-              buyer-facing page. */}
-          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-4">
+          {/* Xarakteristika — the one part of "pro info" that stays a
+              plain seller-entered field (short structured facts like
+              Rang: Qora aren't something a web search reliably has).
+              Tarkib/Sostav, Foydalanish bo'yicha ko'rsatma, and Yetkazib
+              berish are NOT typed here anymore:
+                - Tarkib/Ko'rsatma are researched automatically (see the
+                  AI card panel below and triggerBackgroundResearch) —
+                  same one-time AI+web-search pass that already writes
+                  the post copy, just reused instead of asked for twice.
+                - Yetkazib berish is collected once via a short modal
+                  right after a NEW product is created (see the
+                  DeliveryInfoModal render below save()). */}
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-2">
             <div className="flex items-center gap-1.5 text-xs text-slate-400">
-              <Layers className="h-3.5 w-3.5" /> Pro ma'lumot (ixtiyoriy) — vitrinada
-              alohida bo'limlar sifatida ko'rinadi
+              <Layers className="h-3.5 w-3.5" /> Xarakteristika (ixtiyoriy) — vitrinada
+              spec jadvali sifatida ko'rinadi
             </div>
-
-            <div>
-              <label className="text-xs text-slate-400 mb-1.5 block">
-                Xarakteristika
-              </label>
-              <div className="space-y-2">
-                {characteristics.map((row, i) => (
-                  <div key={i} className="flex gap-2">
-                    <input
-                      value={row.label}
-                      onChange={(e) => {
-                        const next = [...characteristics];
-                        next[i] = { ...next[i], label: e.target.value };
-                        setCharacteristics(next);
-                      }}
-                      placeholder="Nomi (masalan: Rang)"
-                      className="w-2/5 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-                    />
-                    <input
-                      value={row.value}
-                      onChange={(e) => {
-                        const next = [...characteristics];
-                        next[i] = { ...next[i], value: e.target.value };
-                        setCharacteristics(next);
-                      }}
-                      placeholder="Qiymati (masalan: Qora)"
-                      className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCharacteristics(characteristics.filter((_, j) => j !== i))
-                      }
-                      className="shrink-0 h-9 w-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-                {characteristics.length < 40 && (
+            <div className="space-y-2">
+              {characteristics.map((row, i) => (
+                <div key={i} className="flex gap-2">
+                  <input
+                    value={row.label}
+                    onChange={(e) => {
+                      const next = [...characteristics];
+                      next[i] = { ...next[i], label: e.target.value };
+                      setCharacteristics(next);
+                    }}
+                    placeholder="Nomi (masalan: Rang)"
+                    className="w-2/5 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+                  />
+                  <input
+                    value={row.value}
+                    onChange={(e) => {
+                      const next = [...characteristics];
+                      next[i] = { ...next[i], value: e.target.value };
+                      setCharacteristics(next);
+                    }}
+                    placeholder="Qiymati (masalan: Qora)"
+                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+                  />
                   <button
                     type="button"
                     onClick={() =>
-                      setCharacteristics([...characteristics, { label: "", value: "" }])
+                      setCharacteristics(characteristics.filter((_, j) => j !== i))
                     }
-                    className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 transition"
+                    className="shrink-0 h-9 w-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition"
                   >
-                    <Plus className="h-3.5 w-3.5" /> Xususiyat qo'shish
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-400 mb-1.5 block">
-                Tarkib / Sostav
-              </label>
-              <textarea
-                value={composition}
-                onChange={(e) => setComposition(e.target.value)}
-                placeholder="Masalan: 100% paxta, yoki mahsulot tarkibidagi ingredientlar..."
-                rows={2}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-400 mb-1.5 block">
-                Foydalanish bo'yicha ko'rsatma
-              </label>
-              <textarea
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                placeholder="Mahsulotdan qanday foydalanish, parvarish qilish kabi ko'rsatmalar..."
-                rows={2}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
-                <Truck className="h-3 w-3" /> Yetkazib berish haqida
-              </label>
-              <textarea
-                value={deliveryInfo}
-                onChange={(e) => setDeliveryInfo(e.target.value)}
-                placeholder="Yetkazib berish muddati, hududlar, shartlar..."
-                rows={2}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
-              />
+                </div>
+              ))}
+              {characteristics.length < 40 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCharacteristics([...characteristics, { label: "", value: "" }])
+                  }
+                  className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 transition"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Xususiyat qo'shish
+                </button>
+              )}
             </div>
           </div>
 
@@ -3397,6 +3380,114 @@ function ProductForm({
           </button>
         </div>
       </Glass>
+
+      {deliveryModalProductId && (
+        <DeliveryInfoModal
+          productId={deliveryModalProductId}
+          onDone={() => {
+            setDeliveryModalProductId(null);
+            onSaved();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Smart delivery modal — shown once, right after a brand-new product is
+// created, only when the seller doesn't already have a saved default
+// delivery text (POST /products silently recalls the saved default
+// otherwise — see products.ts). The seller types a rough note; the backend
+// rewrites it into clean storefront copy before saving, seamlessly (no
+// "AI is generating..." messaging here on purpose — it should just look
+// like their note got saved and polished).
+// ---------------------------------------------------------------------------
+
+function DeliveryInfoModal({
+  productId,
+  onDone,
+}: {
+  productId: number;
+  onDone: () => void;
+}) {
+  const [rawText, setRawText] = useState("");
+  const [busy, setBusy] = useState<"this" | "all" | "skip" | null>(null);
+  const [error, setError] = useState("");
+  const { user: firebaseUser } = useAuth();
+
+  async function choose(scope: "this" | "all" | "skip") {
+    if (scope !== "skip" && !rawText.trim()) {
+      setError("Yetkazib berish haqida bir necha jumla yozing.");
+      return;
+    }
+    setError("");
+    setBusy(scope);
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl(`/api/products/${productId}/delivery-info`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ rawText: rawText.trim(), scope }),
+      });
+      if (!res.ok) throw new Error();
+      onDone();
+    } catch {
+      setError("Saqlashda xatolik yuz berdi. Qayta urinib ko'ring.");
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm px-0 sm:px-4">
+      <Glass className="w-full sm:max-w-md !rounded-t-2xl sm:!rounded-2xl p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Truck className="h-4 w-4 text-violet-400" />
+          <h3 className="text-white font-semibold">Yetkazib berish</h3>
+        </div>
+        <p className="text-slate-400 text-sm mb-4">
+          Mahsulot muvaffaqiyatli yaratildi. Yetkazib berish haqida bir necha
+          so'z yozing — vitrinada chiroyli qilib ko'rsatamiz.
+        </p>
+        <textarea
+          value={rawText}
+          onChange={(e) => setRawText(e.target.value)}
+          placeholder="Masalan: Toshkent bo'ylab 1 kunda, viloyatlarga 2-3 kunda, yetkazib berish 20 000 so'm..."
+          rows={3}
+          autoFocus
+          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none mb-3"
+        />
+        {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+        <div className="space-y-2">
+          <button
+            onClick={() => choose("all")}
+            disabled={busy !== null}
+            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white py-3 rounded-xl text-sm font-medium transition"
+          >
+            {busy === "all" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Barcha mahsulotlarga saqlash
+          </button>
+          <button
+            onClick={() => choose("this")}
+            disabled={busy !== null}
+            className="w-full flex items-center justify-center gap-2 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-200 py-3 rounded-xl text-sm font-medium hover:bg-white/10 transition"
+          >
+            {busy === "this" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Faqat shu mahsulot uchun
+          </button>
+          <button
+            onClick={() => choose("skip")}
+            disabled={busy !== null}
+            className="w-full flex items-center justify-center gap-2 disabled:opacity-40 text-slate-500 py-2 rounded-xl text-sm hover:text-slate-300 transition"
+          >
+            {busy === "skip" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Dostavka qo'shmaslik
+          </button>
+        </div>
+      </Glass>
     </div>
   );
 }
@@ -3485,9 +3576,41 @@ function InventoryPage({
   const [tab, setTab] = useState<"all" | "draft" | "active">("all");
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const queryClient = useQueryClient();
+  const { user: firebaseUser } = useAuth();
 
   const { data: products, isLoading } = useListProducts();
   const deleteProduct = useDeleteProduct();
+
+  // "...yoki bor mahsulotlar bilan saytni reload qilganda bir marta ai
+  // har mahsulot uchun shu malumotlarni topishi kerak" — a one-time sweep
+  // over the current product list every time this page loads, so a
+  // product that was created before this research even existed (or whose
+  // background trigger at creation-time failed) still gets researched.
+  // Cheap and safe to call every load: the backend route this hits is
+  // already idempotent (see productResearch.ts) — a product with a cached
+  // result just returns it instantly, no AI/search work happens twice.
+  useEffect(() => {
+    if (!products || !firebaseUser) return;
+    const candidates = products.filter(
+      (p) => p.status === "active" && p.name.trim() && p.sellPrice.trim(),
+    );
+    if (candidates.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const token = await firebaseUser.getIdToken();
+      if (cancelled) return;
+      for (const p of candidates) {
+        if (cancelled) return;
+        void triggerProductResearch(p.id, token);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-run only when the product list itself changes (new/removed
+    // products), not on every unrelated re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, firebaseUser]);
 
   if (formOpen) {
     return (

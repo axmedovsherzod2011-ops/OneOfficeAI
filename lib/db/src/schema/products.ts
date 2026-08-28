@@ -44,17 +44,29 @@ export const productsTable = pgTable("products", {
   // Uploaded image URLs, in display order. Empty until at least one image
   // is attached.
   images: jsonb("images").$type<string[]>().notNull().default([]),
-  // The four "pro card" info sections shown on the storefront product
-  // page (like Uzum's Xarakteristika / Tarkib / Ko'rsatma / Yetkazib
-  // berish tabs) — all optional, all separate from the short marketing
-  // `description` above so a seller can fill in as much or as little
-  // structured detail as they have.
+  // The seller-editable spec table ("Xarakteristika") shown on the
+  // storefront product page — free-form on purpose, since sellers here
+  // range from electronics to food and a fixed spec schema per category
+  // isn't realistic. NOT auto-researched like composition/usageGuide
+  // below: it's short structured facts (Rang: Qora) a seller just knows,
+  // unlike prose that benefits from a web search pass.
   characteristics: jsonb("characteristics")
     .$type<ProductCharacteristic[]>()
     .notNull()
     .default([]),
-  composition: text("composition").notNull().default(""),
-  instructions: text("instructions").notNull().default(""),
+  // "Tarkib / Sostav" and "Foydalanish bo'yicha ko'rsatma" are NOT product
+  // columns — they live in product_research.card (composition/usageGuide),
+  // the same one-time AI+web-search pass that already produces the post
+  // copy, so they're written once automatically and reused everywhere
+  // (post text, storefront page) instead of being typed twice. See
+  // artifacts/api-server/src/routes/store.ts for how the public storefront
+  // joins product_research in to expose them.
+  //
+  // Delivery info stays a real column, though — it's genuinely
+  // seller-specific info (not researchable from the web) collected via a
+  // short modal right after a product is created, optionally AI-polished
+  // from what the seller typed, and optionally reused as this seller's
+  // default for every future product.
   deliveryInfo: text("delivery_info").notNull().default(""),
   status: text("status", { enum: PRODUCT_STATUSES }).notNull().default("draft"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

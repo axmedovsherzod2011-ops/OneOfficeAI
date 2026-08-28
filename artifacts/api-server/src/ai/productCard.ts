@@ -32,6 +32,12 @@ export interface ProductCard {
   headline: string;
   description: string;
   usageGuide: string;
+  // Tarkib / sostav — materials or ingredients, found from the same web
+  // search pass as everything else here. Shown on the storefront product
+  // page's "Tarkib" section (ProductDetailPage) — sellers no longer type
+  // this by hand, it's researched once and cached just like the rest of
+  // this card.
+  composition: string;
   dimensions: string;
   weight: string;
   extras: string;
@@ -58,6 +64,7 @@ const DEFAULT_CARD: ProductCard = {
   headline: "",
   description: "",
   usageGuide: "",
+  composition: "",
   dimensions: "",
   weight: "",
   extras: "",
@@ -239,6 +246,7 @@ Return a JSON object with these exact keys:
   "headline": "A short, punchy 1-line headline in Uzbek starting with a sparkle/fire emoji, mentioning the product name",
   "description": "2-3 sentence premium description of the product in Uzbek, grounded in the real product info found above",
   "usageGuide": "3-4 practical usage tips in Uzbek, each on its own line starting with an emoji bullet",
+  "composition": "the product's actual material/ingredient composition (tarkib/sostav) found in the search results, in Uzbek, as plain sentences (not bullets) — e.g. '100% paxta' or the real ingredient list for a food/cosmetic item. Empty string if the search results genuinely say nothing about this and the category doesn't have an obvious one (e.g. most electronics) — never invent a fake composition.",
   "dimensions": "actual/typical dimensions for this specific product (e.g. '15 x 8 x 3 sm')",
   "weight": "actual/typical weight (e.g. '320 g')",
   "extras": "2-3 category-specific technical specs or notable features found for this product, each on its own line with emoji bullets",
@@ -264,6 +272,7 @@ Do not write a full post yourself — just fill in these fields, each standalone
     headline: String(parsed.headline ?? ""),
     description: String(parsed.description ?? ""),
     usageGuide: String(parsed.usageGuide ?? ""),
+    composition: String(parsed.composition ?? ""),
     dimensions: String(parsed.dimensions ?? ""),
     weight: String(parsed.weight ?? ""),
     extras: String(parsed.extras ?? ""),
@@ -291,7 +300,12 @@ Do not write a full post yourself — just fill in these fields, each standalone
 // pre-date the search/view/buy fields.
 // ---------------------------------------------------------------------------
 
-export function buildPostText(name: string, price: string, card: Partial<ProductCard>): string {
+export function buildPostText(
+  name: string,
+  price: string,
+  card: Partial<ProductCard>,
+  deliveryInfo?: string,
+): string {
   const get = (key: keyof ProductCard) => String((card as Record<string, unknown>)[key] ?? "").trim();
 
   const blocks: string[] = [];
@@ -313,6 +327,8 @@ export function buildPostText(name: string, price: string, card: Partial<Product
 
   const priceDiff = get("priceDiff");
   blocks.push(priceDiff ? `💰 ${price} UZS (${priceDiff})` : `💰 ${price} UZS`);
+
+  if (deliveryInfo?.trim()) blocks.push(`🚚 Yetkazib berish:\n${deliveryInfo.trim()}`);
 
   blocks.push(get("buyCta") || "📲 Buyurtma uchun yozing!");
 

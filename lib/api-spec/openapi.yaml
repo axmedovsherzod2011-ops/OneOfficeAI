@@ -768,12 +768,6 @@ components:
           items:
             $ref: "#/components/schemas/ProductCharacteristic"
           description: Spec table ("Xarakteristika") shown on the storefront product page.
-        composition:
-          type: string
-          description: "Tarkib / sostav — materials or ingredients."
-        instructions:
-          type: string
-          description: "Foydalanish bo'yicha ko'rsatma / instruksiya."
         deliveryInfo:
           type: string
           description: "Yetkazib berish haqida ma'lumot (dostavka muddati, hududlar, shartlar)."
@@ -803,10 +797,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProductCharacteristic"
-        composition:
-          type: string
-        instructions:
-          type: string
         deliveryInfo:
           type: string
 
@@ -835,9 +825,5 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProductCharacteristic"
-        composition:
-          type: string
-        instructions:
-          type: string
         deliveryInfo:
           type: string

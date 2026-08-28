@@ -20,10 +20,6 @@ export interface ProductItem {
   createdAt: string;
   /** Spec table ("Xarakteristika") shown on the storefront product page. */
   characteristics: ProductCharacteristic[];
-  /** Tarkib / sostav — materials or ingredients. */
-  composition: string;
-  /** Foydalanish bo'yicha ko'rsatma / instruksiya. */
-  instructions: string;
   /** Yetkazib berish haqida ma'lumot (dostavka muddati, hududlar, shartlar). */
   deliveryInfo: string;
 }
