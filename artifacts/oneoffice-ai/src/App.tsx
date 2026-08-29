@@ -6014,9 +6014,7 @@ function FullscreenLoader() {
 // own Telegram channel already connected and ready to publish to.
 // ---------------------------------------------------------------------------
 
-// Real screenshots of each screen go here once provided — background is a
-// gradient placeholder until then, so swapping one in later is a one-line
-// change (`image: "https://..."`) per slide.
+// Real screenshots of each screen.
 const WELCOME_SLIDES: Array<{
   title: string;
   body: string;
@@ -6027,21 +6025,31 @@ const WELCOME_SLIDES: Array<{
     title: "OneOffice AI'ga xush kelibsiz",
     body: "Mahsulot qo'shing, AI siz uchun professional post yozsin va bir bosishda Telegram kanalingizga chop eting.",
     gradient: "from-violet-600 via-indigo-700 to-slate-950",
+    image: `${basePath}/onboarding/dashboard.jpg`,
+  },
+  {
+    title: "Real vaqtdagi statistika",
+    body: "Obunachilar, ko'rishlar va eng faol kanalingiz — bugun va kecha solishtirilgan holda, doim ko'z oldingizda.",
+    gradient: "from-cyan-600 via-sky-700 to-slate-950",
+    image: `${basePath}/onboarding/stats.jpg`,
   },
   {
     title: "Inventar",
     body: "Barcha mahsulotlaringiz shu yerda — rasm, narx va tavsif bilan. AI har bir mahsulotni internetdan bir marta tahlil qiladi.",
     gradient: "from-blue-600 via-cyan-700 to-slate-950",
+    image: `${basePath}/onboarding/inventory.jpg`,
   },
   {
-    title: "AI bilan post yaratish",
-    body: "Mahsulotni tanlang — AI chiroyli post matnini, hashtaglarni va rasmlarni tayyorlab beradi.",
+    title: "Shaxsiy vitrina",
+    body: "Mijozlar sizning shaxsiy vitrinangizdan to'g'ridan-to'g'ri buyurtma beradi — hech qanday qo'shimcha ilova kerak emas.",
     gradient: "from-fuchsia-600 via-purple-700 to-slate-950",
+    image: `${basePath}/onboarding/vitrina.jpg`,
   },
   {
-    title: "Vitrina va buyurtmalar",
-    body: "Mijozlar sizning shaxsiy vitrinangizdan to'g'ridan-to'g'ri buyurtma beradi — hammasi Buyurtmalar bo'limida ko'rinadi.",
+    title: "Buyurtmalar",
+    body: "Vitrinadan kelgan har bir buyurtma shu yerda ko'rinadi — yangi, tasdiqlangan, yetkazilgan holatlar bilan.",
     gradient: "from-emerald-600 via-teal-700 to-slate-950",
+    image: `${basePath}/onboarding/orders.jpg`,
   },
 ];
 
@@ -6053,14 +6061,16 @@ function WelcomeOnboarding({ onDone }: { onDone: () => void }) {
   return (
     <div className="fixed inset-0 z-[200] bg-slate-950 flex flex-col">
       <div
-        className={`relative flex-1 bg-gradient-to-br ${slide.gradient} flex items-end`}
-        style={
-          slide.image
-            ? { backgroundImage: `url(${slide.image})`, backgroundSize: "cover", backgroundPosition: "center" }
-            : undefined
-        }
+        className={`relative flex-1 bg-gradient-to-br ${slide.gradient} flex items-end overflow-hidden`}
       >
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
+        {slide.image && (
+          <img
+            src={slide.image}
+            alt={slide.title}
+            className="absolute inset-0 w-full h-full object-cover object-top"
+          />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/10" />
         <div className="relative z-10 p-8 pb-6 max-w-lg">
           <h2 className="text-white text-2xl font-bold mb-2">{slide.title}</h2>
           <p className="text-slate-300 text-sm leading-relaxed">{slide.body}</p>
