@@ -271,6 +271,21 @@ function proxyImage(url: string): string {
 const PRODUCT_IMAGE_WIDTH = 1080;
 const PRODUCT_IMAGE_HEIGHT = 1440;
 
+// Locks the page's own scroll while a full-screen modal is mounted — so
+// scrolling inside the modal never accidentally scrolls the app behind it
+// (which, on real phones, can shove the modal's own buttons out of the
+// visible viewport and make it look like the whole site "went into
+// scroll"). Restores whatever the body's overflow was before.
+function useLockBodyScroll() {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+}
+
 function resizeImageFile(
   file: File,
   targetWidth = PRODUCT_IMAGE_WIDTH,
@@ -1606,6 +1621,7 @@ function TelegramConnectModal({
   const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
   const { data: status, isLoading: statusLoading } = useGetTelegramMtprotoStatus();
+  useLockBodyScroll();
   const connected = Boolean(status?.connected);
 
   const { data: channelsData, isLoading: channelsLoading } = useListTelegramMtprotoChannels({
@@ -1990,7 +2006,7 @@ function TelegramConnectModal({
                 )}
               </div>
             ) : (
-            <div className="mt-5 overflow-y-auto -mx-1 px-1 space-y-5">
+            <div className="mt-5 overflow-y-auto -mx-1 px-1 space-y-5 flex-1 min-h-0">
               {channelsLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
@@ -3042,10 +3058,15 @@ function ProductForm({
   initial,
   onCancel,
   onSaved,
+  skipDeliveryPrompt,
 }: {
   initial?: ProductItem | null;
   onCancel: () => void;
   onSaved: (wasCreate: boolean) => void;
+  // Onboarding: don't interrupt the guided first-product walkthrough with
+  // an unrelated "how's delivery handled?" prompt — go straight to
+  // onSaved so the congrats modal fires right after creation.
+  skipDeliveryPrompt?: boolean;
 }) {
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name ?? "");
@@ -3168,7 +3189,7 @@ function ProductForm({
       // backend (see POST /products — that's the "eski textni chaqirish"
       // silent-reuse path): ask once, via the modal, instead of calling
       // onSaved() immediately.
-      if (!isEdit && status === "active" && savedId && !createdDeliveryInfo) {
+      if (!skipDeliveryPrompt && !isEdit && status === "active" && savedId && !createdDeliveryInfo) {
         setDeliveryModalProductId(savedId);
         return;
       }
@@ -3559,6 +3580,7 @@ function DeliveryInfoModal({
   const [busy, setBusy] = useState<"this" | "all" | "skip" | null>(null);
   const [error, setError] = useState("");
   const { user: firebaseUser } = useAuth();
+  useLockBodyScroll();
 
   async function choose(scope: "this" | "all" | "skip") {
     if (scope !== "skip" && !rawText.trim()) {
@@ -3712,12 +3734,14 @@ function InventoryPage({
   onCloseForm,
   onEditProduct,
   onProductCreated,
+  skipDeliveryPrompt,
 }: {
   formOpen: boolean;
   editingProduct: ProductItem | null;
   onCloseForm: () => void;
   onEditProduct: (p: ProductItem) => void;
   onProductCreated?: () => void;
+  skipDeliveryPrompt?: boolean;
 }) {
   const [tab, setTab] = useState<"all" | "draft" | "active">("all");
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -3763,6 +3787,7 @@ function InventoryPage({
       <ProductForm
         initial={editingProduct}
         onCancel={onCloseForm}
+        skipDeliveryPrompt={skipDeliveryPrompt}
         onSaved={(wasCreate) => {
           onCloseForm();
           if (wasCreate) onProductCreated?.();
@@ -6054,6 +6079,7 @@ const WELCOME_SLIDES: Array<{
 ];
 
 function WelcomeOnboarding({ onDone }: { onDone: () => void }) {
+  useLockBodyScroll();
   const [index, setIndex] = useState(0);
   const isLast = index === WELCOME_SLIDES.length - 1;
   const slide = WELCOME_SLIDES[index];
@@ -6214,14 +6240,24 @@ function TourOverlay({
           <button onClick={onSkip} className="text-xs text-slate-500 hover:text-slate-300">
             O'tkazib yuborish
           </button>
-          {step.mode === "manual" && (
-            <button
-              onClick={onNext}
-              className="text-xs bg-violet-500 text-white px-3 py-1.5 rounded-full font-medium"
-            >
-              {isLast ? "Tugatish" : "Keyingisi"}
-            </button>
-          )}
+          <button
+            onClick={() => {
+              // "click"-mode steps point at a real button — pressing this
+              // just performs that same click (so the actual action still
+              // happens) instead of silently skipping past it. "manual"
+              // steps (text fields) have nothing to click, so this simply
+              // moves on.
+              if (step.mode === "click") {
+                const el = document.querySelector(`[data-tour="${step.target}"]`) as HTMLElement | null;
+                el?.click();
+              } else {
+                onNext();
+              }
+            }}
+            className="text-xs bg-violet-500 text-white px-3 py-1.5 rounded-full font-medium"
+          >
+            {isLast ? "Tushundim" : "Keyingisi"}
+          </button>
         </div>
       </div>
     </div>
@@ -6249,6 +6285,7 @@ const PUBLISH_TOUR_STEPS: TourStep[] = [
 ];
 
 function ProductCongratsModal({ onNext }: { onNext: () => void }) {
+  useLockBodyScroll();
   return (
     <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="w-full max-w-sm bg-slate-900 border border-white/10 rounded-3xl p-8 text-center">
@@ -7075,6 +7112,7 @@ function AppShell() {
               stopTour();
               setShowProductCongrats(true);
             }}
+            skipDeliveryPrompt={onboardingActive}
           />
         )}
 
