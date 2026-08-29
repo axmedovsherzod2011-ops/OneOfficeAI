@@ -316,11 +316,26 @@ async function autoStartBotIfNeeded(
     if (!identity) return; // bot not configured in this environment
 
     const token = await createLinkToken(userId);
-    await client.sendMessage(identity.username, { message: `/start ${token}` });
-  } catch (err) {
+
+    // A brand-new MTProto session has never "seen" @OneOfficeAIBot before
+    // — it isn't in this session's local entity cache the way an existing
+    // dialog/contact would be. Passing the bare username straight to
+    // sendMessage relies on it resolving that itself, which is exactly
+    // where this was silently failing (caught below, logged, never
+    // surfaced) instead of actually sending anything. Resolving the
+    // entity explicitly first — the same contacts.resolveUsername lookup
+    // opening the chat in the Telegram app would trigger — fixes that:
+    // once resolved, sendMessage has an actual entity to address, not
+    // just a string it has to guess how to look up.
+    const botEntity = await client.getEntity(identity.username);
+    await client.sendMessage(botEntity, { message: `/start ${token}` });
+  } catch (err: any) {
     // Best-effort — the person can still link manually from Connectors,
-    // and this must never fail the MTProto login itself.
-    console.error("[mtproto] auto /start failed (non-fatal)", err);
+    // and this must never fail the MTProto login itself. Logged with the
+    // same errorMessage-first shape as every other catch in this file, so
+    // a real cause (rather than just "[object Object]") shows up in logs
+    // if this needs debugging again.
+    console.error("[mtproto] auto /start failed (non-fatal)", err?.errorMessage ?? err);
   }
 }
 
