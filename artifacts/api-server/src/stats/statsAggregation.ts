@@ -285,7 +285,8 @@ export async function getStatsSummary(
 // ---------------------------------------------------------------------------
 
 export interface CountBucket extends BucketWindow {
-  value: number;
+  value: number; // orders created strictly within this window (a period count)
+  cumulativeAtEnd: number; // running total of all orders up to periodEnd
 }
 
 export interface CountSummary {
@@ -306,14 +307,13 @@ export async function getOrdersCountSummary(
   const startOfYesterday = new Date(startOfToday);
   startOfYesterday.setDate(startOfYesterday.getDate() - 1);
 
-  const earliestNeeded = new Date(
-    Math.min(new Date(windows[0]?.periodStart ?? now).getTime(), startOfYesterday.getTime()),
-  );
-
+  // Cumulative-at-end needs every order ever placed, not just ones inside
+  // the visible window — order volumes are small enough at this app's
+  // scale that fetching the full history here is cheap.
   const rows = await db
     .select({ createdAt: ordersTable.createdAt })
     .from(ordersTable)
-    .where(and(eq(ordersTable.userId, userId), gte(ordersTable.createdAt, earliestNeeded)));
+    .where(eq(ordersTable.userId, userId));
 
   const timestamps = rows.map((r) => new Date(r.createdAt).getTime());
 
@@ -327,9 +327,19 @@ export async function getOrdersCountSummary(
     return n;
   }
 
+  function countUpTo(end: Date): number {
+    const e = end.getTime();
+    let n = 0;
+    for (const t of timestamps) {
+      if (t < e) n++;
+    }
+    return n;
+  }
+
   const buckets: CountBucket[] = windows.map((w) => ({
     ...w,
     value: countInRange(new Date(w.periodStart), new Date(w.periodEnd)),
+    cumulativeAtEnd: countUpTo(new Date(w.periodEnd)),
   }));
 
   const [totalRow] = await db
