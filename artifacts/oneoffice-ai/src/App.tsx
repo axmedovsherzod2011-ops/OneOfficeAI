@@ -1605,7 +1605,6 @@ function TelegramConnectModal({
 }) {
   const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
-  const { user: firebaseUser } = useAuth();
   const { data: status, isLoading: statusLoading } = useGetTelegramMtprotoStatus();
   const connected = Boolean(status?.connected);
 
