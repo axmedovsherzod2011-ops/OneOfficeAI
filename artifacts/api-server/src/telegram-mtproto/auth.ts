@@ -4,10 +4,12 @@ import { db } from "@workspace/db";
 import {
   telegramMtprotoAccountsTable,
   telegramMtprotoPendingAuthTable,
+  usersTable,
 } from "@workspace/db/schema";
 import { eq, lt } from "drizzle-orm";
 import { createMtprotoClient } from "./client";
 import { encryptSessionString, decryptSessionString, maskPhoneNumber } from "./sessionCrypto";
+import { createLinkToken, getBotIdentity } from "../telegram/bot";
 
 // ---------------------------------------------------------------------------
 // Raw MTProto login handshake (auth.sendCode -> auth.signIn -> optional
@@ -277,6 +279,51 @@ export async function verifyPassword(
   }
 }
 
+// ---------------------------------------------------------------------------
+// The MTProto login flow above proves someone controls a phone number/
+// Telegram account — but on its own that's a DIFFERENT thing from the
+// Bot-API account link (users.telegramUserId) that lets OneOffice AI
+// message this person through @OneOfficeAIBot (order notifications, etc.)
+// and that the bot's own /start flow (telegramWebhook.ts) sets up.
+//
+// Manually asking someone to also go find the bot and type /start after
+// they've just finished a whole phone+code (+maybe 2FA) flow is exactly
+// the kind of extra step that makes someone confused enough to bounce, or
+// to block a bot they don't recognize sending them a random first
+// message. Since we already have this person's own authenticated MTProto
+// session right here, we can just send that /start ourselves, AS them —
+// Telegram then delivers it to the bot exactly like they'd typed it, and
+// the existing webhook handler links the account and replies, with zero
+// extra steps for the person.
+// ---------------------------------------------------------------------------
+
+async function autoStartBotIfNeeded(
+  userId: number,
+  client: Awaited<ReturnType<typeof createMtprotoClient>>,
+): Promise<void> {
+  try {
+    const [user] = await db
+      .select({ telegramUserId: usersTable.telegramUserId })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
+    // Already linked (this MTProto account, a previous session, or even a
+    // manual /start from before) — nothing to do, and definitely don't
+    // re-send /start on every login and spam them.
+    if (user?.telegramUserId) return;
+
+    const identity = await getBotIdentity();
+    if (!identity) return; // bot not configured in this environment
+
+    const token = await createLinkToken(userId);
+    await client.sendMessage(identity.username, { message: `/start ${token}` });
+  } catch (err) {
+    // Best-effort — the person can still link manually from Connectors,
+    // and this must never fail the MTProto login itself.
+    console.error("[mtproto] auto /start failed (non-fatal)", err);
+  }
+}
+
 async function finalizeAuth(
   userId: number,
   pendingId: number,
@@ -315,6 +362,11 @@ async function finalizeAuth(
   await db
     .delete(telegramMtprotoPendingAuthTable)
     .where(eq(telegramMtprotoPendingAuthTable.id, pendingId));
+
+  // Fire this while `client` is still connected (the caller disconnects
+  // it in their own `finally`, after finalizeAuth returns) — reusing the
+  // same authenticated connection instead of opening a second one.
+  await autoStartBotIfNeeded(userId, client);
 
   return { status: "authenticated" };
 }
@@ -359,6 +411,43 @@ export async function getStatus(
     .limit(1);
 
   if (!account) return { connected: false };
+
+  // Covers people who connected MTProto before this auto-/start existed,
+  // or whose very first attempt failed silently (network blip, bot
+  // briefly unconfigured) — checked here too, not just at the moment of
+  // login, since "ulagan bo'lsa" (already connected) was explicitly asked
+  // for, not just "ulashi bilanoq" (right as they connect). Fully
+  // fire-and-forget: never awaited, so a slow/failed attempt can't delay
+  // this status check, which the Connectors page likely polls/loads often.
+  //
+  // The telegramUserId check happens here too (cheap, DB-only) BEFORE
+  // even considering opening an MTProto connection — getStatus can be
+  // called often, and the overwhelmingly common case is "already linked,
+  // nothing to do", which should never cost a client connect/disconnect
+  // round-trip.
+  if (account.status === "active" && account.sessionEncrypted) {
+    void (async () => {
+      try {
+        const [user] = await db
+          .select({ telegramUserId: usersTable.telegramUserId })
+          .from(usersTable)
+          .where(eq(usersTable.id, userId))
+          .limit(1);
+        if (user?.telegramUserId) return;
+
+        const sessionString = decryptSessionString(account.sessionEncrypted!);
+        const client = await createMtprotoClient(sessionString);
+        try {
+          await autoStartBotIfNeeded(userId, client);
+        } finally {
+          await client.disconnect().catch(() => {});
+        }
+      } catch (err) {
+        console.error("[mtproto] getStatus auto /start failed (non-fatal)", err);
+      }
+    })();
+  }
+
   return {
     connected: account.status === "active",
     status: account.status,

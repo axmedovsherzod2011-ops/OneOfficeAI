@@ -153,7 +153,10 @@ router.post("/telegram/webhook", async (req, res) => {
 
       await sendMessage(
         chatId,
-        "Hisobingiz ulandi! Endi istalgan kanalingizga meni administrator sifatida qo'shing — kanal OneOffice AI'da avtomatik paydo bo'ladi.",
+        "✅ Hisobingiz ulandi!\n\n" +
+          "Men OneOffice AI botiman — sizning onlayn do'koningiz uchun ishlayman: yangi buyurtma tushganda shu yerga darhol xabar beraman, va kanalingizga admin qilib qo'shsangiz, mahsulot postlarini avtomatik joylashtiraman.\n\n" +
+          "Bu xabarlarni istalgan vaqt to'xtatishingiz mumkin — meni bloklash yoki OneOffice AI ilovasida hisobni uzish orqali.\n\n" +
+          "Keyingi qadam: istalgan kanalingizga meni administrator sifatida qo'shing — kanal ilovada avtomatik paydo bo'ladi.",
       );
       return;
     }
