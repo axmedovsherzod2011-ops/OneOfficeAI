@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import { usersTable, productsTable, ordersTable, ORDER_STATUSES } from "@workspace/db/schema";
 import type { OrderItem, OrderStatus } from "@workspace/db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { sendTelegramMessage, escapeTelegramHtml } from "../telegram/bot";
 
 const router = Router();
 
@@ -27,6 +28,47 @@ function generateOrderNumber(): string {
   return `ORD-${y}${m}${d}-${rand}`;
 }
 
+// Fire-and-forget — a notification failing (bot not configured, seller
+// never linked Telegram, a transient API error) must never fail the
+// buyer's checkout. This is purely a best-effort nice-to-have on top of
+// an order that has already been safely written to the database and is
+// always visible on the seller's own Orders page regardless.
+function notifySellerOfNewOrder(
+  seller: { telegramUserId: string | null },
+  args: {
+    orderNumber: string;
+    items: OrderItem[];
+    total: number;
+    currency: string;
+    customerName: string;
+    customerPhone: string;
+    customerAddress: string;
+    customerComment: string | null;
+  },
+) {
+  if (!seller.telegramUserId) return;
+
+  const esc = escapeTelegramHtml;
+  const lines = [
+    `🛍 <b>Yangi buyurtma!</b>  #${esc(args.orderNumber)}`,
+    "",
+    ...args.items.map(
+      (it) => `• ${esc(it.name)} — ${it.quantity} dona (${esc(it.price)} ${esc(it.currency)})`,
+    ),
+    "",
+    `💰 <b>Jami: ${args.total.toLocaleString("ru-RU")} ${esc(args.currency)}</b>`,
+    "",
+    `👤 ${esc(args.customerName)}`,
+    `📞 ${esc(args.customerPhone)}`,
+    `📍 ${esc(args.customerAddress)}`,
+  ];
+  if (args.customerComment) {
+    lines.push(`💬 ${esc(args.customerComment)}`);
+  }
+
+  void sendTelegramMessage(seller.telegramUserId, lines.join("\n"), { parseMode: "HTML" });
+}
+
 async function getUserByFirebaseUid(firebaseUid: string) {
   const [user] = await db
     .select({ id: usersTable.id })
@@ -48,7 +90,7 @@ router.post(
   handle(async (req, res) => {
     const slug = String(req.params.slug || "");
     const [seller] = await db
-      .select({ id: usersTable.id })
+      .select({ id: usersTable.id, telegramUserId: usersTable.telegramUserId })
       .from(usersTable)
       .where(eq(usersTable.storeSlug, slug))
       .limit(1);
@@ -128,6 +170,17 @@ router.post(
       customerAddress,
       customerComment,
       status: "new",
+    });
+
+    notifySellerOfNewOrder(seller, {
+      orderNumber,
+      items: orderItems,
+      total,
+      currency,
+      customerName,
+      customerPhone,
+      customerAddress,
+      customerComment,
     });
 
     res.status(201).json({ orderNumber, totalAmount: String(total), currency, items: orderItems });

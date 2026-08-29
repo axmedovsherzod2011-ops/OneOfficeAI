@@ -23,6 +23,50 @@ export function isTelegramConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN);
 }
 
+// ---------------------------------------------------------------------------
+// Sending messages TO a user (not receiving — see telegramWebhook.ts for
+// that side). Used for things like the "yangi buyurtma" seller notification
+// in routes/orders.ts: chatId is that seller's own users.telegramUserId,
+// which is only ever populated once they've linked their account by
+// messaging this same bot (see consumeLinkToken below) — so Telegram will
+// always accept a message to it; there's no separate "did they start the
+// bot?" check needed.
+// ---------------------------------------------------------------------------
+
+export async function sendTelegramMessage(
+  chatId: number | string,
+  text: string,
+  options?: { parseMode?: "HTML" },
+): Promise<boolean> {
+  if (!isTelegramConfigured()) return false;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${getBotToken()}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        ...(options?.parseMode ? { parse_mode: options.parseMode } : {}),
+      }),
+    });
+    const data = (await res.json()) as { ok: boolean };
+    return data.ok === true;
+  } catch (err) {
+    console.error("[telegram] sendMessage failed", err);
+    return false;
+  }
+}
+
+// Escapes the 5 characters HTML parse_mode treats specially, so
+// user-typed content (a buyer's name, address, a product title) can never
+// break the message's HTML tags or get silently dropped by Telegram.
+export function escapeTelegramHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 let cachedBotUsername: string | null = process.env.TELEGRAM_BOT_USERNAME || null;
 let cachedBotId: number | null = null;
 
