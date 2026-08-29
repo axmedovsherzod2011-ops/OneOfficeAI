@@ -161,9 +161,9 @@ router.get(
     const buckets = subscribersSummary.buckets.map((b, i) => ({
       periodStart: b.periodStart,
       periodEnd: b.periodEnd,
-      views: viewsSummary?.buckets[i]?.cumulativeAtEnd ?? 0,
-      subscribers: b.cumulativeAtEnd,
-      orders: ordersSummary.buckets[i]?.cumulativeAtEnd ?? 0,
+      views: viewsSummary?.buckets[i]?.value ?? 0,
+      subscribers: b.value,
+      orders: ordersSummary.buckets[i]?.value ?? 0,
       viewsGrounded: viewsSummary?.buckets[i]?.grounded ?? false,
       subscribersGrounded: b.grounded,
     }));

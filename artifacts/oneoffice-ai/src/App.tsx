@@ -115,8 +115,8 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
-  LineChart,
-  Line,
+  BarChart,
+  Bar,
   Legend,
   XAxis,
   YAxis,
@@ -662,7 +662,7 @@ function CombinedStatsChart({
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+            <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }} barGap={2}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis
                 dataKey="label"
@@ -680,6 +680,7 @@ function CombinedStatsChart({
                 allowDecimals={false}
               />
               <RechartsTooltip
+                cursor={{ fill: "rgba(255,255,255,0.04)" }}
                 content={({ active, payload, label }: any) => {
                   if (!active || !payload?.length) return null;
                   return (
@@ -701,31 +702,10 @@ function CombinedStatsChart({
                 }
                 wrapperStyle={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}
               />
-              <Line
-                type="monotone"
-                dataKey="views"
-                stroke={COMBINED_SERIES_META.views.color}
-                strokeWidth={2.5}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-              <Line
-                type="monotone"
-                dataKey="subscribers"
-                stroke={COMBINED_SERIES_META.subscribers.color}
-                strokeWidth={2.5}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-              <Line
-                type="monotone"
-                dataKey="orders"
-                stroke={COMBINED_SERIES_META.orders.color}
-                strokeWidth={2.5}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-            </LineChart>
+              <Bar dataKey="views" fill={COMBINED_SERIES_META.views.color} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="subscribers" fill={COMBINED_SERIES_META.subscribers.color} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="orders" fill={COMBINED_SERIES_META.orders.color} radius={[3, 3, 0, 0]} />
+            </BarChart>
           </ResponsiveContainer>
         )}
       </div>
