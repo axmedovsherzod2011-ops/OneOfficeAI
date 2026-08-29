@@ -10,6 +10,7 @@ import {
   verifyCode,
   verifyPassword,
   revoke,
+  resendStart,
   getStatus,
 } from "../telegram-mtproto/auth";
 import { listAdminChannels } from "../telegram-mtproto/discovery";
@@ -411,6 +412,20 @@ router.post(
     if (userId === null) return;
     await revoke(userId);
     res.json({ status: "revoked" });
+  }),
+);
+
+router.post(
+  "/telegram-mtproto/resend-start",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+    const result = await resendStart(userId);
+    if (!result.success) {
+      res.status(400).json({ error: result.reason });
+      return;
+    }
+    res.json({ status: "sent" });
   }),
 );
 

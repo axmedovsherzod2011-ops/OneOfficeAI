@@ -1592,6 +1592,7 @@ function TelegramCard() {
 
 function TelegramConnectModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
+  const { user: firebaseUser } = useAuth();
   const { data: status, isLoading: statusLoading } = useGetTelegramMtprotoStatus();
   const connected = Boolean(status?.connected);
 
@@ -1701,6 +1702,44 @@ function TelegramConnectModal({ onClose }: { onClose: () => void }) {
     await logout.mutateAsync();
     setPhone("");
     queryClient.invalidateQueries({ queryKey: ["/api/telegram-mtproto/status"] });
+  }
+
+  // Plain fetch, not a generated hook — this is a small one-off action
+  // (see auth.ts's resendStart), not worth a codegen round-trip for.
+  // Always attempts a send regardless of the existing bot-link state —
+  // for the case someone blocked @OneOfficeAIBot and unblocked it later,
+  // where the normal auto-/start on login correctly stays silent (link
+  // already exists, so it never re-sends on its own).
+  const [resendStartPending, setResendStartPending] = useState(false);
+  const [resendStartMessage, setResendStartMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const resendStart = { isPending: resendStartPending };
+
+  async function handleResendStart() {
+    setResendStartPending(true);
+    setResendStartMessage(null);
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/telegram-mtproto/resend-start"), {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setResendStartMessage({ type: "error", text: data?.error || "Xatolik yuz berdi." });
+        return;
+      }
+      setResendStartMessage({
+        type: "success",
+        text: "Xabar yuborildi — Telegram'da @OneOfficeAIBot chatini tekshiring.",
+      });
+    } catch {
+      setResendStartMessage({ type: "error", text: "Xatolik yuz berdi. Qayta urinib ko'ring." });
+    } finally {
+      setResendStartPending(false);
+    }
   }
 
   async function handleConnectChannel(mtprotoChannelId: string) {
@@ -1821,6 +1860,21 @@ function TelegramConnectModal({ onClose }: { onClose: () => void }) {
             <div className="flex items-center gap-2 shrink-0">
               {connected && (
                 <button
+                  onClick={handleResendStart}
+                  disabled={resendStart.isPending}
+                  title="Bot bilan bog'lanishni yangilash (agar buyurtma xabarlari kelmasa)"
+                  className="flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 px-3 py-2 rounded-xl text-xs font-medium hover:border-violet-500/40 hover:text-violet-300 transition"
+                >
+                  {resendStart.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  Botni qayta ishga tushirish
+                </button>
+              )}
+              {connected && (
+                <button
                   onClick={handleLogout}
                   disabled={logout.isPending}
                   title="Hisobni uzish"
@@ -1839,6 +1893,14 @@ function TelegramConnectModal({ onClose }: { onClose: () => void }) {
               </button>
             </div>
           </div>
+
+          {resendStartMessage && (
+            <p
+              className={`text-xs mt-2 shrink-0 ${resendStartMessage.type === "success" ? "text-emerald-400" : "text-rose-400"}`}
+            >
+              {resendStartMessage.text}
+            </p>
+          )}
 
           {!connected && (
             <p className="text-slate-500 text-xs mt-3 leading-relaxed shrink-0">

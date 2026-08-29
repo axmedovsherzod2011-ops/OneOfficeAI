@@ -395,6 +395,63 @@ async function finalizeAuth(
   return { status: "authenticated" };
 }
 
+// ---------------------------------------------------------------------------
+// Manual "qayta yuborish" — for the rare case autoStartBotIfNeeded's
+// silent skip is wrong: the account link is real, but something else is
+// stopping messages from landing (most commonly: the person blocked
+// @OneOfficeAIBot at some point, then unblocked it later and now
+// legitimately wants to reconnect the notification flow). Unlike
+// autoStartBotIfNeeded, this ALWAYS attempts a send regardless of the
+// existing users.telegramUserId, and — importantly — surfaces the real
+// outcome to the caller instead of only logging it, so the Connectors
+// page can show something more useful than silence.
+// ---------------------------------------------------------------------------
+
+export async function resendStart(
+  userId: number,
+): Promise<{ success: true } | { success: false; reason: string }> {
+  const [account] = await db
+    .select()
+    .from(telegramMtprotoAccountsTable)
+    .where(eq(telegramMtprotoAccountsTable.userId, userId))
+    .limit(1);
+
+  if (!account || account.status !== "active" || !account.sessionEncrypted) {
+    return { success: false, reason: "Telegram ulanmagan. Avval Telegram'ni ulang." };
+  }
+
+  const identity = await getBotIdentity();
+  if (!identity) {
+    return { success: false, reason: "Bot sozlanmagan." };
+  }
+
+  let client: Awaited<ReturnType<typeof createMtprotoClient>> | null = null;
+  try {
+    const sessionString = decryptSessionString(account.sessionEncrypted);
+    client = await createMtprotoClient(sessionString);
+
+    const token = await createLinkToken(userId);
+    const botEntity = await client.getEntity(identity.username);
+    const sent = await client.sendMessage(botEntity, { message: `/start ${token}` });
+    console.log(`[mtproto] resendStart: sent for user ${userId}, message id=${(sent as any)?.id ?? "?"}`);
+    return { success: true };
+  } catch (err: any) {
+    const reason = err?.errorMessage ?? String(err);
+    console.error(`[mtproto] resendStart failed for user ${userId}`, reason);
+    // Telegram's own wording for the most likely real-world cause, made
+    // readable instead of surfacing the raw API error code.
+    if (String(reason).includes("USER_IS_BLOCKED") || String(reason).includes("blocked")) {
+      return {
+        success: false,
+        reason: "Siz botni bloklagan ko'rinasiz. Telegram'da @OneOfficeAIBot'ni blokdan chiqarib, qayta urinib ko'ring.",
+      };
+    }
+    return { success: false, reason: "Xabar yuborishda xatolik yuz berdi. Birozdan keyin qayta urinib ko'ring." };
+  } finally {
+    await client?.disconnect().catch(() => {});
+  }
+}
+
 export async function revoke(userId: number): Promise<void> {
   const [account] = await db
     .select()
