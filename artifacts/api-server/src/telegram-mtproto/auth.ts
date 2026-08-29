@@ -310,12 +310,19 @@ async function autoStartBotIfNeeded(
     // Already linked (this MTProto account, a previous session, or even a
     // manual /start from before) — nothing to do, and definitely don't
     // re-send /start on every login and spam them.
-    if (user?.telegramUserId) return;
+    if (user?.telegramUserId) {
+      console.log(`[mtproto] auto /start skipped for user ${userId} — already linked (telegramUserId=${user.telegramUserId})`);
+      return;
+    }
 
     const identity = await getBotIdentity();
-    if (!identity) return; // bot not configured in this environment
+    if (!identity) {
+      console.log(`[mtproto] auto /start skipped for user ${userId} — bot not configured (no TELEGRAM_BOT_TOKEN)`);
+      return;
+    }
 
     const token = await createLinkToken(userId);
+    console.log(`[mtproto] auto /start: resolving @${identity.username} for user ${userId}...`);
 
     // A brand-new MTProto session has never "seen" @OneOfficeAIBot before
     // — it isn't in this session's local entity cache the way an existing
@@ -328,14 +335,16 @@ async function autoStartBotIfNeeded(
     // once resolved, sendMessage has an actual entity to address, not
     // just a string it has to guess how to look up.
     const botEntity = await client.getEntity(identity.username);
-    await client.sendMessage(botEntity, { message: `/start ${token}` });
+    console.log(`[mtproto] auto /start: entity resolved, sending for user ${userId}...`);
+    const sent = await client.sendMessage(botEntity, { message: `/start ${token}` });
+    console.log(`[mtproto] auto /start: sent for user ${userId}, message id=${(sent as any)?.id ?? "?"}`);
   } catch (err: any) {
     // Best-effort — the person can still link manually from Connectors,
     // and this must never fail the MTProto login itself. Logged with the
     // same errorMessage-first shape as every other catch in this file, so
     // a real cause (rather than just "[object Object]") shows up in logs
     // if this needs debugging again.
-    console.error("[mtproto] auto /start failed (non-fatal)", err?.errorMessage ?? err);
+    console.error(`[mtproto] auto /start failed for user ${userId} (non-fatal)`, err?.errorMessage ?? err);
   }
 }
 
