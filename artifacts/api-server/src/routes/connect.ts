@@ -72,6 +72,7 @@ router.get(
       firstName: user.firstName,
       lastName: user.lastName,
       company: user.company,
+      onboardingCompleted: Boolean(user.onboardingCompletedAt),
       telegramChannels: channels.map((c) => ({
         id: c.id,
         channelId: c.channelId,
@@ -79,6 +80,24 @@ router.get(
         channelTitle: c.channelTitle,
       })),
     });
+  }),
+);
+
+// Marks the first-time walkthrough as done (finished OR explicitly
+// skipped) so it never shows again for this account.
+router.post(
+  "/me/onboarding-complete",
+  handle(async (req, res) => {
+    const { userId: firebaseUid } = getAuth(req);
+    if (!firebaseUid) {
+      res.status(401).json({ error: "Tizimga kirilmagan." });
+      return;
+    }
+    await db
+      .update(usersTable)
+      .set({ onboardingCompletedAt: new Date() })
+      .where(eq(usersTable.firebaseUid, firebaseUid));
+    res.json({ ok: true });
   }),
 );
 

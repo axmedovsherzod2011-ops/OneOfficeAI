@@ -11,7 +11,7 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
-import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema } from "@workspace/db";
+import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema, ensureOnboardingSchema } from "@workspace/db";
 import { startStatsScheduler } from "./scheduler/statsScheduler";
 
 const rawPort = process.env["PORT"];
@@ -70,6 +70,11 @@ await ensureProductProInfoSchema().catch((err) => {
     { err },
     "ensureProductProInfoSchema failed — product characteristics/composition/instructions/delivery info will 500 until this is fixed",
   );
+});
+
+// Adds users.onboarding_completed_at if it doesn't exist yet.
+await ensureOnboardingSchema().catch((err) => {
+  logger.error({ err }, "ensureOnboardingSchema failed — the first-time walkthrough will re-show every login until this is fixed");
 });
 
 app.listen(port, (err) => {

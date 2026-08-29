@@ -29,6 +29,9 @@ export const usersTable = pgTable("users", {
   // no modal shown, the seller just sees it already applied. Null until
   // that choice is made at least once.
   defaultDeliveryInfo: text("default_delivery_info"),
+  // Set once the person finishes (or explicitly skips) the first-time
+  // product+post walkthrough — null means "show it on next login".
+  onboardingCompletedAt: timestamp("onboarding_completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

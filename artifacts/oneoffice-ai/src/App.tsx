@@ -1590,7 +1590,20 @@ function TelegramCard() {
   );
 }
 
-function TelegramConnectModal({ onClose }: { onClose: () => void }) {
+function TelegramConnectModal({
+  onClose,
+  autoCreateChannelTitle,
+  onDone,
+}: {
+  onClose: () => void;
+  // Onboarding-only: when set, skip the "pick one of your channels" list
+  // entirely and create a brand-new channel with this title the moment
+  // the account connects — so a first-time user never has to leave
+  // OneOffice or already own a Telegram channel to get one.
+  autoCreateChannelTitle?: string;
+  onDone?: () => void;
+}) {
+  const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
   const { user: firebaseUser } = useAuth();
   const { data: status, isLoading: statusLoading } = useGetTelegramMtprotoStatus();
@@ -1778,6 +1791,47 @@ function TelegramConnectModal({ onClose }: { onClose: () => void }) {
   const connectedRows = channels.filter((c) => connectedRowByChannelId.has(`-100${c.id}`));
   const availableRows = channels.filter((c) => !connectedRowByChannelId.has(`-100${c.id}`));
 
+  const [autoCreating, setAutoCreating] = useState(false);
+  const [autoCreateDone, setAutoCreateDone] = useState(false);
+  const [autoCreateError, setAutoCreateError] = useState("");
+
+  useEffect(() => {
+    if (!autoCreateChannelTitle || !connected || channelsLoading) return;
+    if (autoCreating || autoCreateDone) return;
+    // An account that already has a OneOffice-connected channel shouldn't
+    // get a surprise extra one — just report done.
+    if (connectedRows.length > 0) {
+      setAutoCreateDone(true);
+      onDone?.();
+      return;
+    }
+    (async () => {
+      setAutoCreating(true);
+      setAutoCreateError("");
+      try {
+        const token = await firebaseUser?.getIdToken();
+        const res = await fetch(apiUrl("/api/telegram-mtproto/channels/create"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ title: autoCreateChannelTitle }),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(body?.error || "Kanal yaratilmadi.");
+        queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+        setAutoCreateDone(true);
+        onDone?.();
+      } catch (err: any) {
+        setAutoCreateError(err?.message || "Kanal yaratilmadi.");
+      } finally {
+        setAutoCreating(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCreateChannelTitle, connected, channelsLoading, connectedRows.length, autoCreating, autoCreateDone]);
+
   function ChannelRow({ c, isConnected }: { c: (typeof channels)[number]; isConnected: boolean }) {
     const row = connectedRowByChannelId.get(`-100${c.id}`);
     return (
@@ -1912,6 +1966,31 @@ function TelegramConnectModal({ onClose }: { onClose: () => void }) {
           {error && <p className="text-rose-300 text-xs mt-3 shrink-0">{error}</p>}
 
           {connected ? (
+            autoCreateChannelTitle ? (
+              <div className="mt-5 flex flex-col items-center text-center gap-3 py-6">
+                {autoCreateError ? (
+                  <>
+                    <div className="h-12 w-12 rounded-2xl bg-rose-500/10 flex items-center justify-center">
+                      <AlertCircle className="h-5 w-5 text-rose-400" />
+                    </div>
+                    <p className="text-rose-300 text-sm">{autoCreateError}</p>
+                    <button
+                      onClick={() => setAutoCreateError("")}
+                      className="text-xs bg-white/5 border border-white/10 text-white px-4 py-2 rounded-xl"
+                    >
+                      Qayta urinish
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Loader2 className="h-6 w-6 text-violet-400 animate-spin" />
+                    <p className="text-slate-300 text-sm">
+                      "{autoCreateChannelTitle}" kanali yaratilmoqda...
+                    </p>
+                  </>
+                )}
+              </div>
+            ) : (
             <div className="mt-5 overflow-y-auto -mx-1 px-1 space-y-5">
               {channelsLoading ? (
                 <div className="flex items-center justify-center py-8">
@@ -1946,6 +2025,7 @@ function TelegramConnectModal({ onClose }: { onClose: () => void }) {
                 </>
               )}
             </div>
+            )
           ) : step === "idle" ? (
             <button
               data-testid="button-connect-mtproto"
@@ -2966,7 +3046,7 @@ function ProductForm({
 }: {
   initial?: ProductItem | null;
   onCancel: () => void;
-  onSaved: () => void;
+  onSaved: (wasCreate: boolean) => void;
 }) {
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name ?? "");
@@ -3093,7 +3173,7 @@ function ProductForm({
         setDeliveryModalProductId(savedId);
         return;
       }
-      onSaved();
+      onSaved(!isEdit);
     } catch (err: any) {
       setError(
         err?.data?.error || err?.message || "Saqlashda xatolik yuz berdi.",
@@ -3124,6 +3204,7 @@ function ProductForm({
               <Package className="h-3 w-3" /> Mahsulot nomi
             </label>
             <input
+              data-tour="product-name-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="masalan: AeroSound Pro Earbuds"
@@ -3165,6 +3246,7 @@ function ProductForm({
                 <DollarSign className="h-3 w-3" /> Sotish narxi
               </label>
               <input
+                data-tour="product-price-input"
                 value={sellPrice}
                 onChange={(e) => setSellPrice(e.target.value)}
                 placeholder="masalan: 349,000"
@@ -3431,6 +3513,7 @@ function ProductForm({
           )}
 
           <button
+            data-tour="product-save-button"
             onClick={() => save(isEdit ? (initial!.status as "draft" | "active") : "active")}
             disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
@@ -3448,7 +3531,7 @@ function ProductForm({
           productId={deliveryModalProductId}
           onDone={() => {
             setDeliveryModalProductId(null);
-            onSaved();
+            onSaved(true);
           }}
         />
       )}
@@ -3629,11 +3712,13 @@ function InventoryPage({
   editingProduct,
   onCloseForm,
   onEditProduct,
+  onProductCreated,
 }: {
   formOpen: boolean;
   editingProduct: ProductItem | null;
   onCloseForm: () => void;
   onEditProduct: (p: ProductItem) => void;
+  onProductCreated?: () => void;
 }) {
   const [tab, setTab] = useState<"all" | "draft" | "active">("all");
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -3679,7 +3764,10 @@ function InventoryPage({
       <ProductForm
         initial={editingProduct}
         onCancel={onCloseForm}
-        onSaved={onCloseForm}
+        onSaved={(wasCreate) => {
+          onCloseForm();
+          if (wasCreate) onProductCreated?.();
+        }}
       />
     );
   }
@@ -4272,6 +4360,7 @@ function ProductPicker({
     const thumb = p.images?.[0];
     return (
       <button
+        data-tour="post-pick-product"
         onClick={() => onPick(p)}
         className="text-left rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 hover:border-violet-400/40 transition p-3"
       >
@@ -4472,6 +4561,7 @@ function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any
 
         <button
           data-testid="button-generate-post"
+          data-tour="post-generate-button"
           disabled={!valid}
           onClick={onGenerate}
           className="w-full mt-7 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
@@ -5063,6 +5153,7 @@ function Results({
         </button>
         <button
           data-testid="button-approve"
+          data-tour="button-approve"
           onClick={() => onApprove()}
           disabled={selectedChannelIds.length === 0}
           className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -5917,6 +6008,261 @@ function FullscreenLoader() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// FIRST-TIME WALKTHROUGH — a short "here's what this can do" carousel
+// right after sign-up, then a guided, spotlight-driven walk through
+// creating the first product and the first post, ending with the person's
+// own Telegram channel already connected and ready to publish to.
+// ---------------------------------------------------------------------------
+
+// Real screenshots of each screen go here once provided — background is a
+// gradient placeholder until then, so swapping one in later is a one-line
+// change (`image: "https://..."`) per slide.
+const WELCOME_SLIDES: Array<{
+  title: string;
+  body: string;
+  gradient: string;
+  image?: string;
+}> = [
+  {
+    title: "OneOffice AI'ga xush kelibsiz",
+    body: "Mahsulot qo'shing, AI siz uchun professional post yozsin va bir bosishda Telegram kanalingizga chop eting.",
+    gradient: "from-violet-600 via-indigo-700 to-slate-950",
+  },
+  {
+    title: "Inventar",
+    body: "Barcha mahsulotlaringiz shu yerda — rasm, narx va tavsif bilan. AI har bir mahsulotni internetdan bir marta tahlil qiladi.",
+    gradient: "from-blue-600 via-cyan-700 to-slate-950",
+  },
+  {
+    title: "AI bilan post yaratish",
+    body: "Mahsulotni tanlang — AI chiroyli post matnini, hashtaglarni va rasmlarni tayyorlab beradi.",
+    gradient: "from-fuchsia-600 via-purple-700 to-slate-950",
+  },
+  {
+    title: "Vitrina va buyurtmalar",
+    body: "Mijozlar sizning shaxsiy vitrinangizdan to'g'ridan-to'g'ri buyurtma beradi — hammasi Buyurtmalar bo'limida ko'rinadi.",
+    gradient: "from-emerald-600 via-teal-700 to-slate-950",
+  },
+];
+
+function WelcomeOnboarding({ onDone }: { onDone: () => void }) {
+  const [index, setIndex] = useState(0);
+  const isLast = index === WELCOME_SLIDES.length - 1;
+  const slide = WELCOME_SLIDES[index];
+
+  return (
+    <div className="fixed inset-0 z-[200] bg-slate-950 flex flex-col">
+      <div
+        className={`relative flex-1 bg-gradient-to-br ${slide.gradient} flex items-end`}
+        style={
+          slide.image
+            ? { backgroundImage: `url(${slide.image})`, backgroundSize: "cover", backgroundPosition: "center" }
+            : undefined
+        }
+      >
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
+        <div className="relative z-10 p-8 pb-6 max-w-lg">
+          <h2 className="text-white text-2xl font-bold mb-2">{slide.title}</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">{slide.body}</p>
+        </div>
+      </div>
+
+      <div className="p-6 bg-slate-950 shrink-0">
+        <div className="flex items-center justify-center gap-1.5 mb-5">
+          {WELCOME_SLIDES.map((_, i) => (
+            <span
+              key={i}
+              className={`h-1.5 rounded-full transition-all ${
+                i === index ? "w-6 bg-violet-400" : "w-1.5 bg-white/20"
+              }`}
+            />
+          ))}
+        </div>
+        <div className="flex items-center gap-3 max-w-lg mx-auto">
+          {index > 0 && (
+            <button
+              onClick={() => setIndex((i) => i - 1)}
+              className="px-5 py-3.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
+            >
+              Orqaga
+            </button>
+          )}
+          <button
+            onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
+            className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
+          >
+            {isLast ? "Tushundim, boshlaymiz!" : "Keyingisi"}
+            <ArrowRight className="h-4 w-4" />
+          </button>
+        </div>
+        {!isLast && (
+          <button
+            onClick={onDone}
+            className="w-full text-center text-slate-500 text-xs mt-4"
+          >
+            O'tkazib yuborish
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SPOTLIGHT TOUR ENGINE — dims the whole screen except one target element
+// (found live via a `data-tour="..."` attribute already on a real button),
+// and blocks interaction with everything outside it. "click"-mode steps
+// auto-advance the moment the real target is clicked (no extra button);
+// "manual"-mode steps (text fields) show a "Keyingisi" button instead,
+// since there's no single discrete action to detect.
+// ---------------------------------------------------------------------------
+
+interface TourStep {
+  target: string;
+  title: string;
+  body: string;
+  mode: "click" | "manual";
+}
+
+function TourOverlay({
+  step,
+  stepNumber,
+  totalSteps,
+  isLast,
+  onNext,
+  onSkip,
+}: {
+  step: TourStep;
+  stepNumber: number;
+  totalSteps: number;
+  isLast: boolean;
+  onNext: () => void;
+  onSkip: () => void;
+}) {
+  const [rect, setRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    let raf = 0;
+    function measure() {
+      const el = document.querySelector(`[data-tour="${step.target}"]`);
+      setRect(el ? el.getBoundingClientRect() : null);
+      raf = requestAnimationFrame(measure);
+    }
+    raf = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(raf);
+  }, [step.target]);
+
+  useEffect(() => {
+    if (step.mode !== "click") return;
+    function onClickCapture(e: MouseEvent) {
+      const el = (e.target as HTMLElement)?.closest?.(`[data-tour="${step.target}"]`);
+      if (el) onNext();
+    }
+    document.addEventListener("click", onClickCapture, true);
+    return () => document.removeEventListener("click", onClickCapture, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step.target, step.mode]);
+
+  // Waiting for the target to exist yet (e.g. right after a navigation) —
+  // render nothing rather than a confusing full-screen dim with no hole.
+  if (!rect) return null;
+
+  const pad = 6;
+  const hole = {
+    top: rect.top - pad,
+    left: rect.left - pad,
+    width: rect.width + pad * 2,
+    height: rect.height + pad * 2,
+  };
+  const tooltipBelow = hole.top + hole.height + 160 < window.innerHeight;
+  const tooltipLeft = Math.min(Math.max(hole.left, 12), window.innerWidth - 300);
+
+  return (
+    <div className="fixed inset-0 z-[150]">
+      <div className="absolute bg-black/75" style={{ top: 0, left: 0, right: 0, height: Math.max(0, hole.top) }} />
+      <div className="absolute bg-black/75" style={{ top: hole.top + hole.height, left: 0, right: 0, bottom: 0 }} />
+      <div className="absolute bg-black/75" style={{ top: hole.top, left: 0, width: Math.max(0, hole.left), height: hole.height }} />
+      <div className="absolute bg-black/75" style={{ top: hole.top, left: hole.left + hole.width, right: 0, height: hole.height }} />
+      <div
+        className="absolute rounded-xl ring-2 ring-violet-400 pointer-events-none"
+        style={{ top: hole.top, left: hole.left, width: hole.width, height: hole.height }}
+      />
+      <div
+        className="absolute max-w-[280px] bg-slate-900 border border-violet-400/40 rounded-2xl p-4 shadow-2xl"
+        style={
+          tooltipBelow
+            ? { top: hole.top + hole.height + 12, left: tooltipLeft }
+            : { top: Math.max(hole.top - 150, 12), left: tooltipLeft }
+        }
+      >
+        <p className="text-violet-400 text-[11px] font-semibold mb-1">
+          {stepNumber}/{totalSteps}
+        </p>
+        <p className="text-white font-semibold text-sm mb-1">{step.title}</p>
+        <p className="text-slate-400 text-xs mb-3 leading-relaxed">{step.body}</p>
+        <div className="flex items-center justify-between gap-2">
+          <button onClick={onSkip} className="text-xs text-slate-500 hover:text-slate-300">
+            O'tkazib yuborish
+          </button>
+          {step.mode === "manual" && (
+            <button
+              onClick={onNext}
+              className="text-xs bg-violet-500 text-white px-3 py-1.5 rounded-full font-medium"
+            >
+              {isLast ? "Tugatish" : "Keyingisi"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PRODUCT_TOUR_STEPS: TourStep[] = [
+  { target: "product-name-input", title: "1-qadam", body: "Mahsulot nomini shu yerga yozing.", mode: "manual" },
+  { target: "product-price-input", title: "2-qadam", body: "Endi sotish narxini kiriting.", mode: "manual" },
+  { target: "product-save-button", title: "3-qadam", body: "Ajoyib! Endi shu tugmani bosib mahsulotni saqlang.", mode: "click" },
+];
+
+const POST_TOUR_STEPS: TourStep[] = [
+  { target: "post-pick-product", title: "1-qadam", body: "Post yozmoqchi bo'lgan mahsulotni tanlang.", mode: "click" },
+  { target: "post-generate-button", title: "2-qadam", body: "AI post matnini yaratishi uchun shu yerni bosing.", mode: "click" },
+];
+
+const PUBLISH_TOUR_STEPS: TourStep[] = [
+  {
+    target: "button-approve",
+    title: "Oxirgi qadam!",
+    body: "Kanal ulandi — endi postni Telegram kanalingizga chop etish uchun shu tugmani bosing.",
+    mode: "click",
+  },
+];
+
+function ProductCongratsModal({ onNext }: { onNext: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-slate-900 border border-white/10 rounded-3xl p-8 text-center">
+        <div className="h-16 w-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-5">
+          <CheckCircle2 className="h-8 w-8 text-emerald-400" />
+        </div>
+        <h3 className="text-white text-lg font-semibold mb-2">
+          Mahsulotni muvaffaqiyatli qo'shdingiz!
+        </h3>
+        <p className="text-slate-400 text-sm mb-6">
+          Endi esa post yaratamiz — AI siz uchun tayyorlab beradi.
+        </p>
+        <button
+          onClick={onNext}
+          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
+        >
+          Post yaratamiz <ArrowRight className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AppShell() {
   const { user: firebaseUser, signOut } = useAuth();
 
@@ -5996,6 +6342,50 @@ function AppShell() {
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(
     null,
   );
+
+  // First-time walkthrough state — see WelcomeOnboarding/TourOverlay above.
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [onboardingActive, setOnboardingActive] = useState(false);
+  const [showProductCongrats, setShowProductCongrats] = useState(false);
+  const [tour, setTour] = useState<{ steps: TourStep[]; index: number; onComplete?: () => void } | null>(null);
+  const [showTelegramConnectInline, setShowTelegramConnectInline] = useState(false);
+  const seenOnboardingCheck = useRef(false);
+
+  useEffect(() => {
+    if (!profile || seenOnboardingCheck.current) return;
+    seenOnboardingCheck.current = true;
+    if (!profile.onboardingCompleted) setShowWelcome(true);
+  }, [profile]);
+
+  function startTour(steps: TourStep[], onComplete?: () => void) {
+    setTour({ steps, index: 0, onComplete });
+  }
+  function advanceTour() {
+    setTour((t) => {
+      if (!t) return t;
+      if (t.index + 1 >= t.steps.length) {
+        t.onComplete?.();
+        return null;
+      }
+      return { ...t, index: t.index + 1 };
+    });
+  }
+  function stopTour() {
+    setTour(null);
+  }
+
+  async function markOnboardingComplete() {
+    try {
+      const token = await firebaseUser?.getIdToken();
+      await fetch(apiUrl("/api/me/onboarding-complete"), {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+    } catch {
+      // Best-effort — worst case the welcome carousel shows once more.
+    }
+  }
+
   const [selectedProduct, setSelectedProduct] = useState<ProductItem | null>(
     null,
   );
@@ -6439,6 +6829,10 @@ function AppShell() {
   }
 
   function goToConnectors() {
+    if (onboardingActive) {
+      setShowTelegramConnectInline(true);
+      return;
+    }
     setNavView("connectors");
   }
 
@@ -6667,6 +7061,11 @@ function AppShell() {
               setEditingProduct(p);
               setProductFormOpen(true);
             }}
+            onProductCreated={() => {
+              if (!onboardingActive) return;
+              stopTour();
+              setShowProductCongrats(true);
+            }}
           />
         )}
 
@@ -6704,6 +7103,57 @@ function AppShell() {
           postText={enrichData?.postText}
           onClose={() => setShowPreview(false)}
           onApprove={handleApprove}
+        />
+      )}
+
+      {showWelcome && (
+        <WelcomeOnboarding
+          onDone={() => {
+            setShowWelcome(false);
+            void markOnboardingComplete();
+            setOnboardingActive(true);
+            setEditingProduct(null);
+            setProductFormOpen(true);
+            setNavView("inventory");
+            startTour(PRODUCT_TOUR_STEPS);
+          }}
+        />
+      )}
+
+      {showProductCongrats && (
+        <ProductCongratsModal
+          onNext={() => {
+            setShowProductCongrats(false);
+            setNavView("create");
+            resetCreate();
+            startTour(POST_TOUR_STEPS);
+          }}
+        />
+      )}
+
+      {tour && (
+        <TourOverlay
+          step={tour.steps[tour.index]}
+          stepNumber={tour.index + 1}
+          totalSteps={tour.steps.length}
+          isLast={tour.index === tour.steps.length - 1}
+          onNext={advanceTour}
+          onSkip={() => {
+            stopTour();
+            setOnboardingActive(false);
+          }}
+        />
+      )}
+
+      {showTelegramConnectInline && (
+        <TelegramConnectModal
+          autoCreateChannelTitle={user?.company || "Mening do'konim"}
+          onClose={() => setShowTelegramConnectInline(false)}
+          onDone={() => {
+            setShowTelegramConnectInline(false);
+            refetchChannels();
+            startTour(PUBLISH_TOUR_STEPS, () => setOnboardingActive(false));
+          }}
         />
       )}
     </div>

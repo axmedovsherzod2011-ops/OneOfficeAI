@@ -13,7 +13,7 @@ import {
   resendStart,
   getStatus,
 } from "../telegram-mtproto/auth";
-import { listAdminChannels } from "../telegram-mtproto/discovery";
+import { listAdminChannels, createChannel } from "../telegram-mtproto/discovery";
 import {
   getPostViews,
   getChannelSubscriberCount,
@@ -222,6 +222,45 @@ router.get(
       return;
     }
     res.json({ channels: result.channels });
+  }),
+);
+
+// Onboarding-only shortcut: creates a brand-new channel (named after the
+// business by default) and immediately links it, in one call, instead of
+// making a first-time user go create one in the Telegram app themselves
+// and come back to pick it. Reuses the exact same insert-into-
+// telegram_channels shape as the manual connect endpoint below.
+router.post(
+  "/telegram-mtproto/channels/create",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const title = String(req.body?.title ?? "").trim();
+    const result = await createChannel(userId, title || "Mening do'konim");
+    if (result.status === "not_connected") {
+      res.status(409).json({ error: "MTProto hisob ulanmagan." });
+      return;
+    }
+    if (result.status === "error") {
+      res.status(500).json({ error: result.message });
+      return;
+    }
+
+    const found = result.channel;
+    const botChannelId = `-100${found.id}`;
+    const [inserted] = await db
+      .insert(telegramChannelsTable)
+      .values({
+        userId,
+        channelId: botChannelId,
+        channelUsername: found.username,
+        channelTitle: found.title,
+        connectionType: "mtproto",
+        isActive: true,
+      })
+      .returning();
+    res.json({ channel: inserted });
   }),
 );
 
