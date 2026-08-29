@@ -115,6 +115,9 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
+  LineChart,
+  Line,
+  Legend,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -524,6 +527,216 @@ function growthForBuckets(
   const percent = ((last - prev) / Math.abs(prev)) * 100;
   const direction = percent > 0.5 ? "up" : percent < -0.5 ? "down" : "flat";
   return { percent, direction };
+}
+
+// ---------------------------------------------------------------------------
+// COMBINED DASHBOARD CHART — one professional multi-line chart: views,
+// subscribers, and orders together, all on the same time buckets, from
+// GET /api/stats/dashboard/combined. Replaces the old two-separate-charts
+// layout (one line each) with a single comparable view.
+// ---------------------------------------------------------------------------
+
+interface CombinedBucket {
+  periodStart: string;
+  periodEnd: string;
+  views: number;
+  subscribers: number;
+  orders: number;
+  viewsGrounded: boolean;
+  subscribersGrounded: boolean;
+}
+
+interface CombinedStatsResponse {
+  granularity: string;
+  buckets: CombinedBucket[];
+  viewsConnected: boolean;
+  today: { views: number; subscribers: number; orders: number };
+  yesterday: { views: number; subscribers: number; orders: number };
+  allTime: { views: number; subscribers: number; orders: number };
+}
+
+function useCombinedStatsDashboard(period: PeriodKey) {
+  const { user: firebaseUser } = useAuth();
+  const granularity = PERIOD_TO_GRANULARITY[period];
+  return useQuery<CombinedStatsResponse>({
+    queryKey: ["stats-dashboard-combined", granularity],
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(
+        apiUrl(`/api/stats/dashboard/combined?granularity=${granularity}`),
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) throw new Error("Statistikani yuklashda xatolik.");
+      return res.json();
+    },
+  });
+}
+
+const COMBINED_SERIES_META = {
+  views: { label: "Ko'rishlar", color: "#a78bfa" },
+  subscribers: { label: "Obunachilar", color: "#22d3ee" },
+  orders: { label: "Buyurtmalar", color: "#34d399" },
+} as const;
+
+function CombinedStatsChart({
+  period,
+  onPeriodChange,
+}: {
+  period: PeriodKey;
+  onPeriodChange: (period: PeriodKey) => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const { data, isLoading } = useCombinedStatsDashboard(period);
+  const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
+
+  const buckets = data?.buckets ?? [];
+  const hasRealHistory = buckets.some((b) => b.viewsGrounded || b.subscribersGrounded) || buckets.some((b) => b.orders > 0);
+  const chartData = buckets.map((b) => ({
+    label: labelForBucket(b.periodStart, period),
+    views: b.views,
+    subscribers: b.subscribers,
+    orders: b.orders,
+  }));
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <h3 className="text-white font-semibold">Umumiy statistika</h3>
+        <div className="relative">
+          <button
+            onClick={() => setPickerOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 hover:border-white/20 transition"
+          >
+            {currentLabel}
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          {pickerOpen && (
+            <div className="absolute right-0 mt-1.5 w-44 bg-slate-900 border border-white/10 rounded-xl shadow-2xl p-1 z-20">
+              {PERIOD_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => {
+                    onPeriodChange(o.key);
+                    setPickerOpen(false);
+                  }}
+                  className="w-full flex items-center justify-between text-xs text-slate-300 hover:bg-white/5 rounded-lg px-3 py-2 transition"
+                >
+                  {o.label}
+                  {period === o.key && <Check className="h-3 w-3 text-violet-400" />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-4 mb-5 flex-wrap">
+        {(Object.keys(COMBINED_SERIES_META) as Array<keyof typeof COMBINED_SERIES_META>).map((key) => {
+          const meta = COMBINED_SERIES_META[key];
+          const total = data?.allTime[key] ?? 0;
+          return (
+            <div key={key} className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: meta.color }} />
+              <div>
+                <p className="text-sm font-bold text-white leading-none">{total.toLocaleString()}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">{meta.label}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="h-72 -ml-2">
+        {isLoading && chartData.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="h-6 w-6 text-slate-500 animate-spin" />
+          </div>
+        ) : !hasRealHistory ? (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-500">
+            <BarChart3 className="h-8 w-8 opacity-40" />
+            <p className="text-xs max-w-[220px]">
+              Hozircha tarixiy ma'lumot yo'q — vaqt o'tishi bilan bu yerda
+              real grafik shakllanadi.
+            </p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <XAxis
+                dataKey="label"
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }}
+                axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+                tickLine={false}
+              />
+              <YAxis
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                width={40}
+                allowDecimals={false}
+              />
+              <RechartsTooltip
+                content={({ active, payload, label }: any) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 shadow-xl">
+                      <p className="text-xs text-slate-400 mb-1">{label}</p>
+                      {payload.map((p: any) => (
+                        <p key={p.dataKey} className="text-xs font-medium" style={{ color: p.color }}>
+                          {COMBINED_SERIES_META[p.dataKey as keyof typeof COMBINED_SERIES_META].label}:{" "}
+                          {p.value.toLocaleString()}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                }}
+              />
+              <Legend
+                formatter={(value: string) =>
+                  COMBINED_SERIES_META[value as keyof typeof COMBINED_SERIES_META]?.label ?? value
+                }
+                wrapperStyle={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}
+              />
+              <Line
+                type="monotone"
+                dataKey="views"
+                stroke={COMBINED_SERIES_META.views.color}
+                strokeWidth={2.5}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="subscribers"
+                stroke={COMBINED_SERIES_META.subscribers.color}
+                strokeWidth={2.5}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="orders"
+                stroke={COMBINED_SERIES_META.orders.color}
+                strokeWidth={2.5}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {!data?.viewsConnected && (
+        <p className="text-[11px] text-slate-500 mt-3">
+          Ko'rishlar statistikasi uchun Telegram MTProto'ni ulang — Sozlamalar → Ulanishlar.
+        </p>
+      )}
+    </Glass>
+  );
 }
 
 function ChannelStatsChart({
@@ -4242,6 +4455,7 @@ function Dashboard({ goCreate, user }: any) {
   void goCreate;
   void user;
 
+  const [combinedPeriod, setCombinedPeriod] = useState<PeriodKey>("daily");
   const [subscribersPeriod, setSubscribersPeriod] = useState<PeriodKey>("daily");
   const [viewsPeriod, setViewsPeriod] = useState<PeriodKey>("daily");
 
@@ -4312,33 +4526,7 @@ function Dashboard({ goCreate, user }: any) {
         yesterdayViews={mtprotoConnected ? viewsStats.data?.yesterdayValue : undefined}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChannelStatsChart
-          metric="views"
-          currentValue={mtprotoLive?.totalViews}
-          isLive={mtprotoConnected && Boolean(mtprotoLive)}
-          isLoading={mtprotoConnected && (mtprotoLoading || viewsStats.isLoading)}
-          buckets={viewsStats.data?.buckets}
-          todayValue={mtprotoConnected ? viewsStats.data?.todayValue : undefined}
-          yesterdayValue={mtprotoConnected ? viewsStats.data?.yesterdayValue : undefined}
-          hasGroundedHistory={mtprotoConnected ? viewsStats.data?.hasGroundedHistory : false}
-          period={viewsPeriod}
-          onPeriodChange={setViewsPeriod}
-        />
-        <ChannelStatsChart
-          metric="subscribers"
-          currentValue={totalSubscribers}
-          isLive={Boolean(data) || (mtprotoConnected && Boolean(mtprotoLive))}
-          isLoading={isLoading || subscribersStats.isLoading}
-          buckets={subscribersStats.data?.buckets}
-          todayValue={subscribersStats.data?.todayValue}
-          yesterdayValue={subscribersStats.data?.yesterdayValue}
-          hasGroundedHistory={subscribersStats.data?.hasGroundedHistory}
-          period={subscribersPeriod}
-          onPeriodChange={setSubscribersPeriod}
-        />
-      </div>
-
+      <CombinedStatsChart period={combinedPeriod} onPeriodChange={setCombinedPeriod} />
       <ChannelBreakdownList
         botChannels={data?.channels}
         mtprotoChannels={mtprotoLive?.channels}

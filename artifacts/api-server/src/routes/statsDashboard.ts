@@ -7,7 +7,12 @@ import {
   telegramMtprotoAccountsTable,
 } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
-import { getStatsSummary, type Granularity, type StatsMetric } from "../stats/statsAggregation";
+import {
+  getStatsSummary,
+  getOrdersCountSummary,
+  type Granularity,
+  type StatsMetric,
+} from "../stats/statsAggregation";
 
 const router = Router();
 
@@ -24,6 +29,32 @@ function handle(fn: (req: any, res: any) => Promise<void>) {
 
 const VALID_GRANULARITIES: Granularity[] = ["hour", "day", "week", "month", "year"];
 const VALID_METRICS: StatsMetric[] = ["subscribers", "views"];
+
+async function resolveUserAndChannels(firebaseUid: string) {
+  const [user] = await db
+    .select({ id: usersTable.id })
+    .from(usersTable)
+    .where(eq(usersTable.firebaseUid, firebaseUid))
+    .limit(1);
+  if (!user) return null;
+
+  const channels = await db
+    .select({ id: telegramChannelsTable.id })
+    .from(telegramChannelsTable)
+    .where(and(eq(telegramChannelsTable.userId, user.id), eq(telegramChannelsTable.isActive, true)));
+
+  const [mtprotoAccount] = await db
+    .select({ status: telegramMtprotoAccountsTable.status })
+    .from(telegramMtprotoAccountsTable)
+    .where(eq(telegramMtprotoAccountsTable.userId, user.id))
+    .limit(1);
+
+  return {
+    userId: user.id,
+    channelIds: channels.map((c) => c.id),
+    mtprotoConnected: mtprotoAccount?.status === "active",
+  };
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/stats/dashboard?metric=views|subscribers&granularity=hour|day|week|month|year
@@ -51,15 +82,12 @@ router.get(
       return;
     }
 
-    const [user] = await db
-      .select({ id: usersTable.id })
-      .from(usersTable)
-      .where(eq(usersTable.firebaseUid, firebaseUid))
-      .limit(1);
-    if (!user) {
+    const resolved = await resolveUserAndChannels(firebaseUid);
+    if (!resolved) {
       res.status(404).json({ error: "Profil hali sozlanmagan." });
       return;
     }
+    const { channelIds, mtprotoConnected } = resolved;
 
     const metric = String(req.query.metric ?? "subscribers") as StatsMetric;
     const granularity = String(req.query.granularity ?? "day") as Granularity;
@@ -67,19 +95,6 @@ router.get(
       res.status(400).json({ error: "Noto'g'ri metric yoki granularity." });
       return;
     }
-
-    const channels = await db
-      .select({ id: telegramChannelsTable.id })
-      .from(telegramChannelsTable)
-      .where(and(eq(telegramChannelsTable.userId, user.id), eq(telegramChannelsTable.isActive, true)));
-    const channelIds = channels.map((c) => c.id);
-
-    const [mtprotoAccount] = await db
-      .select({ status: telegramMtprotoAccountsTable.status })
-      .from(telegramMtprotoAccountsTable)
-      .where(eq(telegramMtprotoAccountsTable.userId, user.id))
-      .limit(1);
-    const mtprotoConnected = mtprotoAccount?.status === "active";
 
     if (metric === "views" && !mtprotoConnected) {
       res.json({
@@ -99,6 +114,80 @@ router.get(
     const source = metric === "views" ? "mtproto" : mtprotoConnected ? "mtproto" : "bot_api";
     const summary = await getStatsSummary(channelIds, source, metric, granularity);
     res.json(summary);
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/stats/dashboard/combined?granularity=hour|day|week|month|year
+//
+// Powers the single "professional" 3-line dashboard chart: views,
+// subscribers, and orders, all on the exact same time buckets so they can
+// be plotted together and actually compared point-for-point. Each series
+// keeps its own "grounded" flag (views/subscribers can be ungrounded —
+// see statsAggregation.ts — orders never are, since counting real rows in
+// a range needs no prior snapshot to be meaningful).
+// ---------------------------------------------------------------------------
+router.get(
+  "/stats/dashboard/combined",
+  handle(async (req, res) => {
+    const { userId: firebaseUid } = getAuth(req);
+    if (!firebaseUid) {
+      res.status(401).json({ error: "Tizimga kirilmagan." });
+      return;
+    }
+
+    const resolved = await resolveUserAndChannels(firebaseUid);
+    if (!resolved) {
+      res.status(404).json({ error: "Profil hali sozlanmagan." });
+      return;
+    }
+    const { userId, channelIds, mtprotoConnected } = resolved;
+
+    const granularity = String(req.query.granularity ?? "day") as Granularity;
+    if (!VALID_GRANULARITIES.includes(granularity)) {
+      res.status(400).json({ error: "Noto'g'ri granularity." });
+      return;
+    }
+
+    const subscriberSource = mtprotoConnected ? "mtproto" : "bot_api";
+    const [viewsSummary, subscribersSummary, ordersSummary] = await Promise.all([
+      mtprotoConnected
+        ? getStatsSummary(channelIds, "mtproto", "views", granularity)
+        : Promise.resolve(null),
+      getStatsSummary(channelIds, subscriberSource, "subscribers", granularity),
+      getOrdersCountSummary(userId, granularity),
+    ]);
+
+    const buckets = subscribersSummary.buckets.map((b, i) => ({
+      periodStart: b.periodStart,
+      periodEnd: b.periodEnd,
+      views: viewsSummary?.buckets[i]?.value ?? 0,
+      subscribers: b.value,
+      orders: ordersSummary.buckets[i]?.value ?? 0,
+      viewsGrounded: viewsSummary?.buckets[i]?.grounded ?? false,
+      subscribersGrounded: b.grounded,
+    }));
+
+    res.json({
+      granularity,
+      buckets,
+      viewsConnected: mtprotoConnected,
+      today: {
+        views: viewsSummary?.todayValue ?? 0,
+        subscribers: subscribersSummary.todayValue,
+        orders: ordersSummary.todayValue,
+      },
+      yesterday: {
+        views: viewsSummary?.yesterdayValue ?? 0,
+        subscribers: subscribersSummary.yesterdayValue,
+        orders: ordersSummary.yesterdayValue,
+      },
+      allTime: {
+        views: viewsSummary?.allTimeTotal ?? 0,
+        subscribers: subscribersSummary.allTimeTotal,
+        orders: ordersSummary.allTimeTotal,
+      },
+    });
   }),
 );
 

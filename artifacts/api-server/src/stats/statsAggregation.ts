@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
-import { channelStatSnapshotsTable } from "@workspace/db/schema";
-import { and, eq, gte } from "drizzle-orm";
+import { channelStatSnapshotsTable, ordersTable } from "@workspace/db/schema";
+import { and, eq, gte, sql } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Every value in channel_stat_snapshots is a POINT-IN-TIME CUMULATIVE
@@ -38,7 +38,7 @@ export interface BucketWindow {
   periodEnd: string; // ISO instant
 }
 
-function buildBucketWindows(granularity: Granularity, now: Date): BucketWindow[] {
+export function buildBucketWindows(granularity: Granularity, now: Date): BucketWindow[] {
   const count = BUCKET_COUNT[granularity];
   const windows: BucketWindow[] = [];
 
@@ -274,6 +274,74 @@ export async function getStatsSummary(
     yesterdayValue: trackedDelta(startOfYesterday, startOfToday),
     allTimeTotal: nowVal,
     hasGroundedHistory: buckets.some((b) => b.grounded),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Orders are events, not a cumulative gauge/counter like views or
+// subscribers — there's no "reading" to diff, just a COUNT of orders whose
+// created_at falls inside each window. Simpler than getStatsSummary above
+// for exactly that reason.
+// ---------------------------------------------------------------------------
+
+export interface CountBucket extends BucketWindow {
+  value: number;
+}
+
+export interface CountSummary {
+  buckets: CountBucket[];
+  todayValue: number;
+  yesterdayValue: number;
+  allTimeTotal: number;
+}
+
+export async function getOrdersCountSummary(
+  userId: number,
+  granularity: Granularity,
+): Promise<CountSummary> {
+  const now = new Date();
+  const windows = buildBucketWindows(granularity, now);
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+
+  const earliestNeeded = new Date(
+    Math.min(new Date(windows[0]?.periodStart ?? now).getTime(), startOfYesterday.getTime()),
+  );
+
+  const rows = await db
+    .select({ createdAt: ordersTable.createdAt })
+    .from(ordersTable)
+    .where(and(eq(ordersTable.userId, userId), gte(ordersTable.createdAt, earliestNeeded)));
+
+  const timestamps = rows.map((r) => new Date(r.createdAt).getTime());
+
+  function countInRange(start: Date, end: Date): number {
+    const s = start.getTime();
+    const e = end.getTime();
+    let n = 0;
+    for (const t of timestamps) {
+      if (t >= s && t < e) n++;
+    }
+    return n;
+  }
+
+  const buckets: CountBucket[] = windows.map((w) => ({
+    ...w,
+    value: countInRange(new Date(w.periodStart), new Date(w.periodEnd)),
+  }));
+
+  const [totalRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(ordersTable)
+    .where(eq(ordersTable.userId, userId));
+
+  return {
+    buckets,
+    todayValue: countInRange(startOfToday, now),
+    yesterdayValue: countInRange(startOfYesterday, startOfToday),
+    allTimeTotal: totalRow?.count ?? 0,
   };
 }
 
