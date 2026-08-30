@@ -1062,85 +1062,6 @@ function Landing({
 }
 
 // ---------------------------------------------------------------------------
-// WELCOME SCREEN — the very first thing a person sees on a device that has
-// never had an account created on it. Once an account is created (or the
-// person signs in) on this device, ONBOARDING_KEY is persisted to
-// localStorage and this screen is skipped on every future visit — see
-// AppRoutes below. If the person navigates away without finishing sign-up
-// (e.g. refreshes), nothing is persisted, so Welcome shows again.
-// ---------------------------------------------------------------------------
-
-const WELCOME_FEATURES = [
-  { icon: Wand2, text: "Mahsulot nomi va narxini kiriting — AI qolganini bajaradi" },
-  { icon: ImageIcon, text: "Professional rasm va dizayn avtomatik tayyorlanadi" },
-  { icon: Send, text: "Bir tegining bilan Telegram kanal(lar)ingizga post qiling" },
-];
-
-function WelcomeScreen({
-  onGetStarted,
-  onSignIn,
-}: {
-  onGetStarted: () => void;
-  onSignIn: () => void;
-}) {
-  return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center px-6 py-10">
-      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
-      <GradientBlob className="h-96 w-96 bg-blue-600 top-1/3 -right-32" />
-      <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 left-1/3" />
-
-      <div className="relative z-10 flex flex-col items-center text-center max-w-md w-full">
-        <img
-          src="/brand-logo.png"
-          alt="OneOffice AI"
-          className="h-16 w-16 rounded-2xl object-cover shrink-0 mb-6 shadow-lg shadow-violet-900/40"
-        />
-        <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">
-          OneOffice AI'ga xush kelibsiz
-        </h1>
-        <p className="text-slate-400 text-sm mb-8 leading-relaxed">
-          Telegram do'koningiz uchun sun'iy intellekt yordamida bir necha
-          soniyada professional postlar yarating.
-        </p>
-
-        <Glass className="w-full p-6 mb-8 text-left">
-          <div className="space-y-4">
-            {WELCOME_FEATURES.map((f, i) => {
-              const Icon = f.icon;
-              return (
-                <div key={i} className="flex items-start gap-3">
-                  <div className="h-9 w-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
-                    <Icon className="h-4 w-4 text-violet-300" />
-                  </div>
-                  <p className="text-sm text-slate-300 leading-relaxed mt-1.5">
-                    {f.text}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </Glass>
-
-        <button
-          data-testid="button-welcome-get-started"
-          onClick={onGetStarted}
-          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/40 hover:shadow-violet-700/40 transition mb-3"
-        >
-          Boshlash <ArrowRight className="h-4 w-4" />
-        </button>
-        <button
-          data-testid="button-welcome-signin"
-          onClick={onSignIn}
-          className="text-sm text-slate-400 hover:text-white transition"
-        >
-          Hisobingiz bormi? Kirish
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // SIGN IN / SIGN UP (Firebase Authentication) — email/password, Google, and
 // Apple. Firebase has no drop-in hosted UI like Clerk, so the forms and the
 // "Google" / "Apple" buttons are hand-built here and call the Firebase Auth
@@ -6302,7 +6223,17 @@ const WELCOME_SLIDES_DESKTOP: Array<{
   }.jpg`,
 }));
 
-function WelcomeOnboarding({ onDone }: { onDone: () => void }) {
+function WelcomeOnboarding({
+  onDone,
+  onSignIn,
+}: {
+  onDone: () => void;
+  // Only passed when this runs pre-signup (replacing the old WelcomeScreen)
+  // — lets someone who already has an account skip straight to sign-in
+  // instead of being forced through sign-up. Not passed for the post-tour
+  // run inside AppShell, since a signed-in person obviously has one.
+  onSignIn?: () => void;
+}) {
   useLockBodyScroll();
   const isMobile = useIsMobile();
   const [index, setIndex] = useState(0);
@@ -6362,6 +6293,14 @@ function WelcomeOnboarding({ onDone }: { onDone: () => void }) {
               <ArrowRight className="h-4 w-4" />
             </button>
           </div>
+          {onSignIn && (
+            <button
+              onClick={onSignIn}
+              className="w-full text-center text-slate-500 text-xs mt-4 hover:text-slate-300 transition"
+            >
+              Hisobingiz bormi? Kirish
+            </button>
+          )}
         </div>
       </div>
     );
@@ -6424,6 +6363,14 @@ function WelcomeOnboarding({ onDone }: { onDone: () => void }) {
               </button>
             </div>
           </div>
+          {onSignIn && (
+            <button
+              onClick={onSignIn}
+              className="mt-5 text-center w-full text-slate-500 text-xs hover:text-slate-300 transition"
+            >
+              Hisobingiz bormi? Kirish
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -6675,8 +6622,10 @@ function AppShell() {
     null,
   );
 
-  // First-time walkthrough state — see WelcomeOnboarding/TourOverlay above.
-  const [showWelcome, setShowWelcome] = useState(false);
+  // First-time walkthrough state — see TourOverlay above. The slide-based
+  // intro now runs pre-signup (AppRoutes/WelcomeOnboarding); once a fresh
+  // profile lands here, we skip straight into the guided product/post
+  // creation tour instead of showing the same slides again.
   const [onboardingActive, setOnboardingActive] = useState(false);
   const [showProductCongrats, setShowProductCongrats] = useState(false);
   const [tour, setTour] = useState<{ steps: TourStep[]; index: number; onComplete?: () => void } | null>(null);
@@ -6686,7 +6635,14 @@ function AppShell() {
   useEffect(() => {
     if (!profile || seenOnboardingCheck.current) return;
     seenOnboardingCheck.current = true;
-    if (!profile.onboardingCompleted) setShowWelcome(true);
+    if (!profile.onboardingCompleted) {
+      void markOnboardingComplete();
+      setOnboardingActive(true);
+      setEditingProduct(null);
+      setProductFormOpen(true);
+      setNavView("inventory");
+      startTour(PRODUCT_TOUR_STEPS);
+    }
   }, [profile]);
 
   function startTour(steps: TourStep[], onComplete?: () => void) {
@@ -7436,20 +7392,6 @@ function AppShell() {
           postText={enrichData?.postText}
           onClose={() => setShowPreview(false)}
           onApprove={handleApprove}
-        />
-      )}
-
-      {showWelcome && (
-        <WelcomeOnboarding
-          onDone={() => {
-            setShowWelcome(false);
-            void markOnboardingComplete();
-            setOnboardingActive(true);
-            setEditingProduct(null);
-            setProductFormOpen(true);
-            setNavView("inventory");
-            startTour(PRODUCT_TOUR_STEPS);
-          }}
         />
       )}
 
@@ -8227,10 +8169,10 @@ function AppRoutes() {
   const [accountOnDevice, setAccountOnDevice] = useState<boolean>(
     () => !!loadOnboarding(),
   );
-  // Local-only override so tapping "Boshlash" moves past Welcome to the
-  // Landing/sign-up screen for this render; nothing is persisted until the
-  // person actually finishes creating (or signing into) an account, so a
-  // reload before that point shows Welcome again.
+  // Local-only override so finishing the intro slides moves past it to the
+  // sign-up screen for this render; nothing is persisted until the person
+  // actually finishes creating (or signing into) an account, so a reload
+  // before that point shows the intro slides again.
   const [pastWelcome, setPastWelcome] = useState(false);
 
   useEffect(() => {
@@ -8266,8 +8208,8 @@ function AppRoutes() {
             onSignIn={() => setLocation("/sign-in")}
           />
         ) : (
-          <WelcomeScreen
-            onGetStarted={() => {
+          <WelcomeOnboarding
+            onDone={() => {
               setPastWelcome(true);
               setLocation("/sign-up");
             }}
