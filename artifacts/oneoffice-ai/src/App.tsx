@@ -44,6 +44,7 @@ import {
   Play,
   Loader2,
   Send,
+  MessageCircle,
   Eye,
   ThumbsUp,
   ThumbsDown,
@@ -6542,6 +6543,306 @@ function ProductCongratsModal({ onNext }: { onNext: () => void }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// OneHelp — the site's own built-in assistant. A small sticky bubble the
+// person can drag anywhere on screen (their position is remembered); a tap
+// (not a drag) opens a chat panel growing from that same corner. Phase 1:
+// plain Q&A only — the AI cannot yet drive the site itself (navigate, fill
+// forms, click buttons for real) — that's a deliberately separate, much
+// bigger later phase. Only ever mounted inside the authenticated AppShell,
+// never on the public storefront.
+// ---------------------------------------------------------------------------
+
+const ONEHELP_POS_KEY = "oneoffice_onehelp_pos_v1";
+const ONEHELP_BUBBLE_SIZE = 52;
+// Default sits just above the mobile bottom nav (see BottomNav, ~64px tall)
+// so it doesn't need to be dragged out of the way on first use.
+const ONEHELP_DEFAULT_POS = { bottom: 92, right: 16 };
+
+function loadOneHelpPos(): { bottom: number; right: number } {
+  try {
+    const raw = localStorage.getItem(ONEHELP_POS_KEY);
+    if (!raw) return ONEHELP_DEFAULT_POS;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.bottom === "number" && typeof parsed?.right === "number") {
+      return parsed;
+    }
+  } catch {
+    // ignore — fall through to default
+  }
+  return ONEHELP_DEFAULT_POS;
+}
+
+function clampOneHelpPos(pos: { bottom: number; right: number }) {
+  const margin = 4;
+  const maxRight = Math.max(margin, window.innerWidth - ONEHELP_BUBBLE_SIZE - margin);
+  const maxBottom = Math.max(margin, window.innerHeight - ONEHELP_BUBBLE_SIZE - margin);
+  return {
+    right: Math.min(Math.max(pos.right, margin), maxRight),
+    bottom: Math.min(Math.max(pos.bottom, margin), maxBottom),
+  };
+}
+
+interface OneHelpMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+function OneHelpBubble() {
+  const { user: firebaseUser } = useAuth();
+  const [pos, setPos] = useState(() => clampOneHelpPos(loadOneHelpPos()));
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<OneHelpMessage[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    startPos: { bottom: number; right: number };
+    moved: boolean;
+    pointerId: number;
+  } | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onResize() {
+      setPos((p) => clampOneHelpPos(p));
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, open]);
+
+  async function loadMessages() {
+    if (messagesLoaded) return;
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/onehelp/messages"), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        setMessages(await res.json());
+      }
+    } catch {
+      // best-effort — chat still works for the current session either way
+    } finally {
+      setMessagesLoaded(true);
+    }
+  }
+
+  function handlePointerDown(e: React.PointerEvent) {
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startPos: pos,
+      moved: false,
+      pointerId: e.pointerId,
+    };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+    if (!d.moved) return;
+    setPos(
+      clampOneHelpPos({
+        right: d.startPos.right - dx,
+        bottom: d.startPos.bottom - dy,
+      }),
+    );
+  }
+
+  function handlePointerUp(e: React.PointerEvent) {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    if (d.moved) {
+      localStorage.setItem(ONEHELP_POS_KEY, JSON.stringify(pos));
+    } else {
+      // A real tap, not a drag — toggle the chat.
+      setOpen((o) => {
+        const next = !o;
+        if (next) void loadMessages();
+        return next;
+      });
+    }
+  }
+
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    setSending(true);
+    const optimistic: OneHelpMessage = {
+      id: -Date.now(),
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/onehelp/chat"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message: text }),
+      });
+      if (res.ok) {
+        const reply: OneHelpMessage = await res.json();
+        setMessages((prev) => [...prev, reply]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: -Date.now() - 1,
+            role: "assistant",
+            content: "Kechirasiz, xatolik yuz berdi. Qayta urinib ko'ring.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: -Date.now() - 1,
+          role: "assistant",
+          content: "Internet aloqasida muammo bo'lishi mumkin. Qayta urinib ko'ring.",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const panelWidth = "min(360px, calc(100vw - 24px))";
+  const panelHeight = "min(520px, calc(100vh - 120px))";
+
+  return (
+    <>
+      {open && (
+        <div
+          className="fixed z-[200] flex flex-col rounded-2xl border border-white/10 bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
+          style={{
+            bottom: pos.bottom + ONEHELP_BUBBLE_SIZE + 10,
+            right: pos.right,
+            width: panelWidth,
+            height: panelHeight,
+          }}
+        >
+          <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+                <Sparkles className="h-3.5 w-3.5 text-white" />
+              </div>
+              <span className="text-white text-sm font-semibold">OneHelp</span>
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5">
+            {!messagesLoaded ? (
+              <div className="h-full flex items-center justify-center">
+                <Loader2 className="h-5 w-5 text-slate-500 animate-spin" />
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center gap-2 px-4">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+                  <Sparkles className="h-5 w-5 text-white" />
+                </div>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  Salom! Men OneHelp — saytdan foydalanish bo'yicha savollaringizga
+                  javob beraman. Nima bilan yordam bera olaman?
+                </p>
+              </div>
+            ) : (
+              messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-line ${
+                      m.role === "user"
+                        ? "bg-gradient-to-r from-violet-500 to-blue-500 text-white"
+                        : "bg-white/5 border border-white/10 text-slate-200"
+                    }`}
+                  >
+                    {m.content}
+                  </div>
+                </div>
+              ))
+            )}
+            {sending && (
+              <div className="flex justify-start">
+                <div className="bg-white/5 border border-white/10 rounded-2xl px-3.5 py-2.5">
+                  <Loader2 className="h-3.5 w-3.5 text-slate-400 animate-spin" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-end gap-2 px-3 py-3 border-t border-white/10 shrink-0">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
+              }}
+              placeholder="Savolingizni yozing..."
+              rows={1}
+              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none max-h-24"
+            />
+            <button
+              onClick={() => void handleSend()}
+              disabled={!input.trim() || sending}
+              className="shrink-0 h-10 w-10 flex items-center justify-center rounded-xl bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white transition"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <button
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        title="OneHelp — yordam"
+        className="fixed z-[200] h-[52px] w-[52px] rounded-full bg-gradient-to-br from-violet-500 to-blue-500 shadow-lg shadow-violet-900/40 flex items-center justify-center text-white touch-none select-none hover:scale-105 active:scale-95 transition-transform"
+        style={{ bottom: pos.bottom, right: pos.right }}
+      >
+        {open ? <X className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
+      </button>
+    </>
+  );
+}
+
 function AppShell() {
   const { user: firebaseUser, signOut } = useAuth();
 
@@ -7431,6 +7732,11 @@ function AppShell() {
           }}
         />
       )}
+
+      {/* Hidden during the first-time guided tour — its own spotlight
+          overlay already owns the screen then, and a second floating
+          element would just compete with it visually. */}
+      {!onboardingActive && <OneHelpBubble />}
     </div>
   );
 }
