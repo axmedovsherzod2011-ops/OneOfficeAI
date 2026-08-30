@@ -17,6 +17,7 @@ import {
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { apiUrl } from "./lib/api-url";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 import {
   Sparkles,
@@ -6244,8 +6245,12 @@ function FullscreenLoader() {
 // own Telegram channel already connected and ready to publish to.
 // ---------------------------------------------------------------------------
 
-// Real screenshots of each screen.
-const WELCOME_SLIDES: Array<{
+// Real screenshots of each screen. Two separate sets — phone screenshots
+// (portrait, full-bleed) don't crop well on a wide desktop viewport, so
+// desktop gets its own set of (landscape) screenshots living under
+// /onboarding/desktop/. Drop matching files there; until they exist the
+// gradient still renders, just without a photo.
+const WELCOME_SLIDES_MOBILE: Array<{
   title: string;
   body: string;
   gradient: string;
@@ -6283,67 +6288,143 @@ const WELCOME_SLIDES: Array<{
   },
 ];
 
+// Same 5 slides, same order/copy — only the screenshot changes. Put the
+// desktop (landscape, wide) screenshots at these paths.
+const WELCOME_SLIDES_DESKTOP: Array<{
+  title: string;
+  body: string;
+  gradient: string;
+  image?: string;
+}> = WELCOME_SLIDES_MOBILE.map((slide, i) => ({
+  ...slide,
+  image: `${basePath}/onboarding/desktop/${
+    ["dashboard", "stats", "inventory", "vitrina", "orders"][i]
+  }.jpg`,
+}));
+
 function WelcomeOnboarding({ onDone }: { onDone: () => void }) {
   useLockBodyScroll();
+  const isMobile = useIsMobile();
   const [index, setIndex] = useState(0);
-  const isLast = index === WELCOME_SLIDES.length - 1;
-  const slide = WELCOME_SLIDES[index];
+  const slides = isMobile ? WELCOME_SLIDES_MOBILE : WELCOME_SLIDES_DESKTOP;
+  const isLast = index === slides.length - 1;
+  const slide = slides[index];
 
-  return (
-    <div className="fixed inset-0 z-[200] bg-slate-950 flex flex-col">
-      <div
-        className={`relative flex-1 bg-gradient-to-br ${slide.gradient} flex items-end overflow-hidden`}
-      >
-        {slide.image && (
-          <img
-            src={slide.image}
-            alt={slide.title}
-            className="absolute inset-0 w-full h-full object-cover object-top"
-          />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/10" />
-        <div className="relative z-10 p-8 pb-6 max-w-lg">
-          <h2 className="text-white text-2xl font-bold mb-2">{slide.title}</h2>
-          <p className="text-slate-300 text-sm leading-relaxed">{slide.body}</p>
+  // ---------------------------------------------------------------------
+  // MOBILE — unchanged full-bleed layout: the screenshot fills the whole
+  // screen, text sits over a bottom gradient, controls anchored below it.
+  // ---------------------------------------------------------------------
+  if (isMobile) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-slate-950 flex flex-col">
+        <div
+          className={`relative flex-1 bg-gradient-to-br ${slide.gradient} flex items-end overflow-hidden`}
+        >
+          {slide.image && (
+            <img
+              src={slide.image}
+              alt={slide.title}
+              className="absolute inset-0 w-full h-full object-cover object-top"
+            />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/10" />
+          <div className="relative z-10 p-8 pb-6 max-w-lg">
+            <h2 className="text-white text-2xl font-bold mb-2">{slide.title}</h2>
+            <p className="text-slate-300 text-sm leading-relaxed">{slide.body}</p>
+          </div>
+        </div>
+
+        <div className="p-6 bg-slate-950 shrink-0">
+          <div className="flex items-center justify-center gap-1.5 mb-5">
+            {slides.map((_, i) => (
+              <span
+                key={i}
+                className={`h-1.5 rounded-full transition-all ${
+                  i === index ? "w-6 bg-violet-400" : "w-1.5 bg-white/20"
+                }`}
+              />
+            ))}
+          </div>
+          <div className="flex items-center gap-3 max-w-lg mx-auto">
+            {index > 0 && (
+              <button
+                onClick={() => setIndex((i) => i - 1)}
+                className="px-5 py-3.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
+              >
+                Orqaga
+              </button>
+            )}
+            <button
+              onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
+              className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
+            >
+              {isLast ? "Tushundim, boshlaymiz!" : "Keyingisi"}
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
+    );
+  }
 
-      <div className="p-6 bg-slate-950 shrink-0">
-        <div className="flex items-center justify-center gap-1.5 mb-5">
-          {WELCOME_SLIDES.map((_, i) => (
-            <span
-              key={i}
-              className={`h-1.5 rounded-full transition-all ${
-                i === index ? "w-6 bg-violet-400" : "w-1.5 bg-white/20"
-              }`}
+  // ---------------------------------------------------------------------
+  // DESKTOP — a centered card instead of an edge-to-edge background: a
+  // wide viewport stretching a phone-shaped screenshot looked broken, so
+  // this uses a 16:9 image panel sized for landscape desktop screenshots,
+  // with the copy and controls below it inside the same card.
+  // ---------------------------------------------------------------------
+  return (
+    <div className="fixed inset-0 z-[200] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-8">
+      <div className="w-full max-w-3xl bg-slate-900 border border-white/10 rounded-3xl overflow-hidden shadow-2xl">
+        <div
+          className={`relative aspect-video bg-gradient-to-br ${slide.gradient} overflow-hidden`}
+        >
+          {slide.image && (
+            <img
+              src={slide.image}
+              alt={slide.title}
+              className="absolute inset-0 w-full h-full object-cover object-top"
             />
-          ))}
-        </div>
-        <div className="flex items-center gap-3 max-w-lg mx-auto">
-          {index > 0 && (
-            <button
-              onClick={() => setIndex((i) => i - 1)}
-              className="px-5 py-3.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
-            >
-              Orqaga
-            </button>
           )}
-          <button
-            onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
-            className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
-          >
-            {isLast ? "Tushundim, boshlaymiz!" : "Keyingisi"}
-            <ArrowRight className="h-4 w-4" />
-          </button>
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/10 to-transparent" />
         </div>
-        {!isLast && (
-          <button
-            onClick={onDone}
-            className="w-full text-center text-slate-500 text-xs mt-4"
-          >
-            O'tkazib yuborish
-          </button>
-        )}
+
+        <div className="p-8">
+          <h2 className="text-white text-2xl font-bold mb-2">{slide.title}</h2>
+          <p className="text-slate-400 text-sm leading-relaxed mb-6 max-w-xl">
+            {slide.body}
+          </p>
+
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-1.5">
+              {slides.map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 rounded-full transition-all ${
+                    i === index ? "w-6 bg-violet-400" : "w-1.5 bg-white/20"
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              {index > 0 && (
+                <button
+                  onClick={() => setIndex((i) => i - 1)}
+                  className="px-5 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
+                >
+                  Orqaga
+                </button>
+              )}
+              <button
+                onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
+                className="flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-6 py-3 rounded-xl font-semibold"
+              >
+                {isLast ? "Tushundim, boshlaymiz!" : "Keyingisi"}
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
