@@ -6086,6 +6086,15 @@ function ExternalAgentButton() {
     "idle",
   );
 
+  const downloadExtension = () => {
+    const a = document.createElement("a");
+    a.href = "/external-agent-extension.zip";
+    a.download = "oneoffice-external-agent-extension.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   const handleClick = () => {
     setStatus("checking");
     const onPong = (event: MessageEvent) => {
@@ -6102,6 +6111,7 @@ function ExternalAgentButton() {
     const timer = setTimeout(() => {
       window.removeEventListener("message", onPong);
       setStatus("missing");
+      downloadExtension();
     }, 400);
   };
 
@@ -6133,17 +6143,26 @@ function ExternalAgentButton() {
       {status === "missing" && (
         <Glass className="mt-2 p-4 text-sm text-slate-300 space-y-2">
           <p className="text-amber-400 font-medium flex items-center gap-1.5">
-            <AlertCircle className="h-4 w-4" /> Kengaytma topilmadi
+            <AlertCircle className="h-4 w-4" /> Kengaytma yuklab olindi
           </p>
           <p>
-            External Agent hozircha brauzer kengaytmasi orqali ishlaydi va u
-            hali Chrome Web Store'da yo'q (beta bosqich). O'rnatish uchun:
+            Kengaytma hali Chrome Web Store'da yo'q (beta bosqich), shuning
+            uchun brauzer uni avtomatik o'rnata olmaydi — bu Chrome'ning
+            xavfsizlik cheklovi, faqat Web Store'dagi kengaytmalar
+            "bir bosishda" o'rnatiladi. Zip fayl yuklab bo'lindi, o'rnatish
+            uchun:
           </p>
           <ol className="list-decimal list-inside space-y-1 text-slate-400">
-            <li>Repo'dagi <code>artifacts/external-agent-extension</code> papkasini yuklab oling</li>
+            <li>Zip faylni oching (chiqarib oling)</li>
             <li><code>chrome://extensions</code> → Developer mode</li>
-            <li>Load unpacked → shu papkani tanlang</li>
+            <li>Load unpacked → chiqarilgan papkani tanlang</li>
           </ol>
+          <button
+            onClick={downloadExtension}
+            className="text-violet-400 text-xs underline mt-1"
+          >
+            Qayta yuklab olish
+          </button>
         </Glass>
       )}
       {status === "checking" && (
