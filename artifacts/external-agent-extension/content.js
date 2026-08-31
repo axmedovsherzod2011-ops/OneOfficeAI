@@ -16,6 +16,18 @@
   let session = { active: false, minimized: false, messages: [], position: null };
   let els = {};
 
+  // OneOfficeAI dashboard'dagi "External Agent" tugmasi shu orqali
+  // extension o'rnatilganini aniqlaydi (postMessage handshake).
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    if (event.data?.type === "ONEOFFICE_EXT_PING") {
+      window.postMessage(
+        { type: "ONEOFFICE_EXT_PONG", version: chrome.runtime.getManifest().version },
+        "*"
+      );
+    }
+  });
+
   function isOneOfficeDashboard() {
     return ONEOFFICE_HOST_HINTS.some((h) => location.hostname.includes(h));
   }

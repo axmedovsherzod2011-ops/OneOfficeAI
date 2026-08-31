@@ -6075,6 +6075,84 @@ function SettingsPage({ onOpenConnectors }: any) {
 // PROFILE
 // ---------------------------------------------------------------------------
 
+// External Agent — tashqi saytlarni (masalan OLX.uz do'konini) AI orqali
+// boshqaruvchi brauzer kengaytmasi bilan bog'lanish nuqtasi. Kengaytma
+// hali Chrome Web Store'da nashr qilinmagan (beta/admin bosqichi), shuning
+// uchun "o'rnatilmagan" holatda foydalanuvchiga qo'lda o'rnatish
+// ko'rsatmasi ko'rsatiladi. Kengaytma bor-yo'qligi window.postMessage
+// handshake orqali aniqlanadi (qarang: external-agent-extension/content.js).
+function ExternalAgentButton() {
+  const [status, setStatus] = useState<"idle" | "checking" | "installed" | "missing">(
+    "idle",
+  );
+
+  const handleClick = () => {
+    setStatus("checking");
+    const onPong = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      if (event.data?.type === "ONEOFFICE_EXT_PONG") {
+        window.removeEventListener("message", onPong);
+        clearTimeout(timer);
+        setStatus("installed");
+        window.open("about:blank", "_blank");
+      }
+    };
+    window.addEventListener("message", onPong);
+    window.postMessage({ type: "ONEOFFICE_EXT_PING" }, "*");
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", onPong);
+      setStatus("missing");
+    }, 400);
+  };
+
+  return (
+    <div className="w-full">
+      <button
+        data-testid="button-profile-external-agent"
+        onClick={handleClick}
+        className="w-full"
+      >
+        <Glass className="p-6 flex items-center justify-between gap-3 hover:border-white/20 transition">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-10 w-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+              <Bot className="h-4 w-4 text-violet-400" />
+            </div>
+            <div className="min-w-0 text-left">
+              <p className="text-white text-sm font-medium truncate">
+                External Agent
+              </p>
+              <p className="text-slate-500 text-xs mt-0.5 truncate">
+                Boshqa saytlarni AI orqali boshqarish (beta)
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
+        </Glass>
+      </button>
+
+      {status === "missing" && (
+        <Glass className="mt-2 p-4 text-sm text-slate-300 space-y-2">
+          <p className="text-amber-400 font-medium flex items-center gap-1.5">
+            <AlertCircle className="h-4 w-4" /> Kengaytma topilmadi
+          </p>
+          <p>
+            External Agent hozircha brauzer kengaytmasi orqali ishlaydi va u
+            hali Chrome Web Store'da yo'q (beta bosqich). O'rnatish uchun:
+          </p>
+          <ol className="list-decimal list-inside space-y-1 text-slate-400">
+            <li>Repo'dagi <code>artifacts/external-agent-extension</code> papkasini yuklab oling</li>
+            <li><code>chrome://extensions</code> → Developer mode</li>
+            <li>Load unpacked → shu papkani tanlang</li>
+          </ol>
+        </Glass>
+      )}
+      {status === "checking" && (
+        <p className="mt-2 text-xs text-slate-500 px-1">Tekshirilmoqda…</p>
+      )}
+    </div>
+  );
+}
+
 function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
   const displayName = user
     ? `${user.firstName} ${user.lastName}`.trim()
@@ -6129,6 +6207,8 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
           <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
         </Glass>
       </button>
+
+      <ExternalAgentButton />
 
       <button
         data-testid="button-profile-signout"
