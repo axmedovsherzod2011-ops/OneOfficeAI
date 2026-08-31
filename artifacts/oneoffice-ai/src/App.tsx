@@ -6157,6 +6157,11 @@ function ExternalAgentButton() {
             <li><code>chrome://extensions</code> → Developer mode</li>
             <li>Load unpacked → chiqarilgan papkani tanlang</li>
           </ol>
+          <p className="text-slate-500 text-xs">
+            O'rnatgandan so'ng yuqoridagi <strong>External Agent</strong>{" "}
+            tugmasini yana bosing — qayta tekshiradi va topilsa avtomatik
+            yangi tab ochadi.
+          </p>
           <button
             onClick={downloadExtension}
             className="text-violet-400 text-xs underline mt-1"
@@ -6164,6 +6169,11 @@ function ExternalAgentButton() {
             Qayta yuklab olish
           </button>
         </Glass>
+      )}
+      {status === "installed" && (
+        <p className="mt-2 text-xs text-emerald-400 px-1">
+          ✓ Kengaytma topildi. Yangi tab ochildi — endi u yerda boshqarmoqchi bo'lgan saytni oching.
+        </p>
       )}
       {status === "checking" && (
         <p className="mt-2 text-xs text-slate-500 px-1">Tekshirilmoqda…</p>
