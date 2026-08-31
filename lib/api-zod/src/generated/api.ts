@@ -26,14 +26,18 @@ export const HealthCheckResponse = zod.object({
 export const CreateProfileBody = zod.object({
   "firstName": zod.string(),
   "lastName": zod.string(),
-  "company": zod.string()
+  "company": zod.string(),
+  "language": zod.enum(["uz", "en", "ru"]).optional(),
+  "categoryHint": zod.string().max(300).optional()
 })
 
 export const CreateProfileResponse = zod.object({
   "id": zod.number(),
   "firstName": zod.string(),
   "lastName": zod.string(),
-  "company": zod.string()
+  "company": zod.string(),
+  "language": zod.enum(["uz", "en", "ru"]),
+  "category": zod.string()
 })
 
 

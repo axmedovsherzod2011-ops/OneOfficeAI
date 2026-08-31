@@ -32,6 +32,17 @@ export const usersTable = pgTable("users", {
   // Set once the person finishes (or explicitly skips) the first-time
   // product+post walkthrough — null means "show it on next login".
   onboardingCompletedAt: timestamp("onboarding_completed_at"),
+  // Chosen once on the mandatory pre-signup language screen (device-local
+  // until sign-up, then carried onto this row so it follows the account
+  // across devices). Changeable any time from Profile.
+  language: text("language", { enum: ["uz", "en", "ru"] })
+    .notNull()
+    .default("uz"),
+  // General business category, classified ONCE by AI from the free-text
+  // "nima sotasiz?" hint typed at sign-up (see categoryHint in
+  // CreateProfileInput) — not shown/asked again. Used as the default
+  // category for new products, which no longer require picking one.
+  category: text("category").notNull().default(""),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

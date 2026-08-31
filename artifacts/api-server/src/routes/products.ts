@@ -114,13 +114,21 @@ router.post("/products", async (req, res) => {
   const { name, category, costPrice, sellPrice, currency, description, images, status, characteristics, deliveryInfo } =
     parsed.data;
 
+  // Category is optional per-product now — a blank one falls back to the
+  // seller's own business category (set once, by AI, at sign-up) instead
+  // of a hardcoded guess. Same one query covers both that and delivery
+  // info below.
+  const [user] = await db
+    .select({
+      defaultDeliveryInfo: usersTable.defaultDeliveryInfo,
+      businessCategory: usersTable.category,
+    })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+
   let effectiveDeliveryInfo = deliveryInfo ?? "";
   if (!effectiveDeliveryInfo) {
-    const [user] = await db
-      .select({ defaultDeliveryInfo: usersTable.defaultDeliveryInfo })
-      .from(usersTable)
-      .where(eq(usersTable.id, userId))
-      .limit(1);
     effectiveDeliveryInfo = user?.defaultDeliveryInfo ?? "";
   }
 
@@ -129,7 +137,7 @@ router.post("/products", async (req, res) => {
     .values({
       userId,
       name: name ?? "",
-      category: category ?? "Electronics",
+      category: category || user?.businessCategory || "",
       costPrice: costPrice ?? "",
       sellPrice: sellPrice ?? "",
       currency: currency ?? "UZS",

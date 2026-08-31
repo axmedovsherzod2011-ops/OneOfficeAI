@@ -457,7 +457,7 @@ router.post("/publish", async (req, res) => {
       productId,
       name: name ?? text.slice(0, 80),
       price: price ?? "0",
-      category: category ?? "Electronics",
+      category: category ?? "",
       status: "Published",
       telegramMessageId: telegramMessageId ?? null,
       platform: "telegram",

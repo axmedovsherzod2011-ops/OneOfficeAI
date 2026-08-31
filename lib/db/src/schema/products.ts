@@ -29,10 +29,11 @@ export const productsTable = pgTable("products", {
     .references(() => usersTable.id, { onDelete: "cascade" }),
   name: text("name").notNull().default(""),
   // Same fixed list the create-post flow already used (Electronics,
-  // Fashion, Home & Living, Beauty, Sports, Toys). Chosen once here at
-  // product-creation time — Create Post now just inherits it instead of
-  // asking again.
-  category: text("category").notNull().default("Electronics"),
+  // Fashion, Home & Living, Beauty, Sports, Toys) — now OPTIONAL. When
+  // left blank, callers (post generation, storefront) fall back to the
+  // seller's own AI-classified business category (users.category) instead
+  // of asking the seller to pick one for every single product.
+  category: text("category").notNull().default(""),
   // Kept as text (not numeric) to match the existing posts.price pattern —
   // preserves whatever formatting the user typed, no currency parsing.
   costPrice: text("cost_price").notNull().default(""),

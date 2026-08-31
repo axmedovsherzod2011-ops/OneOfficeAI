@@ -313,3 +313,4 @@ export { ensureStatsSchema } from "./ensureStatsSchema";
 export { ensureOrdersSchema } from "./ensureOrdersSchema";
 export { ensureProductProInfoSchema } from "./ensureProductProInfoSchema";
 export { ensureOnboardingSchema } from "./ensureOnboardingSchema";
+export { ensureProfileSettingsSchema } from "./ensureProfileSettingsSchema";

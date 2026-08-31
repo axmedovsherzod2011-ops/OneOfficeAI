@@ -28,6 +28,8 @@ export interface CreateProfileInput {
   firstName: string;
   lastName: string;
   company: string;
+  language?: 'uz' | 'en' | 'ru';
+  categoryHint?: string;
 }
 
 export interface Profile {
@@ -35,6 +37,8 @@ export interface Profile {
   firstName: string;
   lastName: string;
   company: string;
+  language: 'uz' | 'en' | 'ru';
+  category: string;
 }
 
 export interface TelegramChannel {

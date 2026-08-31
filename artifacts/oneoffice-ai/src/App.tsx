@@ -18,6 +18,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { apiUrl } from "./lib/api-url";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { LanguageProvider, useLanguage, useSyncLanguageFromProfile, useT, LANGUAGES, LANGUAGE_NAMES, type Lang } from "./lib/i18n";
 
 import {
   Sparkles,
@@ -1299,9 +1300,16 @@ function SignInPage() {
 
 function SignUpPage() {
   const [, setLocation] = useLocation();
+  const t = useT();
+  const { lang } = useLanguage();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [company, setCompany] = useState("");
+  // Free-text "what do you sell?" — AI classifies this into a fixed
+  // category ONCE, server-side, right when the profile is created (see
+  // classifyBusinessCategory on the backend). Never asked again; products
+  // no longer require picking their own category because of this.
+  const [categoryHint, setCategoryHint] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -1318,7 +1326,13 @@ function SignUpPage() {
     if (!fName && !lName && !biz) return;
     try {
       await createProfile.mutateAsync({
-        data: { firstName: fName, lastName: lName, company: biz },
+        data: {
+          firstName: fName,
+          lastName: lName,
+          company: biz,
+          language: lang,
+          categoryHint: categoryHint.trim() || undefined,
+        },
       });
     } catch {
       // Non-fatal — AppShell will show the fallback "finish setup" form.
@@ -1385,14 +1399,14 @@ function SignUpPage() {
 
         <AuthCard>
           <h1 className="text-white font-semibold text-xl mb-1">
-            Hisob yarating
+            {t("signup.title")}
           </h1>
           <p className="text-slate-400 text-sm mb-6">
-            Bir necha soniyada boshlang
+            {t("signup.subtitle")}
           </p>
 
           <div className="flex flex-col gap-1.5 mb-5">
-            <label className="text-slate-300 text-sm">Biznes nomi</label>
+            <label className="text-slate-300 text-sm">{t("signup.company_label")}</label>
             <input
               data-testid="input-signup-company"
               type="text"
@@ -1402,6 +1416,19 @@ function SignUpPage() {
               placeholder="OneStore LLC"
               className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
             />
+          </div>
+
+          <div className="flex flex-col gap-1.5 mb-5">
+            <label className="text-slate-300 text-sm">{t("signup.category_label")}</label>
+            <input
+              data-testid="input-signup-category-hint"
+              type="text"
+              value={categoryHint}
+              onChange={(e) => setCategoryHint(e.target.value)}
+              placeholder={t("signup.category_placeholder")}
+              className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+            />
+            <p className="text-slate-500 text-xs">{t("signup.category_hint")}</p>
           </div>
 
           <SocialButtons
@@ -2936,6 +2963,7 @@ function ShopFrontPage() {
 // ---------------------------------------------------------------------------
 
 function Sidebar({ user, active, setActive, onLogout }: any) {
+  const t = useT();
   const displayName = user
     ? `${user.firstName} ${user.lastName}`.trim()
     : "Aziz Karimov";
@@ -2943,13 +2971,13 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
   const subLabel = user?.company || "Pro plan";
 
   const items = [
-    { key: "dashboard", label: "Dashboard", icon: Home },
-    { key: "inventory", label: "Inventory", icon: Package },
-    { key: "orders", label: "Buyurtmalar", icon: ShoppingBag },
-    { key: "connectors", label: "Connectors", icon: Send },
-    { key: "shopfront", label: "ShopFront", icon: Globe },
-    { key: "settings", label: "Settings", icon: Settings },
-    { key: "profile", label: "Profile", icon: User },
+    { key: "dashboard", label: t("nav.dashboard"), icon: Home },
+    { key: "inventory", label: t("nav.inventory"), icon: Package },
+    { key: "orders", label: t("nav.orders"), icon: ShoppingBag },
+    { key: "connectors", label: t("nav.connectors"), icon: Send },
+    { key: "shopfront", label: t("nav.shopfront"), icon: Globe },
+    { key: "settings", label: t("nav.settings"), icon: Settings },
+    { key: "profile", label: t("nav.profile"), icon: User },
   ];
 
   return (
@@ -3003,13 +3031,14 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
 // ---------------------------------------------------------------------------
 
 function BottomNav({ active, setActive }: any) {
+  const t = useT();
   const items = [
-    { key: "dashboard", label: "Home", icon: Home },
-    { key: "inventory", label: "Inventory", icon: Package },
-    { key: "orders", label: "Orders", icon: ShoppingBag },
-    { key: "connectors", label: "Connect", icon: Send },
-    { key: "shopfront", label: "ShopFront", icon: Globe },
-    { key: "profile", label: "Profile", icon: User },
+    { key: "dashboard", label: t("nav.home"), icon: Home },
+    { key: "inventory", label: t("nav.inventory"), icon: Package },
+    { key: "orders", label: t("nav.orders"), icon: ShoppingBag },
+    { key: "connectors", label: t("nav.connect"), icon: Send },
+    { key: "shopfront", label: t("nav.shopfront"), icon: Globe },
+    { key: "profile", label: t("nav.profile"), icon: User },
   ];
 
   return (
@@ -3222,7 +3251,7 @@ function ProductForm({
 }) {
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name ?? "");
-  const [category, setCategory] = useState(initial?.category ?? CATEGORIES[0]);
+  const [category, setCategory] = useState(initial?.category ?? "");
   const [costPrice, setCostPrice] = useState(initial?.costPrice ?? "");
   const [sellPrice, setSellPrice] = useState(initial?.sellPrice ?? "");
   const [currency, setCurrency] = useState(initial?.currency ?? "UZS");
@@ -3386,13 +3415,17 @@ function ProductForm({
 
           <div>
             <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
-              <Tag className="h-3 w-3" /> Kategoriya
+              <Tag className="h-3 w-3" /> Kategoriya{" "}
+              <span className="text-slate-600 font-normal">(ixtiyoriy)</span>
             </label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-400 transition"
             >
+              <option value="" className="bg-slate-900">
+                — Tanlanmagan —
+              </option>
               {CATEGORIES.map((c) => (
                 <option key={c} value={c} className="bg-slate-900">
                   {c}
@@ -4687,6 +4720,9 @@ function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-400 transition"
               >
+                <option value="" className="bg-slate-900">
+                  — Not selected —
+                </option>
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c} className="bg-slate-900">
                     {c}
@@ -6075,6 +6111,9 @@ function SettingsPage({ onOpenConnectors }: any) {
 // ---------------------------------------------------------------------------
 
 function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
+  const t = useT();
+  const { lang, setLang } = useLanguage();
+  const { user: firebaseUser } = useAuth();
   const displayName = user
     ? `${user.firstName} ${user.lastName}`.trim()
     : "Aziz Karimov";
@@ -6093,6 +6132,39 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
             {displayName}
           </h3>
           <p className="text-slate-400 text-sm truncate">{subLabel}</p>
+        </div>
+      </Glass>
+
+      <Glass className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="h-10 w-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+            <Globe className="h-4 w-4 text-violet-400" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-white text-sm font-medium">{t("profile.language_label")}</p>
+            <p className="text-slate-500 text-xs mt-0.5">{t("profile.language_hint")}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {LANGUAGES.map((code) => (
+            <button
+              key={code}
+              data-testid={`button-profile-lang-${code}`}
+              onClick={() =>
+                setLang(code, {
+                  syncToServer: true,
+                  getToken: async () => firebaseUser?.getIdToken(),
+                })
+              }
+              className={`px-3 py-2.5 rounded-xl text-xs font-medium transition border ${
+                lang === code
+                  ? "bg-gradient-to-r from-violet-500/20 to-blue-500/20 text-white border-violet-400/40"
+                  : "bg-white/5 text-slate-400 border-white/10 hover:text-white"
+              }`}
+            >
+              {LANGUAGE_NAMES[code]}
+            </button>
+          ))}
         </div>
       </Glass>
 
@@ -6160,6 +6232,52 @@ function FullscreenLoader() {
 }
 
 // ---------------------------------------------------------------------------
+// LANGUAGE PICKER — the very first thing anyone sees on a device that
+// hasn't chosen a language yet (see src/lib/i18n.tsx). Blocks every other
+// route, including sign-in/up, until a language is picked; after that the
+// whole app renders in it, and it's only ever changed again from Profile.
+// ---------------------------------------------------------------------------
+
+function LanguagePickerScreen() {
+  const { setLang } = useLanguage();
+  const t = useT();
+  return (
+    <div className="fixed inset-0 z-[300] bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center px-6 py-10">
+      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
+      <GradientBlob className="h-96 w-96 bg-blue-600 top-1/3 -right-32" />
+
+      <div className="relative z-10 flex flex-col items-center text-center max-w-sm w-full">
+        <img
+          src="/brand-logo.png"
+          alt="OneOffice AI"
+          className="h-14 w-14 rounded-2xl object-cover shrink-0 mb-6 shadow-lg shadow-violet-900/40"
+        />
+        <h1 className="text-2xl font-semibold text-white tracking-tight mb-2">
+          {t("langpicker.title")}
+        </h1>
+        <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+          {t("langpicker.subtitle")}
+        </p>
+
+        <div className="w-full space-y-3">
+          {LANGUAGES.map((code) => (
+            <button
+              key={code}
+              data-testid={`button-lang-${code}`}
+              onClick={() => setLang(code)}
+              className="w-full flex items-center justify-between bg-white/5 border border-white/10 hover:border-violet-400/50 hover:bg-white/10 rounded-xl px-5 py-4 text-white text-sm font-medium transition"
+            >
+              {LANGUAGE_NAMES[code]}
+              <ArrowRight className="h-4 w-4 text-slate-500" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // FIRST-TIME WALKTHROUGH — a short "here's what this can do" carousel
 // right after sign-up, then a guided, spotlight-driven walk through
 // creating the first product and the first post, ending with the person's
@@ -6170,40 +6288,42 @@ function FullscreenLoader() {
 // (portrait, full-bleed) don't crop well on a wide desktop viewport, so
 // desktop gets its own set of (landscape) screenshots living under
 // /onboarding/desktop/. Drop matching files there; until they exist the
-// gradient still renders, just without a photo.
+// gradient still renders, just without a photo. titleKey/bodyKey look up
+// the actual copy from the i18n dictionary (see src/lib/i18n.tsx) so this
+// slideshow renders in whichever language was chosen on LanguagePickerScreen.
 const WELCOME_SLIDES_MOBILE: Array<{
-  title: string;
-  body: string;
+  titleKey: string;
+  bodyKey: string;
   gradient: string;
   image?: string;
 }> = [
   {
-    title: "OneOffice AI'ga xush kelibsiz",
-    body: "Mahsulot qo'shing, AI siz uchun professional post yozsin va bir bosishda Telegram kanalingizga chop eting.",
+    titleKey: "welcome.slide1.title",
+    bodyKey: "welcome.slide1.body",
     gradient: "from-violet-600 via-indigo-700 to-slate-950",
     image: `${basePath}/onboarding/dashboard.jpg`,
   },
   {
-    title: "Real vaqtdagi statistika",
-    body: "Obunachilar, ko'rishlar va eng faol kanalingiz — bugun va kecha solishtirilgan holda, doim ko'z oldingizda.",
+    titleKey: "welcome.slide2.title",
+    bodyKey: "welcome.slide2.body",
     gradient: "from-cyan-600 via-sky-700 to-slate-950",
     image: `${basePath}/onboarding/stats.jpg`,
   },
   {
-    title: "Inventar",
-    body: "Barcha mahsulotlaringiz shu yerda — rasm, narx va tavsif bilan. AI har bir mahsulotni internetdan bir marta tahlil qiladi.",
+    titleKey: "welcome.slide3.title",
+    bodyKey: "welcome.slide3.body",
     gradient: "from-blue-600 via-cyan-700 to-slate-950",
     image: `${basePath}/onboarding/inventory.jpg`,
   },
   {
-    title: "Shaxsiy vitrina",
-    body: "Mijozlar sizning shaxsiy vitrinangizdan to'g'ridan-to'g'ri buyurtma beradi — hech qanday qo'shimcha ilova kerak emas.",
+    titleKey: "welcome.slide4.title",
+    bodyKey: "welcome.slide4.body",
     gradient: "from-fuchsia-600 via-purple-700 to-slate-950",
     image: `${basePath}/onboarding/vitrina.jpg`,
   },
   {
-    title: "Buyurtmalar",
-    body: "Vitrinadan kelgan har bir buyurtma shu yerda ko'rinadi — yangi, tasdiqlangan, yetkazilgan holatlar bilan.",
+    titleKey: "welcome.slide5.title",
+    bodyKey: "welcome.slide5.body",
     gradient: "from-emerald-600 via-teal-700 to-slate-950",
     image: `${basePath}/onboarding/orders.jpg`,
   },
@@ -6212,8 +6332,8 @@ const WELCOME_SLIDES_MOBILE: Array<{
 // Same 5 slides, same order/copy — only the screenshot changes. Put the
 // desktop (landscape, wide) screenshots at these paths.
 const WELCOME_SLIDES_DESKTOP: Array<{
-  title: string;
-  body: string;
+  titleKey: string;
+  bodyKey: string;
   gradient: string;
   image?: string;
 }> = WELCOME_SLIDES_MOBILE.map((slide, i) => ({
@@ -6236,6 +6356,7 @@ function WelcomeOnboarding({
 }) {
   useLockBodyScroll();
   const isMobile = useIsMobile();
+  const t = useT();
   const [index, setIndex] = useState(0);
   const slides = isMobile ? WELCOME_SLIDES_MOBILE : WELCOME_SLIDES_DESKTOP;
   const isLast = index === slides.length - 1;
@@ -6254,14 +6375,14 @@ function WelcomeOnboarding({
           {slide.image && (
             <img
               src={slide.image}
-              alt={slide.title}
+              alt={t(slide.titleKey)}
               className="absolute inset-0 w-full h-full object-cover object-top"
             />
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/10" />
           <div className="relative z-10 p-8 pb-6 max-w-lg">
-            <h2 className="text-white text-2xl font-bold mb-2">{slide.title}</h2>
-            <p className="text-slate-300 text-sm leading-relaxed">{slide.body}</p>
+            <h2 className="text-white text-2xl font-bold mb-2">{t(slide.titleKey)}</h2>
+            <p className="text-slate-300 text-sm leading-relaxed">{t(slide.bodyKey)}</p>
           </div>
         </div>
 
@@ -6282,14 +6403,14 @@ function WelcomeOnboarding({
                 onClick={() => setIndex((i) => i - 1)}
                 className="px-5 py-3.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
               >
-                Orqaga
+                {t("welcome.back")}
               </button>
             )}
             <button
               onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
               className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
             >
-              {isLast ? "Tushundim, boshlaymiz!" : "Keyingisi"}
+              {isLast ? t("welcome.finish") : t("welcome.next")}
               <ArrowRight className="h-4 w-4" />
             </button>
           </div>
@@ -6298,7 +6419,7 @@ function WelcomeOnboarding({
               onClick={onSignIn}
               className="w-full text-center text-slate-500 text-xs mt-4 hover:text-slate-300 transition"
             >
-              Hisobingiz bormi? Kirish
+              {t("welcome.signin")}
             </button>
           )}
         </div>
@@ -6321,7 +6442,7 @@ function WelcomeOnboarding({
           {slide.image && (
             <img
               src={slide.image}
-              alt={slide.title}
+              alt={t(slide.titleKey)}
               className="absolute inset-0 w-full h-full object-cover object-top"
             />
           )}
@@ -6329,9 +6450,9 @@ function WelcomeOnboarding({
         </div>
 
         <div className="p-8">
-          <h2 className="text-white text-2xl font-bold mb-2">{slide.title}</h2>
+          <h2 className="text-white text-2xl font-bold mb-2">{t(slide.titleKey)}</h2>
           <p className="text-slate-400 text-sm leading-relaxed mb-6 max-w-xl">
-            {slide.body}
+            {t(slide.bodyKey)}
           </p>
 
           <div className="flex items-center justify-between gap-6">
@@ -6351,14 +6472,14 @@ function WelcomeOnboarding({
                   onClick={() => setIndex((i) => i - 1)}
                   className="px-5 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
                 >
-                  Orqaga
+                  {t("welcome.back")}
                 </button>
               )}
               <button
                 onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
                 className="flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-6 py-3 rounded-xl font-semibold"
               >
-                {isLast ? "Tushundim, boshlaymiz!" : "Keyingisi"}
+                {isLast ? t("welcome.finish") : t("welcome.next")}
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>
@@ -6368,7 +6489,7 @@ function WelcomeOnboarding({
               onClick={onSignIn}
               className="mt-5 text-center w-full text-slate-500 text-xs hover:text-slate-300 transition"
             >
-              Hisobingiz bormi? Kirish
+              {t("welcome.signin")}
             </button>
           )}
         </div>
@@ -6388,9 +6509,11 @@ function WelcomeOnboarding({
 
 interface TourStep {
   target: string;
-  title: string;
-  body: string;
+  bodyKey: string;
   mode: "click" | "manual";
+  // "Oxirgi qadam!" instead of the usual "N-qadam" counter — only
+  // PUBLISH_TOUR_STEPS' single step uses this.
+  isFinalStep?: boolean;
 }
 
 function TourOverlay({
@@ -6408,6 +6531,7 @@ function TourOverlay({
   onNext: () => void;
   onSkip: () => void;
 }) {
+  const t = useT();
   const [rect, setRect] = useState<DOMRect | null>(null);
 
   useEffect(() => {
@@ -6467,11 +6591,13 @@ function TourOverlay({
         <p className="text-violet-400 text-[11px] font-semibold mb-1">
           {stepNumber}/{totalSteps}
         </p>
-        <p className="text-white font-semibold text-sm mb-1">{step.title}</p>
-        <p className="text-slate-400 text-xs mb-3 leading-relaxed">{step.body}</p>
+        <p className="text-white font-semibold text-sm mb-1">
+          {step.isFinalStep ? t("tour.final_step") : t("tour.step", { n: stepNumber })}
+        </p>
+        <p className="text-slate-400 text-xs mb-3 leading-relaxed">{t(step.bodyKey)}</p>
         <div className="flex items-center justify-between gap-2">
           <button onClick={onSkip} className="text-xs text-slate-500 hover:text-slate-300">
-            O'tkazib yuborish
+            {t("tour.skip")}
           </button>
           <button
             onClick={() => {
@@ -6489,7 +6615,7 @@ function TourOverlay({
             }}
             className="text-xs bg-violet-500 text-white px-3 py-1.5 rounded-full font-medium"
           >
-            {isLast ? "Tushundim" : "Keyingisi"}
+            {isLast ? t("tour.finish") : t("tour.next")}
           </button>
         </div>
       </div>
@@ -6498,27 +6624,28 @@ function TourOverlay({
 }
 
 const PRODUCT_TOUR_STEPS: TourStep[] = [
-  { target: "product-name-input", title: "1-qadam", body: "Mahsulot nomini shu yerga yozing.", mode: "manual" },
-  { target: "product-price-input", title: "2-qadam", body: "Endi sotish narxini kiriting.", mode: "manual" },
-  { target: "product-save-button", title: "3-qadam", body: "Ajoyib! Endi shu tugmani bosib mahsulotni saqlang.", mode: "click" },
+  { target: "product-name-input", bodyKey: "tour.body.product_name", mode: "manual" },
+  { target: "product-price-input", bodyKey: "tour.body.product_price", mode: "manual" },
+  { target: "product-save-button", bodyKey: "tour.body.product_save", mode: "click" },
 ];
 
 const POST_TOUR_STEPS: TourStep[] = [
-  { target: "post-pick-product", title: "1-qadam", body: "Post yozmoqchi bo'lgan mahsulotni tanlang.", mode: "click" },
-  { target: "post-generate-button", title: "2-qadam", body: "AI post matnini yaratishi uchun shu yerni bosing.", mode: "click" },
+  { target: "post-pick-product", bodyKey: "tour.body.post_pick_product", mode: "click" },
+  { target: "post-generate-button", bodyKey: "tour.body.post_generate", mode: "click" },
 ];
 
 const PUBLISH_TOUR_STEPS: TourStep[] = [
   {
     target: "button-approve",
-    title: "Oxirgi qadam!",
-    body: "Kanal ulandi — endi postni Telegram kanalingizga chop etish uchun shu tugmani bosing.",
+    bodyKey: "tour.body.publish",
     mode: "click",
+    isFinalStep: true,
   },
 ];
 
 function ProductCongratsModal({ onNext }: { onNext: () => void }) {
   useLockBodyScroll();
+  const t = useT();
   return (
     <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="w-full max-w-sm bg-slate-900 border border-white/10 rounded-3xl p-8 text-center">
@@ -6526,16 +6653,16 @@ function ProductCongratsModal({ onNext }: { onNext: () => void }) {
           <CheckCircle2 className="h-8 w-8 text-emerald-400" />
         </div>
         <h3 className="text-white text-lg font-semibold mb-2">
-          Mahsulotni muvaffaqiyatli qo'shdingiz!
+          {t("congrats.title")}
         </h3>
         <p className="text-slate-400 text-sm mb-6">
-          Endi esa post yaratamiz — AI siz uchun tayyorlab beradi.
+          {t("congrats.body")}
         </p>
         <button
           onClick={onNext}
           className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
         >
-          Post yaratamiz <ArrowRight className="h-4 w-4" />
+          {t("congrats.cta")} <ArrowRight className="h-4 w-4" />
         </button>
       </div>
     </div>
@@ -6572,6 +6699,11 @@ function AppShell() {
     enabled: !!firebaseUser,
     retry: 1,
   });
+
+  // A signed-in profile's saved language (chosen at sign-up, or changed on
+  // another device from Profile) wins over whatever this device guessed —
+  // keeps language consistent for the same account everywhere.
+  useSyncLanguageFromProfile(profile?.language);
 
   // Public storefront slug — same query key as StoreConnectorCard, so this
   // is a cache-share, not a duplicate request. Used to build the
@@ -6681,7 +6813,7 @@ function AppShell() {
     name: "",
     price: "",
     currency: "UZS",
-    category: "Electronics",
+    category: "",
     notes: "",
   });
   const [enrichData, setEnrichData] = useState<any>(null);
@@ -6940,7 +7072,7 @@ function AppShell() {
   function resetCreate() {
     setFlow("product");
     setSelectedProduct(null);
-    setForm({ name: "", price: "", currency: "UZS", category: "Electronics", notes: "" });
+    setForm({ name: "", price: "", currency: "UZS", category: "", notes: "" });
     setEnrichData(null);
     setSelectedImages([]);
     setShowPreview(false);
@@ -8160,8 +8292,9 @@ function ProductDetailPage({
 // ---------------------------------------------------------------------------
 
 function AppRoutes() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { user, isLoaded } = useAuth();
+  const { hasChosen: hasChosenLanguage } = useLanguage();
   // Whether an account has ever been created/signed-into on THIS device.
   // Read once from localStorage; only ever flips true (never reset here) —
   // it flips as soon as sign-up/sign-in actually succeeds, via the effect
@@ -8181,6 +8314,13 @@ function AppRoutes() {
       setAccountOnDevice(true);
     }
   }, [user]);
+
+  // Language comes before literally everything else — even sign-in/up —
+  // except the public storefront, which customers (not app users) land on
+  // directly and shouldn't be interrupted. See src/lib/i18n.tsx.
+  if (!hasChosenLanguage && !location.startsWith("/store")) {
+    return <LanguagePickerScreen />;
+  }
 
   return (
     <Switch>
@@ -8258,12 +8398,14 @@ function AuthProviderWithRoutes() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={basePath}>
-          <AuthProviderWithRoutes />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
+      <LanguageProvider>
+        <TooltipProvider>
+          <WouterRouter base={basePath}>
+            <AuthProviderWithRoutes />
+          </WouterRouter>
+          <Toaster />
+        </TooltipProvider>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 }
