@@ -45,6 +45,7 @@ import {
   Play,
   Loader2,
   Send,
+  MessageCircle,
   Eye,
   ThumbsUp,
   ThumbsDown,
@@ -6110,6 +6111,115 @@ function SettingsPage({ onOpenConnectors }: any) {
 // PROFILE
 // ---------------------------------------------------------------------------
 
+// External Agent — tashqi saytlarni (masalan OLX.uz do'konini) AI orqali
+// boshqaruvchi brauzer kengaytmasi bilan bog'lanish nuqtasi. Kengaytma
+// hali Chrome Web Store'da nashr qilinmagan (beta/admin bosqichi), shuning
+// uchun "o'rnatilmagan" holatda foydalanuvchiga qo'lda o'rnatish
+// ko'rsatmasi ko'rsatiladi. Kengaytma bor-yo'qligi window.postMessage
+// handshake orqali aniqlanadi (qarang: external-agent-extension/content.js).
+function ExternalAgentButton() {
+  const [status, setStatus] = useState<"idle" | "checking" | "installed" | "missing">(
+    "idle",
+  );
+
+  const downloadExtension = () => {
+    const a = document.createElement("a");
+    a.href = "/external-agent-extension.zip";
+    a.download = "oneoffice-external-agent-extension.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const handleClick = () => {
+    setStatus("checking");
+    const onPong = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      if (event.data?.type === "ONEOFFICE_EXT_PONG") {
+        window.removeEventListener("message", onPong);
+        clearTimeout(timer);
+        setStatus("installed");
+        // Tab ochish endi extension'ning o'zida (background.js:
+        // OPEN_AGENT_TAB) — u chiroyli newtab.html'ni ochadi va
+        // sessiyani globalda faollashtiradi, oddiy about:blank emas.
+      }
+    };
+    window.addEventListener("message", onPong);
+    window.postMessage({ type: "ONEOFFICE_EXT_PING" }, "*");
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", onPong);
+      setStatus("missing");
+      downloadExtension();
+    }, 400);
+  };
+
+  return (
+    <div className="w-full">
+      <button
+        data-testid="button-profile-external-agent"
+        onClick={handleClick}
+        className="w-full"
+      >
+        <Glass className="p-6 flex items-center justify-between gap-3 hover:border-white/20 transition">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-10 w-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+              <Bot className="h-4 w-4 text-violet-400" />
+            </div>
+            <div className="min-w-0 text-left">
+              <p className="text-white text-sm font-medium truncate">
+                External Agent
+              </p>
+              <p className="text-slate-500 text-xs mt-0.5 truncate">
+                Boshqa saytlarni AI orqali boshqarish (beta)
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
+        </Glass>
+      </button>
+
+      {status === "missing" && (
+        <Glass className="mt-2 p-4 text-sm text-slate-300 space-y-2">
+          <p className="text-amber-400 font-medium flex items-center gap-1.5">
+            <AlertCircle className="h-4 w-4" /> Kengaytma yuklab olindi
+          </p>
+          <p>
+            Kengaytma hali Chrome Web Store'da yo'q (beta bosqich), shuning
+            uchun brauzer uni avtomatik o'rnata olmaydi — bu Chrome'ning
+            xavfsizlik cheklovi, faqat Web Store'dagi kengaytmalar
+            "bir bosishda" o'rnatiladi. Zip fayl yuklab bo'lindi, o'rnatish
+            uchun:
+          </p>
+          <ol className="list-decimal list-inside space-y-1 text-slate-400">
+            <li>Zip faylni oching (chiqarib oling)</li>
+            <li><code>chrome://extensions</code> → Developer mode</li>
+            <li>Load unpacked → chiqarilgan papkani tanlang</li>
+          </ol>
+          <p className="text-slate-500 text-xs">
+            O'rnatgandan so'ng yuqoridagi <strong>External Agent</strong>{" "}
+            tugmasini yana bosing — qayta tekshiradi va topilsa avtomatik
+            yangi tab ochadi.
+          </p>
+          <button
+            onClick={downloadExtension}
+            className="text-violet-400 text-xs underline mt-1"
+          >
+            Qayta yuklab olish
+          </button>
+        </Glass>
+      )}
+      {status === "installed" && (
+        <p className="mt-2 text-xs text-emerald-400 px-1">
+          ✓ Kengaytma topildi. Yangi tab ochildi — endi u yerda boshqarmoqchi bo'lgan saytni oching.
+        </p>
+      )}
+      {status === "checking" && (
+        <p className="mt-2 text-xs text-slate-500 px-1">Tekshirilmoqda…</p>
+      )}
+    </div>
+  );
+}
+
 function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
   const t = useT();
   const { lang, setLang } = useLanguage();
@@ -6200,6 +6310,8 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
           <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
         </Glass>
       </button>
+
+      <ExternalAgentButton />
 
       <button
         data-testid="button-profile-signout"
@@ -6666,6 +6778,447 @@ function ProductCongratsModal({ onNext }: { onNext: () => void }) {
         </button>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OneHelp — the site's own built-in assistant. A small sticky bubble the
+// person can drag anywhere on screen (their position is remembered); a tap
+// (not a drag) opens a chat panel growing from that same corner. Phase 2/3:
+// the AI can now narrate AND actually drive the site — navigate between
+// sections, spotlight a real element (reusing the exact data-tour targets
+// the onboarding tour already uses), and open the new-product form —
+// visibly, in sync with its own narration, played back step by step from
+// the plan the backend returns (see routes/onehelp.ts for why this is a
+// plan-then-execute design rather than a live agent loop). Heavy/
+// irreversible actions aren't wired to any real action yet in this phase,
+// but the request_confirmation mechanism (Ha/Yo'q, inline in the chat)
+// already exists end-to-end so future actions can use it immediately.
+// Filling in form fields for the person is intentionally NOT part of this
+// phase yet. Only ever mounted inside the authenticated AppShell, never on
+// the public storefront.
+// ---------------------------------------------------------------------------
+
+const ONEHELP_POS_KEY = "oneoffice_onehelp_pos_v1";
+const ONEHELP_BUBBLE_SIZE = 52;
+// Default sits just above the mobile bottom nav (see BottomNav, ~64px tall)
+// so it doesn't need to be dragged out of the way on first use.
+const ONEHELP_DEFAULT_POS = { bottom: 92, right: 16 };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function loadOneHelpPos(): { bottom: number; right: number } {
+  try {
+    const raw = localStorage.getItem(ONEHELP_POS_KEY);
+    if (!raw) return ONEHELP_DEFAULT_POS;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.bottom === "number" && typeof parsed?.right === "number") {
+      return parsed;
+    }
+  } catch {
+    // ignore — fall through to default
+  }
+  return ONEHELP_DEFAULT_POS;
+}
+
+function clampOneHelpPos(pos: { bottom: number; right: number }) {
+  const margin = 4;
+  const maxRight = Math.max(margin, window.innerWidth - ONEHELP_BUBBLE_SIZE - margin);
+  const maxBottom = Math.max(margin, window.innerHeight - ONEHELP_BUBBLE_SIZE - margin);
+  return {
+    right: Math.min(Math.max(pos.right, margin), maxRight),
+    bottom: Math.min(Math.max(pos.bottom, margin), maxBottom),
+  };
+}
+
+// Briefly rings the real on-screen element the same way TourOverlay's own
+// spotlight identifies its target (the exact same data-tour attribute) —
+// reusing that convention rather than inventing a second one, per the
+// design confirmed while scoping this phase.
+function highlightElement(target: string) {
+  const el = document.querySelector(`[data-tour="${target}"]`) as HTMLElement | null;
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("ring-4", "ring-violet-400", "ring-offset-2", "ring-offset-slate-950");
+  window.setTimeout(() => {
+    el.classList.remove("ring-4", "ring-violet-400", "ring-offset-2", "ring-offset-slate-950");
+  }, 1800);
+}
+
+type OneHelpAction =
+  | { type: "navigate"; view: string }
+  | { type: "highlight"; target: string }
+  | { type: "open_new_product_form" }
+  | { type: "request_confirmation"; question: string };
+
+interface OneHelpStep {
+  say: string;
+  action?: OneHelpAction;
+}
+
+interface OneHelpMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  // Client-side only, set while a request_confirmation step is waiting on
+  // this exact message — never persisted, never comes from the server on
+  // reload (a past confirmation is over and done with by then).
+  confirmation?: { question: string; resolved?: "yes" | "no" };
+}
+
+function OneHelpBubble({
+  onNavigate,
+  onOpenNewProductForm,
+}: {
+  onNavigate: (view: string) => void;
+  onOpenNewProductForm: () => void;
+}) {
+  const { user: firebaseUser } = useAuth();
+  const [pos, setPos] = useState(() => clampOneHelpPos(loadOneHelpPos()));
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<OneHelpMessage[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    startPos: { bottom: number; right: number };
+    moved: boolean;
+    pointerId: number;
+  } | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onResize() {
+      setPos((p) => clampOneHelpPos(p));
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, open]);
+
+  async function loadMessages() {
+    if (messagesLoaded) return;
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/onehelp/messages"), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        setMessages(await res.json());
+      }
+    } catch {
+      // best-effort — chat still works for the current session either way
+    } finally {
+      setMessagesLoaded(true);
+    }
+  }
+
+  function handlePointerDown(e: React.PointerEvent) {
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startPos: pos,
+      moved: false,
+      pointerId: e.pointerId,
+    };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+    if (!d.moved) return;
+    setPos(
+      clampOneHelpPos({
+        right: d.startPos.right - dx,
+        bottom: d.startPos.bottom - dy,
+      }),
+    );
+  }
+
+  function handlePointerUp(e: React.PointerEvent) {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    if (d.moved) {
+      localStorage.setItem(ONEHELP_POS_KEY, JSON.stringify(pos));
+    } else {
+      // A real tap, not a drag — toggle the chat.
+      setOpen((o) => {
+        const next = !o;
+        if (next) void loadMessages();
+        return next;
+      });
+    }
+  }
+
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    setSending(true);
+    const optimistic: OneHelpMessage = {
+      id: -Date.now(),
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/onehelp/chat"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message: text }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const steps: OneHelpStep[] =
+          Array.isArray(data.steps) && data.steps.length > 0
+            ? data.steps
+            : [{ say: data.content || "..." }];
+        await playSteps(steps);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: -Date.now() - 1,
+            role: "assistant",
+            content: "Kechirasiz, xatolik yuz berdi. Qayta urinib ko'ring.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: -Date.now() - 1,
+          role: "assistant",
+          content: "Internet aloqasida muammo bo'lishi mumkin. Qayta urinib ko'ring.",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // Reveals each planned step one at a time — narration first, then (after
+  // a short beat, so it reads as "doing" rather than instant) the real
+  // action actually fires. A request_confirmation step pauses the whole
+  // sequence and waits on this resolver until the person taps Ha/Yo'q in
+  // the chat itself; declining stops the rest of the plan from running.
+  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+
+  function handleConfirm(ok: boolean) {
+    confirmResolverRef.current?.(ok);
+    confirmResolverRef.current = null;
+  }
+
+  async function playSteps(steps: OneHelpStep[]) {
+    for (const step of steps) {
+      await sleep(450);
+      const msgId = -Date.now() - Math.floor(Math.random() * 10000);
+
+      if (step.action?.type === "request_confirmation") {
+        const question = step.action.question;
+        const confirmed = await new Promise<boolean>((resolve) => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId,
+              role: "assistant",
+              content: step.say,
+              createdAt: new Date().toISOString(),
+              confirmation: { question },
+            },
+          ]);
+          confirmResolverRef.current = resolve;
+        });
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.confirmation
+              ? { ...m, confirmation: { ...m.confirmation, resolved: confirmed ? "yes" : "no" } }
+              : m,
+          ),
+        );
+        if (!confirmed) break;
+        continue;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant", content: step.say, createdAt: new Date().toISOString() },
+      ]);
+
+      if (step.action) {
+        await sleep(400);
+        switch (step.action.type) {
+          case "navigate":
+            onNavigate(step.action.view);
+            break;
+          case "highlight":
+            highlightElement(step.action.target);
+            break;
+          case "open_new_product_form":
+            onOpenNewProductForm();
+            break;
+        }
+        await sleep(350);
+      }
+    }
+  }
+
+  const panelWidth = "min(360px, calc(100vw - 24px))";
+  const panelHeight = "min(520px, calc(100vh - 120px))";
+
+  return (
+    <>
+      {open && (
+        <div
+          className="fixed z-[200] flex flex-col rounded-2xl border border-white/10 bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
+          style={{
+            bottom: pos.bottom + ONEHELP_BUBBLE_SIZE + 10,
+            right: pos.right,
+            width: panelWidth,
+            height: panelHeight,
+          }}
+        >
+          <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+                <Sparkles className="h-3.5 w-3.5 text-white" />
+              </div>
+              <span className="text-white text-sm font-semibold">OneHelp</span>
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5">
+            {!messagesLoaded ? (
+              <div className="h-full flex items-center justify-center">
+                <Loader2 className="h-5 w-5 text-slate-500 animate-spin" />
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center gap-2 px-4">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+                  <Sparkles className="h-5 w-5 text-white" />
+                </div>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  Salom! Men OneHelp — saytdan foydalanish bo'yicha savollaringizga
+                  javob beraman. Nima bilan yordam bera olaman?
+                </p>
+              </div>
+            ) : (
+              messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-line ${
+                      m.role === "user"
+                        ? "bg-gradient-to-r from-violet-500 to-blue-500 text-white"
+                        : "bg-white/5 border border-white/10 text-slate-200"
+                    }`}
+                  >
+                    {m.content}
+                    {m.confirmation && (
+                      <div className="mt-2.5 pt-2.5 border-t border-white/10">
+                        {!m.confirmation.resolved ? (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleConfirm(true)}
+                              className="flex-1 bg-gradient-to-r from-violet-500 to-blue-500 text-white text-xs font-medium py-2 rounded-lg transition"
+                            >
+                              Ha
+                            </button>
+                            <button
+                              onClick={() => handleConfirm(false)}
+                              className="flex-1 bg-white/5 border border-white/10 text-slate-300 text-xs font-medium py-2 rounded-lg hover:bg-white/10 transition"
+                            >
+                              Yo'q
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-500">
+                            {m.confirmation.resolved === "yes" ? "✓ Tasdiqlandi" : "✗ Bekor qilindi"}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+            {sending && (
+              <div className="flex justify-start">
+                <div className="bg-white/5 border border-white/10 rounded-2xl px-3.5 py-2.5">
+                  <Loader2 className="h-3.5 w-3.5 text-slate-400 animate-spin" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-end gap-2 px-3 py-3 border-t border-white/10 shrink-0">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
+              }}
+              placeholder="Savolingizni yozing..."
+              rows={1}
+              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none max-h-24"
+            />
+            <button
+              onClick={() => void handleSend()}
+              disabled={!input.trim() || sending}
+              className="shrink-0 h-10 w-10 flex items-center justify-center rounded-xl bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white transition"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <button
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        title="OneHelp — yordam"
+        className="fixed z-[200] h-[52px] w-[52px] rounded-full bg-gradient-to-br from-violet-500 to-blue-500 shadow-lg shadow-violet-900/40 flex items-center justify-center text-white touch-none select-none hover:scale-105 active:scale-95 transition-transform"
+        style={{ bottom: pos.bottom, right: pos.right }}
+      >
+        {open ? <X className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
+      </button>
+    </>
   );
 }
 
@@ -7560,6 +8113,20 @@ function AppShell() {
             setShowTelegramConnectInline(false);
             refetchChannels();
             startTour(PUBLISH_TOUR_STEPS, () => setOnboardingActive(false));
+          }}
+        />
+      )}
+
+      {/* Hidden during the first-time guided tour — its own spotlight
+          overlay already owns the screen then, and a second floating
+          element would just compete with it visually. */}
+      {!onboardingActive && (
+        <OneHelpBubble
+          onNavigate={(view) => setNavView(view)}
+          onOpenNewProductForm={() => {
+            setEditingProduct(null);
+            setNavView("inventory");
+            setProductFormOpen(true);
           }}
         />
       )}

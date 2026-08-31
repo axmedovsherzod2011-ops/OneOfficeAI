@@ -11,7 +11,7 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
-import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema, ensureOnboardingSchema, ensureProfileSettingsSchema } from "@workspace/db";
+import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema, ensureOnboardingSchema, ensureProfileSettingsSchema, ensureOneHelpSchema } from "@workspace/db";
 import { startStatsScheduler } from "./scheduler/statsScheduler";
 
 const rawPort = process.env["PORT"];
@@ -83,6 +83,12 @@ await ensureProfileSettingsSchema().catch((err) => {
     { err },
     "ensureProfileSettingsSchema failed — language selection and business category will 500 until this is fixed",
   );
+});
+
+// Creates one_help_messages if it doesn't exist yet — OneHelp's chat
+// history (the draggable bottom-corner assistant bubble).
+await ensureOneHelpSchema().catch((err) => {
+  logger.error({ err }, "ensureOneHelpSchema failed — OneHelp chat will 500 until this is fixed");
 });
 
 app.listen(port, (err) => {

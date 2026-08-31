@@ -312,5 +312,6 @@ export { ensureProductResearchSchema } from "./ensureProductResearchSchema";
 export { ensureStatsSchema } from "./ensureStatsSchema";
 export { ensureOrdersSchema } from "./ensureOrdersSchema";
 export { ensureProductProInfoSchema } from "./ensureProductProInfoSchema";
+export { ensureOneHelpSchema } from "./ensureOneHelpSchema";
 export { ensureOnboardingSchema } from "./ensureOnboardingSchema";
 export { ensureProfileSettingsSchema } from "./ensureProfileSettingsSchema";

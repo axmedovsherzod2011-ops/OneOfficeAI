@@ -1,4 +1,4 @@
-import { generateText, geminiAi, fetchImageBuffer, withRetry, GEMINI_TEXT_MODEL } from "./textProviders";
+import { generateText, geminiAi, withGeminiClients, fetchImageBuffer, GEMINI_TEXT_MODEL } from "./textProviders";
 import {
   searchProductWebInfo,
   searchProductImages,
@@ -127,8 +127,8 @@ async function identifyProductFromImage(imageUrl: string): Promise<string | null
       base64 = img.buffer.toString("base64");
     }
 
-    const result = await withRetry(() =>
-      geminiAi!.models.generateContent({
+    const result = await withGeminiClients((client) =>
+      client.models.generateContent({
         model: GEMINI_TEXT_MODEL,
         contents: [
           {

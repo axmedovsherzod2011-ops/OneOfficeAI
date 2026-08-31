@@ -19,12 +19,45 @@ if (
   );
 }
 
-// Image generation (and Gemini text fallback) client. Optional — if
-// GEMINI_API_KEY is missing, image generation is disabled but the rest of
-// the app keeps working off the other 3 text providers.
-export const geminiAi = process.env.GEMINI_API_KEY
-  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
-  : null;
+// Image generation (and Gemini text fallback) client. Optional — if no
+// Gemini key is set, image generation is disabled but the rest of the app
+// keeps working off the other providers.
+//
+// Bir nechta Gemini kalitni qo'llab-quvvatlaymiz (GEMINI_API_KEY,
+// GEMINI_API_KEY_2, ...) — bittasi limitga yetsa (429), avtomatik
+// keyingi kalitga o'tamiz, faqat shundan keyin navbatdagi provayderga
+// (Mistral) tushamiz. Test paytida bepul limit tez tugab qolishining
+// eng oson yechimi shu.
+const GEMINI_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2].filter(
+  (key): key is string => !!key,
+);
+
+export const geminiClients = GEMINI_KEYS.map((apiKey) => new GoogleGenAI({ apiKey }));
+
+// Orqaga moslik uchun: birinchi kalit bilan ishlaydigan bitta client
+// (to'g'ridan-to'g'ri geminiAi.models... chaqiradigan eski kod uchun).
+export const geminiAi = geminiClients[0] ?? null;
+
+// Ko'p-kalitli har qanday Gemini chaqiruvi uchun umumiy yordamchi: har bir
+// kalitni birma-bir sinaydi, biri limitga yetsa (yoki boshqa xato bersa)
+// keyingisiga o'tadi. Rasm generatsiyasi va vision (rasm orqali aniqlash)
+// kabi to'g'ridan-to'g'ri geminiAi ishlatuvchi joylar buni chaqiradi.
+export async function withGeminiClients<T>(fn: (client: GoogleGenAI) => Promise<T>): Promise<T> {
+  if (geminiClients.length === 0) throw new Error("GEMINI_API_KEY sozlanmagan");
+  let lastErr: unknown;
+  for (let i = 0; i < geminiClients.length; i++) {
+    try {
+      return await withRetry(() => fn(geminiClients[i]));
+    } catch (err) {
+      lastErr = err;
+      console.warn(
+        `Gemini kalit #${i + 1} muvaffaqiyatsiz (limit bo'lishi mumkin), keyingi kalitga o'tamiz:`,
+        err,
+      );
+    }
+  }
+  throw lastErr;
+}
 
 export const IMAGE_MODEL = "gemini-3.1-flash-image";
 export const GEMINI_TEXT_MODEL = "gemini-3.6-flash";
@@ -77,7 +110,7 @@ interface OpenAiCompatibleResponse {
   error?: { message?: string };
 }
 
-async function callGroq(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callGroq(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
   const res = await fetch(GROQ_URL, {
     method: "POST",
     headers: {
@@ -90,7 +123,7 @@ async function callGroq(systemPrompt: string, userPrompt: string): Promise<strin
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      response_format: { type: "json_object" },
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       max_tokens: 8192,
       temperature: 0.7,
     }),
@@ -118,7 +151,7 @@ async function callGroq(systemPrompt: string, userPrompt: string): Promise<strin
 const CEREBRAS_MODEL = "gpt-oss-120b";
 const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
 
-async function callCerebras(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callCerebras(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
   const res = await fetch(CEREBRAS_URL, {
     method: "POST",
     headers: {
@@ -131,7 +164,7 @@ async function callCerebras(systemPrompt: string, userPrompt: string): Promise<s
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      response_format: { type: "json_object" },
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       max_tokens: 8192,
       temperature: 0.7,
     }),
@@ -156,21 +189,21 @@ async function callCerebras(systemPrompt: string, userPrompt: string): Promise<s
 // Provider #3: Gemini (text)
 // ---------------------------------------------------------------------------
 
-async function callGeminiText(systemPrompt: string, userPrompt: string): Promise<string> {
-  if (!geminiAi) throw new Error("GEMINI_API_KEY sozlanmagan");
+async function callGeminiText(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
+  return withGeminiClients(async (client) => {
+    const result = await client.models.generateContent({
+      model: GEMINI_TEXT_MODEL,
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      config: {
+        systemInstruction: systemPrompt,
+        ...(jsonMode ? { responseMimeType: "application/json" } : {}),
+      },
+    });
 
-  const result = await geminiAi.models.generateContent({
-    model: GEMINI_TEXT_MODEL,
-    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-    config: {
-      systemInstruction: systemPrompt,
-      responseMimeType: "application/json",
-    },
+    const content = result.text;
+    if (!content) throw new Error("Gemini javobida matn topilmadi");
+    return content;
   });
-
-  const content = result.text;
-  if (!content) throw new Error("Gemini javobida matn topilmadi");
-  return content;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +213,7 @@ async function callGeminiText(systemPrompt: string, userPrompt: string): Promise
 const MISTRAL_MODEL = "mistral-small-latest";
 const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
 
-async function callMistral(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callMistral(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
   const res = await fetch(MISTRAL_URL, {
     method: "POST",
     headers: {
@@ -193,7 +226,7 @@ async function callMistral(systemPrompt: string, userPrompt: string): Promise<st
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      response_format: { type: "json_object" },
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       max_tokens: 8192,
       temperature: 0.7,
     }),
@@ -222,26 +255,49 @@ async function callMistral(systemPrompt: string, userPrompt: string): Promise<st
 // ---------------------------------------------------------------------------
 
 export async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
+  return runProviderChain(systemPrompt, userPrompt, true);
+}
+
+// Same fallback chain as generateText, but WITHOUT forcing JSON output —
+// for callers that want a plain conversational answer (OneHelp chat,
+// delivery-info polish) rather than a structured object. Using
+// generateText (JSON-forced) for these was a real bug: every provider
+// here enforces json_object/application-json response mode at the API
+// level when asked, so the model has no choice but to wrap its answer in
+// *some* JSON shape (e.g. `{"reply": "..."}`) — that's not a model quirk,
+// it's the API contract generateText opts into on purpose for its actual
+// intended callers (productCard.ts, enrich.ts — both parse structured
+// JSON back out). This sibling function opts back out of that for
+// free-text use cases.
+export async function generateFreeText(systemPrompt: string, userPrompt: string): Promise<string> {
+  return runProviderChain(systemPrompt, userPrompt, false);
+}
+
+async function runProviderChain(
+  systemPrompt: string,
+  userPrompt: string,
+  jsonMode: boolean,
+): Promise<string> {
   const providers: Array<{ name: string; enabled: boolean; call: () => Promise<string> }> = [
     {
       name: "Groq",
       enabled: !!process.env.GROQ_API_KEY,
-      call: () => callGroq(systemPrompt, userPrompt),
+      call: () => callGroq(systemPrompt, userPrompt, jsonMode),
     },
     {
       name: "Cerebras",
       enabled: !!process.env.CEREBRAS_API_KEY,
-      call: () => callCerebras(systemPrompt, userPrompt),
+      call: () => callCerebras(systemPrompt, userPrompt, jsonMode),
     },
     {
       name: "Gemini",
       enabled: !!geminiAi,
-      call: () => callGeminiText(systemPrompt, userPrompt),
+      call: () => callGeminiText(systemPrompt, userPrompt, jsonMode),
     },
     {
       name: "Mistral",
       enabled: !!process.env.MISTRAL_API_KEY,
-      call: () => callMistral(systemPrompt, userPrompt),
+      call: () => callMistral(systemPrompt, userPrompt, jsonMode),
     },
   ];
 

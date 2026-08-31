@@ -10,3 +10,4 @@ export * from "./productResearch";
 export * from "./channelStatSnapshots";
 export * from "./telegramMtprotoAccounts";
 export * from "./orders";
+export * from "./oneHelpMessages";
