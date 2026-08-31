@@ -1,10 +1,12 @@
 // OneOffice AI External Agent — content script
 // Har bir sahifaga floating logotip + chat modal inject qiladi.
 //
-// SKELETON BOSQICHI: chatga yozilgan buyruqlar hozircha backendga
-// yuborilmaydi — `sendToAgent()` funksiyasi shu joyni belgilaydi.
-// DOM-skanerlash (`scanPageElements`) esa keyingi bosqichda AI'ga
-// yuboriladigan "sahifada nima bor" ma'lumotini shakllantiradi.
+// Buyruq yozilganda scanPageElements() natijasi backend'ga (Render, /api/
+// external-agent/act) yuboriladi, AI JAVOBIDA bitta harakat (click/type/
+// scroll) qaytadi, biz uni shu sahifada bajaramiz, so'ng yangilangan
+// elementlar bilan qayta so'raymiz — vazifa tugaguncha yoki AI to'xtaguncha
+// (runAgentLoop). Sessiya tugaganda /external-agent/summarize'ga bitta
+// umumiy xulosa yuboriladi (har bir xabar emas — xarajat uchun).
 
 (function () {
   if (window.__oneofficeAgentInjected) return;
@@ -12,12 +14,18 @@
 
   const LOGO_URL = chrome.runtime.getURL("icons/logo128.png");
   const ONEOFFICE_HOST_HINTS = ["oneoffice", "localhost"]; // dashboard aniqlash uchun oddiy stub
+  const API_BASE = "https://oneofficeai-1.onrender.com"; // Render backend (frontend'dagi VITE_API_BASE_URL bilan bir xil)
+  const MAX_AGENT_STEPS = 15; // bitta buyruq uchun cheksiz tsikl bo'lib qolmasligi uchun
 
-  let session = { active: false, minimized: false, messages: [], position: null };
+  let session = { active: false, minimized: false, messages: [], position: null, authToken: null };
   let els = {};
 
   // OneOfficeAI dashboard'dagi "External Agent" tugmasi shu orqali
-  // extension o'rnatilganini aniqlaydi (postMessage handshake).
+  // extension o'rnatilganini aniqlaydi (postMessage handshake) va
+  // Firebase ID token'ni yuboradi — biz uni backend chaqiruvlari uchun
+  // saqlab qolamiz (sessiya davomida amal qiladi, muddati tugasa
+  // foydalanuvchi dashboard'dan qayta "External Agent"ni bosishi kerak
+  // bo'ladi — bu skeleton bosqichda token yangilanishi hali yo'q).
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data?.type === "ONEOFFICE_EXT_PING") {
@@ -25,7 +33,9 @@
         { type: "ONEOFFICE_EXT_PONG", version: chrome.runtime.getManifest().version },
         "*"
       );
-      chrome.runtime.sendMessage({ type: "OPEN_AGENT_TAB" }).catch(() => {});
+      chrome.runtime
+        .sendMessage({ type: "OPEN_AGENT_TAB", token: event.data.token ?? null })
+        .catch(() => {});
     }
   });
 
@@ -33,7 +43,11 @@
     return ONEOFFICE_HOST_HINTS.some((h) => location.hostname.includes(h));
   }
 
-  // ---------- DOM skanerlash (kelgusi AI-agent uchun asos) ----------
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // ---------- DOM skanerlash (AI-agent shu asosda qaror qiladi) ----------
   function scanPageElements() {
     const interactive = Array.from(
       document.querySelectorAll("button, a, input, select, textarea, [role='button']")
@@ -50,18 +64,128 @@
     });
   }
 
-  // Keyingi bosqichda: backendga { command, pageUrl, elements } yuboriladi,
-  // javobida { action: "click"|"type"|"scroll", selector, value } qaytadi
-  // va bu yerda bajariladi (masalan: document.querySelector(selector).click()).
-  async function sendToAgent(commandText) {
-    const elements = scanPageElements();
-    console.log("[OneOffice Agent] Buyruq:", commandText, "| topilgan elementlar:", elements.length);
-
-    // --- STUB javob: hali backend ulanmagan ---
-    if (isOneOfficeDashboard()) {
-      return "Bu OneOfficeAI paneli. Avval boshqarmoqchi bo'lgan saytingizni (masalan OLX.uz do'koningizni) yangi tabda oching, keyin menga buyruq bering.";
+  // ---------- Backend bilan aloqa ----------
+  async function requestAgentDecision(commandText, elements) {
+    const res = await fetch(`${API_BASE}/api/external-agent/act`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session.authToken ? { Authorization: `Bearer ${session.authToken}` } : {}),
+      },
+      body: JSON.stringify({
+        command: commandText,
+        pageUrl: location.href,
+        elements,
+        history: session.messages.slice(-10).map((m) => ({
+          role: m.role === "user" ? "user" : "agent",
+          text: m.text,
+        })),
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `Backend xatosi (${res.status})`);
     }
-    return `Qabul qildim: "${commandText}". Sahifada ${elements.length} ta boshqariladigan element topdim. (Backend agent hali ulanmagan — bu skeleton bosqich, keyingi qadamda haqiqiy AI qarorlari shu yerga ulanadi.)`;
+    return res.json(); // { message, action }
+  }
+
+  // ---------- Bitta harakatni haqiqatan bajarish ----------
+  function nativeValueSetter(el) {
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    return Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  }
+
+  async function executeAction(action) {
+    try {
+      if (action.type === "click") {
+        const el = document.querySelector(action.selector);
+        if (!el) return false;
+        el.scrollIntoView({ block: "center", behavior: "instant" });
+        el.click();
+        return true;
+      }
+      if (action.type === "type") {
+        const el = document.querySelector(action.selector);
+        if (!el) return false;
+        el.scrollIntoView({ block: "center", behavior: "instant" });
+        el.focus();
+        const setter = nativeValueSetter(el);
+        if (setter) setter.call(el, action.value);
+        else el.value = action.value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      if (action.type === "scroll") {
+        window.scrollBy({
+          top: action.value === "down" ? window.innerHeight * 0.8 : -window.innerHeight * 0.8,
+          behavior: "instant",
+        });
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("[OneOffice Agent] Amalni bajarishda xato:", err);
+      return false;
+    }
+  }
+
+  // ---------- Bir buyruqni to'liq bajarish (ko'p qadamli tsikl) ----------
+  async function runAgentLoop(commandText) {
+    if (isOneOfficeDashboard()) {
+      pushMessage(
+        "agent",
+        "Bu OneOfficeAI paneli. Avval boshqarmoqchi bo'lgan saytingizni (masalan OLX.uz do'koningizni) shu tabda oching, keyin menga buyruq bering."
+      );
+      return;
+    }
+
+    let cmd = commandText;
+    for (let step = 0; step < MAX_AGENT_STEPS; step++) {
+      const elements = scanPageElements();
+      let decision;
+      try {
+        decision = await requestAgentDecision(cmd, elements);
+      } catch (err) {
+        console.error("[OneOffice Agent] Backend xatosi:", err);
+        pushMessage("agent", "Bog'lanishda xatolik yuz berdi — birozdan keyin qayta urinib ko'ring.");
+        break;
+      }
+
+      pushMessage("agent", decision.message);
+
+      if (!decision.action) break; // vazifa tugadi yoki qo'shimcha ma'lumot kerak
+
+      const ok = await executeAction(decision.action);
+      if (!ok) {
+        pushMessage("agent", "Kerakli elementni sahifada topa olmadim, to'xtayapman.");
+        break;
+      }
+
+      await sleep(700); // sahifa yangilanishi uchun qisqa kutish
+      cmd = "(davom eting)";
+    }
+  }
+
+  // ---------- Sessiya tugaganda: bitta umumiy xulosa yuborish ----------
+  async function summarizeSession() {
+    if (!session.messages || session.messages.length === 0) return;
+    try {
+      await fetch(`${API_BASE}/api/external-agent/summarize`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session.authToken ? { Authorization: `Bearer ${session.authToken}` } : {}),
+        },
+        body: JSON.stringify({
+          targetUrl: location.href,
+          messages: session.messages,
+          startedAt: session.startedAt ?? new Date().toISOString(),
+        }),
+      });
+    } catch (err) {
+      console.warn("[OneOffice Agent] Sessiya xulosasini saqlab bo'lmadi:", err);
+    }
   }
 
   // ---------- Session bilan ishlash ----------
@@ -161,6 +285,7 @@
     els.confirmYes.addEventListener("click", async () => {
       try {
         els.confirm.hidden = true;
+        await summarizeSession();
         await chrome.runtime.sendMessage({ type: "END_SESSION" });
       } catch (err) {
         // Extension yangilangandan keyin eski tabda "context invalidated"
@@ -183,8 +308,7 @@
     const messages = [...session.messages, { role: "user", text }];
     await updateSession({ messages });
 
-    const reply = await sendToAgent(text);
-    pushMessage("agent", reply);
+    await runAgentLoop(text);
   }
 
   function pushMessage(role, text) {

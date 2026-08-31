@@ -6117,7 +6117,7 @@ function SettingsPage({ onOpenConnectors }: any) {
 // uchun "o'rnatilmagan" holatda foydalanuvchiga qo'lda o'rnatish
 // ko'rsatmasi ko'rsatiladi. Kengaytma bor-yo'qligi window.postMessage
 // handshake orqali aniqlanadi (qarang: external-agent-extension/content.js).
-function ExternalAgentButton() {
+function ExternalAgentButton({ user }: { user: any }) {
   const [status, setStatus] = useState<"idle" | "checking" | "installed" | "missing">(
     "idle",
   );
@@ -6131,8 +6131,9 @@ function ExternalAgentButton() {
     a.remove();
   };
 
-  const handleClick = () => {
+  const handleClick = async () => {
     setStatus("checking");
+    const token = user ? await user.getIdToken().catch(() => null) : null;
     const onPong = (event: MessageEvent) => {
       if (event.source !== window) return;
       if (event.data?.type === "ONEOFFICE_EXT_PONG") {
@@ -6145,7 +6146,7 @@ function ExternalAgentButton() {
       }
     };
     window.addEventListener("message", onPong);
-    window.postMessage({ type: "ONEOFFICE_EXT_PING" }, "*");
+    window.postMessage({ type: "ONEOFFICE_EXT_PING", token }, "*");
     const timer = setTimeout(() => {
       window.removeEventListener("message", onPong);
       setStatus("missing");
@@ -6311,7 +6312,7 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
         </Glass>
       </button>
 
-      <ExternalAgentButton />
+      <ExternalAgentButton user={user} />
 
       <button
         data-testid="button-profile-signout"

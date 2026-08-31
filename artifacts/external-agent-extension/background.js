@@ -1,12 +1,8 @@
 // OneOffice AI External Agent — background service worker
 //
-// Skeleton bosqichida bu fayl faqat sessiya holatini (active/inactive)
-// barcha tablar orasida sinxronlab turadi va content scriptlardan kelgan
-// xabarlarni markazlashtiradi. Keyingi bosqichda shu yerga:
-//   - OneOfficeAI backend bilan autentifikatsiya (token)
-//   - Agent buyruqlarini backendga yuborish / javob olish
-//   - chrome.debugger orqali pixel-level klik (agar DOM-selector yetmasa)
-// qo'shiladi.
+// Sessiya holatini (active/minimized/messages/authToken) barcha tablar
+// orasida sinxronlab turadi va content scriptlardan kelgan xabarlarni
+// markazlashtiradi.
 
 const STORAGE_KEY = "oneoffice_agent_session";
 
@@ -18,6 +14,8 @@ async function getSession() {
       minimized: false,
       messages: [],
       position: null, // {right, bottom} px
+      authToken: null, // dashboard'dan olingan Firebase ID token
+      startedAt: null,
     }
   );
 }
@@ -56,6 +54,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           active: false,
           minimized: false,
           messages: [],
+          authToken: null,
+          startedAt: null,
         });
         chrome.tabs.query({}, (tabs) => {
           for (const tab of tabs) {
@@ -70,11 +70,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "OPEN_AGENT_TAB": {
         // OneOfficeAI panelidagi "External Agent" tugmasidan chaqiriladi.
         // Sessiyani globalda faollashtiramiz (shu bilan bubble BARCHA
-        // keyingi ochiladigan saytlarda ham chiqadi), so'ng about:blank
+        // keyingi ochiladigan saytlarda ham chiqadi), Firebase token'ni
+        // saqlaymiz (backend chaqiruvlari uchun), so'ng about:blank
         // o'rniga extension'ning o'z (chiroyli) sahifasini ochamiz.
         const next = await setSession({
           active: true,
           minimized: false,
+          authToken: msg.token ?? null,
+          startedAt: new Date().toISOString(),
           messages: [
             {
               role: "agent",

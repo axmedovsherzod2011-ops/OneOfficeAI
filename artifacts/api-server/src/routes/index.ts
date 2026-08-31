@@ -15,6 +15,7 @@ import telegramMtprotoRouter from "./telegramMtproto";
 import statsDashboardRouter from "./statsDashboard";
 import ordersRouter from "./orders";
 import onehelpRouter from "./onehelp";
+import externalAgentRouter from "./externalAgent";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(telegramMtprotoRouter);
 router.use(statsDashboardRouter);
 router.use(ordersRouter);
 router.use(onehelpRouter);
+router.use(externalAgentRouter);
 
 export default router;
