@@ -300,6 +300,70 @@ async function sendPhotoAlbum(
   return { ok: true, messageId: result?.[0]?.message_id };
 }
 
+// ---------------------------------------------------------------------------
+// The reusable core: given an already-resolved channel row + post text +
+// image URLs, actually sends it (mtproto or bot credential, whichever the
+// channel uses) and returns the outcome. Exported so callers that already
+// have a channel row in hand (the HTTP route below, and the OneHelp
+// background task scheduler in ai/autoPost.ts) don't have to go through
+// this process's own HTTP server to reuse this logic.
+// ---------------------------------------------------------------------------
+
+export async function sendPostToChannel(
+  userId: number,
+  channel: typeof telegramChannelsTable.$inferSelect,
+  text: string,
+  imageUrls: string[],
+): Promise<{ ok: true; messageId?: number } | { ok: false; error: string }> {
+  const requestedUrls = imageUrls.slice(0, 10);
+  const channelId = channel.channelId;
+
+  if (channel.connectionType === "mtproto") {
+    try {
+      const resolvedImages = (
+        await Promise.all(requestedUrls.map((url) => resolveImage(url)))
+      ).filter((img): img is ResolvedImage => img !== null);
+
+      const outcome = await publishViaMtproto(
+        userId,
+        channelId,
+        text,
+        resolvedImages.map((img) => ({ buffer: img.buffer, ext: img.ext })),
+      );
+
+      if (!outcome.ok) return { ok: false, error: outcome.error };
+      return { ok: true, messageId: outcome.messageId };
+    } catch {
+      return { ok: false, error: "MTProto orqali yuborishda xatolik. Ulanishni tekshiring." };
+    }
+  }
+
+  let botToken: string;
+  try {
+    botToken = getBotToken();
+  } catch {
+    return { ok: false, error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN)." };
+  }
+
+  try {
+    const resolvedImages = (
+      await Promise.all(requestedUrls.map((url) => resolveImage(url)))
+    ).filter((img): img is ResolvedImage => img !== null);
+
+    let outcome: { ok: true; messageId?: number } | { ok: false; error: string };
+    if (resolvedImages.length >= 2) {
+      outcome = await sendPhotoAlbum(botToken, channelId, text, resolvedImages);
+    } else if (resolvedImages.length === 1) {
+      outcome = await sendSinglePhoto(botToken, channelId, text, resolvedImages[0]);
+    } else {
+      outcome = await sendTextMessage(botToken, channelId, text);
+    }
+    return outcome;
+  } catch {
+    return { ok: false, error: "Failed to reach Telegram API. Check your internet connection." };
+  }
+}
+
 router.post("/publish", async (req, res) => {
   const parsed = parsePublishBody(req.body);
   if ("error" in parsed) {
@@ -362,83 +426,12 @@ router.post("/publish", async (req, res) => {
 
   const channelId = channel.channelId;
 
-  let telegramMessageId: number | undefined;
-
-  if (channel.connectionType === "mtproto") {
-    // MTProto-connected channel (the user's own account, not the bot) —
-    // getBotToken() is never called on this path, so it works even if
-    // TELEGRAM_BOT_TOKEN isn't set, and even if the bot was never added
-    // to this particular channel.
-    try {
-      const resolvedImages = (
-        await Promise.all(requestedUrls.map((url) => resolveImage(url)))
-      ).filter((img): img is ResolvedImage => img !== null);
-
-      const outcome = await publishViaMtproto(
-        userId,
-        channelId,
-        text,
-        resolvedImages.map((img) => ({ buffer: img.buffer, ext: img.ext })),
-      );
-
-      if (!outcome.ok) {
-        res.status(400).json({ error: outcome.error });
-        return;
-      }
-      telegramMessageId = outcome.messageId;
-    } catch {
-      res.status(400).json({
-        error: "MTProto orqali yuborishda xatolik. Ulanishni tekshiring.",
-      });
-      return;
-    }
-  } else {
-    let botToken: string;
-    try {
-      botToken = getBotToken();
-    } catch {
-      res.status(400).json({
-        error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN).",
-      });
-      return;
-    }
-
-    try {
-      const resolvedImages = (
-        await Promise.all(requestedUrls.map((url) => resolveImage(url)))
-      ).filter((img): img is ResolvedImage => img !== null);
-
-      let outcome:
-        | { ok: true; messageId?: number }
-        | { ok: false; error: string };
-
-      if (resolvedImages.length >= 2) {
-        outcome = await sendPhotoAlbum(botToken, channelId, text, resolvedImages);
-      } else if (resolvedImages.length === 1) {
-        outcome = await sendSinglePhoto(
-          botToken,
-          channelId,
-          text,
-          resolvedImages[0],
-        );
-      } else {
-        // No images resolved (either none were requested, or all failed to
-        // load) — fall back to a text-only post rather than failing outright.
-        outcome = await sendTextMessage(botToken, channelId, text);
-      }
-
-      if (!outcome.ok) {
-        res.status(400).json({ error: outcome.error });
-        return;
-      }
-      telegramMessageId = outcome.messageId;
-    } catch {
-      res.status(400).json({
-        error: "Failed to reach Telegram API. Check your internet connection.",
-      });
-      return;
-    }
+  const outcome = await sendPostToChannel(userId, channel, text, requestedUrls);
+  if (!outcome.ok) {
+    res.status(400).json({ error: outcome.error });
+    return;
   }
+  const telegramMessageId = outcome.messageId;
 
   // In-memory only (never the database) — lets the live stats endpoint
   // read this post's current view count on demand. See telegram/postTracker.ts.

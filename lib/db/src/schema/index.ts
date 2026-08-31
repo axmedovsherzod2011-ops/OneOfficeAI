@@ -11,3 +11,4 @@ export * from "./channelStatSnapshots";
 export * from "./telegramMtprotoAccounts";
 export * from "./orders";
 export * from "./oneHelpMessages";
+export * from "./oneHelpTasks";

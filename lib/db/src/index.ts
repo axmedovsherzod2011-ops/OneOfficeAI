@@ -313,5 +313,6 @@ export { ensureStatsSchema } from "./ensureStatsSchema";
 export { ensureOrdersSchema } from "./ensureOrdersSchema";
 export { ensureProductProInfoSchema } from "./ensureProductProInfoSchema";
 export { ensureOneHelpSchema } from "./ensureOneHelpSchema";
+export { ensureOneHelpTasksSchema } from "./ensureOneHelpTasksSchema";
 export { ensureOnboardingSchema } from "./ensureOnboardingSchema";
 export { ensureProfileSettingsSchema } from "./ensureProfileSettingsSchema";

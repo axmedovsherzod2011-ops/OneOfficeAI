@@ -11,8 +11,9 @@ dotenv.config({
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
-import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema, ensureOnboardingSchema, ensureProfileSettingsSchema, ensureOneHelpSchema } from "@workspace/db";
+import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema, ensureOnboardingSchema, ensureProfileSettingsSchema, ensureOneHelpSchema, ensureOneHelpTasksSchema } from "@workspace/db";
 import { startStatsScheduler } from "./scheduler/statsScheduler";
+import { startOneHelpTaskScheduler } from "./ai/taskScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -91,6 +92,16 @@ await ensureOneHelpSchema().catch((err) => {
   logger.error({ err }, "ensureOneHelpSchema failed — OneHelp chat will 500 until this is fixed");
 });
 
+// Creates one_help_tasks if it doesn't exist yet — OneHelp's background
+// task queue (scheduled/recurring actions like a daily auto-post).
+await ensureOneHelpTasksSchema().catch((err) => {
+  logger.error({ err }, "ensureOneHelpTasksSchema failed — OneHelp can't schedule background tasks until this is fixed");
+});
+
+// Polls one_help_tasks every 60s and runs whatever's due — independent of
+// any browser tab being open, this IS the "AI works in the background
+// while I do something else" mechanism.
+
 app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
@@ -110,4 +121,6 @@ app.listen(port, (err) => {
   // what makes a real "last 24 hours" chart possible instead of only ever
   // having whatever irregular gaps a user's own visits happened to leave.
   startStatsScheduler();
+
+  startOneHelpTaskScheduler();
 });
