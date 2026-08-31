@@ -67,6 +67,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(next);
         break;
       }
+      case "OPEN_AGENT_TAB": {
+        // OneOfficeAI panelidagi "External Agent" tugmasidan chaqiriladi.
+        // Sessiyani globalda faollashtiramiz (shu bilan bubble BARCHA
+        // keyingi ochiladigan saytlarda ham chiqadi), so'ng about:blank
+        // o'rniga extension'ning o'z (chiroyli) sahifasini ochamiz.
+        const next = await setSession({
+          active: true,
+          minimized: false,
+          messages: [
+            {
+              role: "agent",
+              text: "Salom! Boshqarmoqchi bo'lgan sayt yoki do'kon panelingizni shu tabdan oching (yoki yuqoridagi tezkor havolalardan birini bosing), so'ng menga buyruq bering.",
+            },
+          ],
+        });
+        chrome.tabs.query({}, (tabs) => {
+          for (const tab of tabs) {
+            chrome.tabs
+              .sendMessage(tab.id, { type: "SESSION_UPDATED", session: next })
+              .catch(() => {});
+          }
+        });
+        chrome.tabs.create({ url: chrome.runtime.getURL("newtab.html") });
+        sendResponse(true);
+        break;
+      }
       default:
         sendResponse(null);
     }

@@ -6103,7 +6103,9 @@ function ExternalAgentButton() {
         window.removeEventListener("message", onPong);
         clearTimeout(timer);
         setStatus("installed");
-        window.open("about:blank", "_blank");
+        // Tab ochish endi extension'ning o'zida (background.js:
+        // OPEN_AGENT_TAB) — u chiroyli newtab.html'ni ochadi va
+        // sessiyani globalda faollashtiradi, oddiy about:blank emas.
       }
     };
     window.addEventListener("message", onPong);

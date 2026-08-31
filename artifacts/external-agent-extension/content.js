@@ -25,6 +25,7 @@
         { type: "ONEOFFICE_EXT_PONG", version: chrome.runtime.getManifest().version },
         "*"
       );
+      chrome.runtime.sendMessage({ type: "OPEN_AGENT_TAB" }).catch(() => {});
     }
   });
 
@@ -158,8 +159,15 @@
     els.endBtn.addEventListener("click", () => (els.confirm.hidden = false));
     els.confirmNo.addEventListener("click", () => (els.confirm.hidden = true));
     els.confirmYes.addEventListener("click", async () => {
-      els.confirm.hidden = true;
-      await chrome.runtime.sendMessage({ type: "END_SESSION" });
+      try {
+        els.confirm.hidden = true;
+        await chrome.runtime.sendMessage({ type: "END_SESSION" });
+      } catch (err) {
+        // Extension yangilangandan keyin eski tabda "context invalidated"
+        // xatosi chiqishi mumkin — shu holatda tabni yangilash kerak.
+        console.error("[OneOffice Agent] Sessiyani tugatishda xato:", err);
+        alert("Xatolik yuz berdi. Sahifani (F5) yangilab qayta urinib ko'ring.");
+      }
     });
 
     els.sendBtn.addEventListener("click", handleSend);
@@ -239,6 +247,7 @@
     applyPosition(session.position);
 
     const showModal = session.active && !session.minimized;
+    els.bubble.style.display = session.active ? "flex" : "none";
     els.modal.hidden = !showModal;
     els.dot.style.display = session.active && session.minimized ? "block" : "none";
 
