@@ -8,7 +8,7 @@ import {
   CreateProductBody,
   UpdateProductBody,
 } from "@workspace/api-zod";
-import { generateText } from "../ai/textProviders";
+import { generateFreeText } from "../ai/textProviders";
 
 const router = Router();
 
@@ -246,7 +246,7 @@ router.post("/products/:id/delivery-info", async (req, res) => {
 
   let polished: string;
   try {
-    polished = await generateText(
+    polished = await generateFreeText(
       "You turn a seller's rough, informally-written delivery/shipping note into clean, professional storefront copy in Uzbek. Keep every concrete fact the seller gave (timeframes, regions/cities, cost, conditions) — never invent new facts, never drop any they gave. Just rewrite it clearly and politely, 1-4 short sentences or short bullet lines. Plain text only, no markdown, no quotes, no preamble.",
       `Seller's raw note about delivery:\n"${trimmedRaw}"`,
     );

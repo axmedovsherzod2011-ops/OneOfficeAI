@@ -77,7 +77,7 @@ interface OpenAiCompatibleResponse {
   error?: { message?: string };
 }
 
-async function callGroq(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callGroq(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
   const res = await fetch(GROQ_URL, {
     method: "POST",
     headers: {
@@ -90,7 +90,7 @@ async function callGroq(systemPrompt: string, userPrompt: string): Promise<strin
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      response_format: { type: "json_object" },
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       max_tokens: 8192,
       temperature: 0.7,
     }),
@@ -118,7 +118,7 @@ async function callGroq(systemPrompt: string, userPrompt: string): Promise<strin
 const CEREBRAS_MODEL = "gpt-oss-120b";
 const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
 
-async function callCerebras(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callCerebras(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
   const res = await fetch(CEREBRAS_URL, {
     method: "POST",
     headers: {
@@ -131,7 +131,7 @@ async function callCerebras(systemPrompt: string, userPrompt: string): Promise<s
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      response_format: { type: "json_object" },
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       max_tokens: 8192,
       temperature: 0.7,
     }),
@@ -156,7 +156,7 @@ async function callCerebras(systemPrompt: string, userPrompt: string): Promise<s
 // Provider #3: Gemini (text)
 // ---------------------------------------------------------------------------
 
-async function callGeminiText(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callGeminiText(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
   if (!geminiAi) throw new Error("GEMINI_API_KEY sozlanmagan");
 
   const result = await geminiAi.models.generateContent({
@@ -164,7 +164,7 @@ async function callGeminiText(systemPrompt: string, userPrompt: string): Promise
     contents: [{ role: "user", parts: [{ text: userPrompt }] }],
     config: {
       systemInstruction: systemPrompt,
-      responseMimeType: "application/json",
+      ...(jsonMode ? { responseMimeType: "application/json" } : {}),
     },
   });
 
@@ -180,7 +180,7 @@ async function callGeminiText(systemPrompt: string, userPrompt: string): Promise
 const MISTRAL_MODEL = "mistral-small-latest";
 const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
 
-async function callMistral(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callMistral(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
   const res = await fetch(MISTRAL_URL, {
     method: "POST",
     headers: {
@@ -193,7 +193,7 @@ async function callMistral(systemPrompt: string, userPrompt: string): Promise<st
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      response_format: { type: "json_object" },
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       max_tokens: 8192,
       temperature: 0.7,
     }),
@@ -222,26 +222,49 @@ async function callMistral(systemPrompt: string, userPrompt: string): Promise<st
 // ---------------------------------------------------------------------------
 
 export async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
+  return runProviderChain(systemPrompt, userPrompt, true);
+}
+
+// Same fallback chain as generateText, but WITHOUT forcing JSON output —
+// for callers that want a plain conversational answer (OneHelp chat,
+// delivery-info polish) rather than a structured object. Using
+// generateText (JSON-forced) for these was a real bug: every provider
+// here enforces json_object/application-json response mode at the API
+// level when asked, so the model has no choice but to wrap its answer in
+// *some* JSON shape (e.g. `{"reply": "..."}`) — that's not a model quirk,
+// it's the API contract generateText opts into on purpose for its actual
+// intended callers (productCard.ts, enrich.ts — both parse structured
+// JSON back out). This sibling function opts back out of that for
+// free-text use cases.
+export async function generateFreeText(systemPrompt: string, userPrompt: string): Promise<string> {
+  return runProviderChain(systemPrompt, userPrompt, false);
+}
+
+async function runProviderChain(
+  systemPrompt: string,
+  userPrompt: string,
+  jsonMode: boolean,
+): Promise<string> {
   const providers: Array<{ name: string; enabled: boolean; call: () => Promise<string> }> = [
     {
       name: "Groq",
       enabled: !!process.env.GROQ_API_KEY,
-      call: () => callGroq(systemPrompt, userPrompt),
+      call: () => callGroq(systemPrompt, userPrompt, jsonMode),
     },
     {
       name: "Cerebras",
       enabled: !!process.env.CEREBRAS_API_KEY,
-      call: () => callCerebras(systemPrompt, userPrompt),
+      call: () => callCerebras(systemPrompt, userPrompt, jsonMode),
     },
     {
       name: "Gemini",
       enabled: !!geminiAi,
-      call: () => callGeminiText(systemPrompt, userPrompt),
+      call: () => callGeminiText(systemPrompt, userPrompt, jsonMode),
     },
     {
       name: "Mistral",
       enabled: !!process.env.MISTRAL_API_KEY,
-      call: () => callMistral(systemPrompt, userPrompt),
+      call: () => callMistral(systemPrompt, userPrompt, jsonMode),
     },
   ];
 
