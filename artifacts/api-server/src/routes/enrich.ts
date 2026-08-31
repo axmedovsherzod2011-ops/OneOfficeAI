@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { productResearchTable, productsTable, usersTable } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
-import { geminiAi, IMAGE_MODEL, generateText, withRetry, fetchImageBuffer } from "../ai/textProviders";
+import { geminiAi, withGeminiClients, IMAGE_MODEL, generateText, fetchImageBuffer } from "../ai/textProviders";
 import { searchProductImages, searchProductWebInfo, formatWebContext } from "../ai/webSearch";
 import { runProductResearch, buildPostText, type ProductCard } from "../ai/productCard";
 
@@ -71,8 +71,6 @@ router.post("/images/generate", async (req, res) => {
     });
     return;
   }
-  const client = geminiAi;
-
   const ref = await fetchImageBuffer(referenceUrl);
   if (!ref) {
     res.status(400).json({ error: "Namuna rasmni yuklab bo'lmadi." });
@@ -80,7 +78,7 @@ router.post("/images/generate", async (req, res) => {
   }
 
   try {
-    const result = await withRetry(() =>
+    const result = await withGeminiClients((client) =>
       client.models.generateContent({
         model: IMAGE_MODEL,
         contents: [

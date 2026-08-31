@@ -19,12 +19,45 @@ if (
   );
 }
 
-// Image generation (and Gemini text fallback) client. Optional — if
-// GEMINI_API_KEY is missing, image generation is disabled but the rest of
-// the app keeps working off the other 3 text providers.
-export const geminiAi = process.env.GEMINI_API_KEY
-  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
-  : null;
+// Image generation (and Gemini text fallback) client. Optional — if no
+// Gemini key is set, image generation is disabled but the rest of the app
+// keeps working off the other providers.
+//
+// Bir nechta Gemini kalitni qo'llab-quvvatlaymiz (GEMINI_API_KEY,
+// GEMINI_API_KEY_2, ...) — bittasi limitga yetsa (429), avtomatik
+// keyingi kalitga o'tamiz, faqat shundan keyin navbatdagi provayderga
+// (Mistral) tushamiz. Test paytida bepul limit tez tugab qolishining
+// eng oson yechimi shu.
+const GEMINI_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2].filter(
+  (key): key is string => !!key,
+);
+
+export const geminiClients = GEMINI_KEYS.map((apiKey) => new GoogleGenAI({ apiKey }));
+
+// Orqaga moslik uchun: birinchi kalit bilan ishlaydigan bitta client
+// (to'g'ridan-to'g'ri geminiAi.models... chaqiradigan eski kod uchun).
+export const geminiAi = geminiClients[0] ?? null;
+
+// Ko'p-kalitli har qanday Gemini chaqiruvi uchun umumiy yordamchi: har bir
+// kalitni birma-bir sinaydi, biri limitga yetsa (yoki boshqa xato bersa)
+// keyingisiga o'tadi. Rasm generatsiyasi va vision (rasm orqali aniqlash)
+// kabi to'g'ridan-to'g'ri geminiAi ishlatuvchi joylar buni chaqiradi.
+export async function withGeminiClients<T>(fn: (client: GoogleGenAI) => Promise<T>): Promise<T> {
+  if (geminiClients.length === 0) throw new Error("GEMINI_API_KEY sozlanmagan");
+  let lastErr: unknown;
+  for (let i = 0; i < geminiClients.length; i++) {
+    try {
+      return await withRetry(() => fn(geminiClients[i]));
+    } catch (err) {
+      lastErr = err;
+      console.warn(
+        `Gemini kalit #${i + 1} muvaffaqiyatsiz (limit bo'lishi mumkin), keyingi kalitga o'tamiz:`,
+        err,
+      );
+    }
+  }
+  throw lastErr;
+}
 
 export const IMAGE_MODEL = "gemini-3.1-flash-image";
 export const GEMINI_TEXT_MODEL = "gemini-3.6-flash";
@@ -157,20 +190,20 @@ async function callCerebras(systemPrompt: string, userPrompt: string, jsonMode =
 // ---------------------------------------------------------------------------
 
 async function callGeminiText(systemPrompt: string, userPrompt: string, jsonMode = true): Promise<string> {
-  if (!geminiAi) throw new Error("GEMINI_API_KEY sozlanmagan");
+  return withGeminiClients(async (client) => {
+    const result = await client.models.generateContent({
+      model: GEMINI_TEXT_MODEL,
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      config: {
+        systemInstruction: systemPrompt,
+        ...(jsonMode ? { responseMimeType: "application/json" } : {}),
+      },
+    });
 
-  const result = await geminiAi.models.generateContent({
-    model: GEMINI_TEXT_MODEL,
-    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-    config: {
-      systemInstruction: systemPrompt,
-      ...(jsonMode ? { responseMimeType: "application/json" } : {}),
-    },
+    const content = result.text;
+    if (!content) throw new Error("Gemini javobida matn topilmadi");
+    return content;
   });
-
-  const content = result.text;
-  if (!content) throw new Error("Gemini javobida matn topilmadi");
-  return content;
 }
 
 // ---------------------------------------------------------------------------
