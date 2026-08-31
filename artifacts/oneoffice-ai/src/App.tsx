@@ -6655,11 +6655,19 @@ function ProductCongratsModal({ onNext }: { onNext: () => void }) {
 // ---------------------------------------------------------------------------
 // OneHelp — the site's own built-in assistant. A small sticky bubble the
 // person can drag anywhere on screen (their position is remembered); a tap
-// (not a drag) opens a chat panel growing from that same corner. Phase 1:
-// plain Q&A only — the AI cannot yet drive the site itself (navigate, fill
-// forms, click buttons for real) — that's a deliberately separate, much
-// bigger later phase. Only ever mounted inside the authenticated AppShell,
-// never on the public storefront.
+// (not a drag) opens a chat panel growing from that same corner. Phase 2/3:
+// the AI can now narrate AND actually drive the site — navigate between
+// sections, spotlight a real element (reusing the exact data-tour targets
+// the onboarding tour already uses), and open the new-product form —
+// visibly, in sync with its own narration, played back step by step from
+// the plan the backend returns (see routes/onehelp.ts for why this is a
+// plan-then-execute design rather than a live agent loop). Heavy/
+// irreversible actions aren't wired to any real action yet in this phase,
+// but the request_confirmation mechanism (Ha/Yo'q, inline in the chat)
+// already exists end-to-end so future actions can use it immediately.
+// Filling in form fields for the person is intentionally NOT part of this
+// phase yet. Only ever mounted inside the authenticated AppShell, never on
+// the public storefront.
 // ---------------------------------------------------------------------------
 
 const ONEHELP_POS_KEY = "oneoffice_onehelp_pos_v1";
@@ -6667,6 +6675,10 @@ const ONEHELP_BUBBLE_SIZE = 52;
 // Default sits just above the mobile bottom nav (see BottomNav, ~64px tall)
 // so it doesn't need to be dragged out of the way on first use.
 const ONEHELP_DEFAULT_POS = { bottom: 92, right: 16 };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function loadOneHelpPos(): { bottom: number; right: number } {
   try {
@@ -6692,14 +6704,49 @@ function clampOneHelpPos(pos: { bottom: number; right: number }) {
   };
 }
 
+// Briefly rings the real on-screen element the same way TourOverlay's own
+// spotlight identifies its target (the exact same data-tour attribute) —
+// reusing that convention rather than inventing a second one, per the
+// design confirmed while scoping this phase.
+function highlightElement(target: string) {
+  const el = document.querySelector(`[data-tour="${target}"]`) as HTMLElement | null;
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("ring-4", "ring-violet-400", "ring-offset-2", "ring-offset-slate-950");
+  window.setTimeout(() => {
+    el.classList.remove("ring-4", "ring-violet-400", "ring-offset-2", "ring-offset-slate-950");
+  }, 1800);
+}
+
+type OneHelpAction =
+  | { type: "navigate"; view: string }
+  | { type: "highlight"; target: string }
+  | { type: "open_new_product_form" }
+  | { type: "request_confirmation"; question: string };
+
+interface OneHelpStep {
+  say: string;
+  action?: OneHelpAction;
+}
+
 interface OneHelpMessage {
   id: number;
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  // Client-side only, set while a request_confirmation step is waiting on
+  // this exact message — never persisted, never comes from the server on
+  // reload (a past confirmation is over and done with by then).
+  confirmation?: { question: string; resolved?: "yes" | "no" };
 }
 
-function OneHelpBubble() {
+function OneHelpBubble({
+  onNavigate,
+  onOpenNewProductForm,
+}: {
+  onNavigate: (view: string) => void;
+  onOpenNewProductForm: () => void;
+}) {
   const { user: firebaseUser } = useAuth();
   const [pos, setPos] = useState(() => clampOneHelpPos(loadOneHelpPos()));
   const [open, setOpen] = useState(false);
@@ -6812,8 +6859,12 @@ function OneHelpBubble() {
         body: JSON.stringify({ message: text }),
       });
       if (res.ok) {
-        const reply: OneHelpMessage = await res.json();
-        setMessages((prev) => [...prev, reply]);
+        const data = await res.json();
+        const steps: OneHelpStep[] =
+          Array.isArray(data.steps) && data.steps.length > 0
+            ? data.steps
+            : [{ say: data.content || "..." }];
+        await playSteps(steps);
       } else {
         setMessages((prev) => [
           ...prev,
@@ -6837,6 +6888,72 @@ function OneHelpBubble() {
       ]);
     } finally {
       setSending(false);
+    }
+  }
+
+  // Reveals each planned step one at a time — narration first, then (after
+  // a short beat, so it reads as "doing" rather than instant) the real
+  // action actually fires. A request_confirmation step pauses the whole
+  // sequence and waits on this resolver until the person taps Ha/Yo'q in
+  // the chat itself; declining stops the rest of the plan from running.
+  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+
+  function handleConfirm(ok: boolean) {
+    confirmResolverRef.current?.(ok);
+    confirmResolverRef.current = null;
+  }
+
+  async function playSteps(steps: OneHelpStep[]) {
+    for (const step of steps) {
+      await sleep(450);
+      const msgId = -Date.now() - Math.floor(Math.random() * 10000);
+
+      if (step.action?.type === "request_confirmation") {
+        const question = step.action.question;
+        const confirmed = await new Promise<boolean>((resolve) => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId,
+              role: "assistant",
+              content: step.say,
+              createdAt: new Date().toISOString(),
+              confirmation: { question },
+            },
+          ]);
+          confirmResolverRef.current = resolve;
+        });
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.confirmation
+              ? { ...m, confirmation: { ...m.confirmation, resolved: confirmed ? "yes" : "no" } }
+              : m,
+          ),
+        );
+        if (!confirmed) break;
+        continue;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant", content: step.say, createdAt: new Date().toISOString() },
+      ]);
+
+      if (step.action) {
+        await sleep(400);
+        switch (step.action.type) {
+          case "navigate":
+            onNavigate(step.action.view);
+            break;
+          case "highlight":
+            highlightElement(step.action.target);
+            break;
+          case "open_new_product_form":
+            onOpenNewProductForm();
+            break;
+        }
+        await sleep(350);
+      }
     }
   }
 
@@ -6899,6 +7016,30 @@ function OneHelpBubble() {
                     }`}
                   >
                     {m.content}
+                    {m.confirmation && (
+                      <div className="mt-2.5 pt-2.5 border-t border-white/10">
+                        {!m.confirmation.resolved ? (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleConfirm(true)}
+                              className="flex-1 bg-gradient-to-r from-violet-500 to-blue-500 text-white text-xs font-medium py-2 rounded-lg transition"
+                            >
+                              Ha
+                            </button>
+                            <button
+                              onClick={() => handleConfirm(false)}
+                              className="flex-1 bg-white/5 border border-white/10 text-slate-300 text-xs font-medium py-2 rounded-lg hover:bg-white/10 transition"
+                            >
+                              Yo'q
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-500">
+                            {m.confirmation.resolved === "yes" ? "✓ Tasdiqlandi" : "✗ Bekor qilindi"}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))
@@ -7845,7 +7986,16 @@ function AppShell() {
       {/* Hidden during the first-time guided tour — its own spotlight
           overlay already owns the screen then, and a second floating
           element would just compete with it visually. */}
-      {!onboardingActive && <OneHelpBubble />}
+      {!onboardingActive && (
+        <OneHelpBubble
+          onNavigate={(view) => setNavView(view)}
+          onOpenNewProductForm={() => {
+            setEditingProduct(null);
+            setNavView("inventory");
+            setProductFormOpen(true);
+          }}
+        />
+      )}
     </div>
   );
 }

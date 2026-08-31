@@ -3,7 +3,7 @@ import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, oneHelpMessagesTable } from "@workspace/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { generateFreeText } from "../ai/textProviders";
+import { generateText } from "../ai/textProviders";
 
 const router = Router();
 
@@ -20,39 +20,111 @@ async function getCurrentUserId(req: Parameters<typeof getAuth>[0]) {
   return user?.id ?? null;
 }
 
-// Phase 1 system prompt: OneHelp is a Q&A / guidance assistant only — it
-// does NOT control the site yet (that's a later phase, tool-calling +
-// visible on-screen actions). Explicitly told its own current limit so it
-// never claims to have clicked/created/published anything itself.
-const SYSTEM_PROMPT = `Siz OneHelp — OneOffice AI platformasining o'zi ichiga o'rnatilgan yordamchisisiz. Siz shu saytning pastki burchagida joylashgan chatda foydalanuvchi bilan gaplashasiz.
+// ---------------------------------------------------------------------------
+// Phase 2/3: OneHelp can now narrate AND drive the site — but only through
+// this small, explicit, validated action set. It does NOT hold a live
+// browser session or call real navigation/DOM APIs itself; instead it plans
+// the WHOLE sequence of {say, action} steps in one JSON response, which the
+// frontend then plays back one at a time (narration reveals, then the real
+// setNavView/highlight/etc. call actually fires) — a deliberate
+// plan-then-execute design rather than a live turn-by-turn agent loop,
+// because every one of these actions is a client-side visual effect with no
+// server-observable result to feed back into a "real" tool loop anyway.
+//
+// NAVIGATE_VIEWS and HIGHLIGHT_TARGETS are the model's entire vocabulary —
+// anything else it invents gets dropped (kept as narration-only) by the
+// validation pass below, never trusted blindly.
+// ---------------------------------------------------------------------------
 
-OneOffice AI — kichik sotuvchilar uchun butun boshqaruv tizimi: mahsulot yaratish (rasmlar, narx, xarakteristika), AI yordamida Telegram kanaliga post yozish va joylashtirish, "PRO Vitrina" (jamoat oldida ko'rinadigan onlayn do'kon, /store/nomi), buyurtmalarni qabul qilish va boshqarish, ko'rishlar/obunachilar statistikasi (kunlik/haftalik/oylik/yillik grafiklar), va Telegram integratsiyasi (bot orqali buyurtma bildirishnomalari, MTProto orqali shaxsiy kanalni ulash).
+const NAVIGATE_VIEWS = [
+  "dashboard",
+  "inventory",
+  "create",
+  "connectors",
+  "shopfront",
+  "orders",
+  "settings",
+  "profile",
+] as const;
 
-Vazifangiz: foydalanuvchiga savollariga aniq, qisqa, samimiy o'zbek tilida javob berish va saytdan qanday foydalanishni tushuntirish (masalan "mahsulot qanday qo'shaman", "vitrinam qayerda", "Telegram qanday ulanadi" kabi savollarga).
+// Mirrors the data-tour attributes already on real elements (see
+// TourOverlay/PRODUCT_TOUR_STEPS etc.) — reusing the exact same onboarding
+// spotlight mechanism instead of building a second one.
+const HIGHLIGHT_TARGETS = [
+  "product-name-input",
+  "product-price-input",
+  "product-save-button",
+  "post-pick-product",
+  "post-generate-button",
+  "button-approve",
+] as const;
 
-MUHIM CHEKLOV: hozircha siz faqat gaplasha olasiz — tugmalarni bosish, forma to'ldirish, sahifa ochish kabi amallarni siz uchun BAJAROLMAYSIZ (bu imkoniyat tez orada qo'shiladi). Agar foydalanuvchi sizdan biror amalni bajarishingizni so'rasa (masalan "mahsulot yarat", "postni joylashtir"), buni bajarolmasligingizni ochiq tan oling va o'rniga qanday qilishni oddiy gapda tushuntiring.
+type AgentAction =
+  | { type: "navigate"; view: (typeof NAVIGATE_VIEWS)[number] }
+  | { type: "highlight"; target: (typeof HIGHLIGHT_TARGETS)[number] }
+  | { type: "open_new_product_form" }
+  | { type: "request_confirmation"; question: string };
 
-MUHIM — JAVOB FORMATI: xuddi tirik odam yozgandek, oddiy, iliq va tabiiy yozing — do'stingizga yozayotgandek. QATʼIYAN ISHLATMANG: JSON, kavslar { }, markdown belgilari (** yulduzcha, # panjara, - chiziqcha), raqamlangan ro'yxat (1. 2. 3.), kod bloklari yoki har qanday texnik/dasturchi uslubidagi format. Qadamlarni tushuntirsangiz ham, buni oddiy bog'lovchi gaplar bilan yozing — masalan "Buning uchun chap menyudan Sozlamalar bo'limiga o'ting, keyin..." kabi, ro'yxat qilib emas. Javobingiz — sof, oddiy matn, hech qanday maxsus belgilarsiz.
+interface AgentStep {
+  say: string;
+  action?: AgentAction;
+}
 
-Javoblaringiz qisqa bo'lsin — 2-4 jumla.`;
+const SYSTEM_PROMPT = `Siz OneHelp — OneOffice AI platformasining o'zi ichiga o'rnatilgan yordamchisisiz, saytning pastki burchagidagi chatda ishlaysiz.
 
-// Defensive safety net: even with the instruction above, a smaller model
-// occasionally still wraps its answer in something JSON-shaped (seen in
-// testing: `{"reply": "..."}`) instead of plain text. If that happens,
-// unwrap it rather than showing the raw JSON to the person.
-function stripAccidentalJsonWrapper(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return text;
+OneOffice AI — kichik sotuvchilar uchun boshqaruv tizimi: mahsulot yaratish (rasmlar, narx, xarakteristika), AI yordamida Telegram kanaliga post yozish va joylashtirish, "PRO Vitrina" (ommaviy onlayn do'kon, /store/nomi), buyurtmalarni boshqarish, statistika (kunlik/haftalik/oylik/yillik grafiklar), va Telegram integratsiyasi.
+
+ENDI SIZDA SAYTNI BOSHQARISH IMKONIYATI BOR — quyidagi amallarni bajarishingiz mumkin (foydalanuvchi buni ko'radi, xuddi o'zi bosgandek sayt harakatlanadi):
+- navigate: saytning bo'limiga o'tish. view qiymati faqat shulardan biri bo'lishi shart: "dashboard" (bosh sahifa), "inventory" (mahsulotlar), "create" (post yaratish), "connectors" (ulanishlar: Telegram va h.k.), "shopfront" (vitrina sozlamalari), "orders" (buyurtmalar), "settings" (sozlamalar), "profile" (profil).
+- highlight: ekrandagi aniq elementni yoritib ko'rsatish. target qiymati faqat shulardan biri: "product-name-input", "product-price-input", "product-save-button", "post-pick-product", "post-generate-button", "button-approve".
+- open_new_product_form: yangi mahsulot qo'shish formasini ochish.
+- request_confirmation: OG'IR yoki qaytarib bo'lmaydigan amal oldidan (masalan postni joylashtirish, mahsulotni o'chirish) foydalanuvchidan ANIQ ruxsat so'rash — question maydoniga aniq savol yozing. Bu amaldan keyingi qadamlar ruxsat kelmaguncha bajarilmaydi, shuning uchun uni har doim navbatning OXIRIGA qo'ying.
+
+MUHIM CHEKLOVLAR:
+- Faqat yuqoridagi ro'yxatdagi view/target qiymatlaridan foydalaning — boshqasini o'ylab topmang.
+- Hozircha forma maydonlarini o'zingiz to'ldira olmaysiz (bu keyingi versiyada qo'shiladi) — buni so'rashsa, ochiq tan oling.
+- Og'ir/qaytarib bo'lmaydigan amalni (post joylash, o'chirish) hech qachon so'ramasdan bajarmang — avval request_confirmation ishlating.
+- Agar foydalanuvchi shunchaki savol bersa (amal talab qilinmasa), faqat bitta "say" qadami bilan javob bering, action qo'ymang.
+
+JAVOB FORMATI (JUDA MUHIM): faqat quyidagi JSON obyektini qaytaring, boshqa hech narsa yozmang:
+{"steps": [{"say": "gap matni", "action": null yoki yuqoridagi amallardan biri}, ...]}
+
+"say" matni — xuddi tirik odam yozgandek, oddiy, iliq, samimiy o'zbek tilida, QISQA (1-2 jumla har bir qadamda). "say" ichida QATʼIYAN ishlatmang: markdown belgilari (** # -), raqamlangan ro'yxat, kod bloklari — faqat sof gap.`;
+
+function isValidAction(action: unknown): action is AgentAction {
+  if (!action || typeof action !== "object") return false;
+  const a = action as Record<string, unknown>;
+  if (a.type === "navigate") return NAVIGATE_VIEWS.includes(a.view as never);
+  if (a.type === "highlight") return HIGHLIGHT_TARGETS.includes(a.target as never);
+  if (a.type === "open_new_product_form") return true;
+  if (a.type === "request_confirmation") return typeof a.question === "string" && a.question.trim().length > 0;
+  return false;
+}
+
+// The model is asked for JSON but, same lesson as the earlier plain-chat
+// bug, still needs defending against: missing/malformed fields, invented
+// action types/targets, or (rarely) not-quite-valid JSON. Never trust it
+// blindly — always fall back to a plain-text single step so the person
+// still gets SOME answer instead of a broken chat turn.
+function parseAgentPlan(raw: string, fallbackText: string): AgentStep[] {
   try {
-    const parsed = JSON.parse(trimmed);
-    if (typeof parsed === "object" && parsed !== null) {
-      const candidate = parsed.reply ?? parsed.content ?? parsed.message ?? parsed.text;
-      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-    }
+    const parsed = JSON.parse(raw.trim());
+    const steps = Array.isArray(parsed?.steps) ? parsed.steps : null;
+    if (!steps || steps.length === 0) throw new Error("no steps");
+    const cleaned: AgentStep[] = steps
+      .map((s: unknown): AgentStep | null => {
+        if (!s || typeof s !== "object") return null;
+        const say = String((s as Record<string, unknown>).say ?? "").trim();
+        if (!say) return null;
+        const action = (s as Record<string, unknown>).action;
+        return { say, action: isValidAction(action) ? action : undefined };
+      })
+      .filter((s: AgentStep | null): s is AgentStep => s !== null);
+    if (cleaned.length === 0) throw new Error("no valid steps after cleaning");
+    return cleaned;
   } catch {
-    // not actually JSON — leave as-is
+    return [{ say: fallbackText || "Kechirasiz, hozir javob berolmayapman — birozdan keyin qayta urinib ko'ring." }];
   }
-  return text;
 }
 
 router.get("/onehelp/messages", async (req, res) => {
@@ -110,21 +182,34 @@ router.post("/onehelp/chat", async (req, res) => {
     .map((m) => `${m.role === "user" ? "Foydalanuvchi" : "OneHelp"}: ${m.content}`)
     .join("\n");
 
-  let reply: string;
+  let steps: AgentStep[];
   try {
-    reply = await generateFreeText(SYSTEM_PROMPT, `Suhbat tarixi:\n${history}\n\nOneHelp javobi:`);
-    reply = stripAccidentalJsonWrapper(reply.trim());
+    const raw = await generateText(SYSTEM_PROMPT, `Suhbat tarixi:\n${history}\n\nOneHelp javobi (faqat JSON):`);
+    steps = parseAgentPlan(raw, "");
   } catch (err) {
     console.error("[onehelp] generateText failed", err);
-    reply = "Kechirasiz, hozir javob berolmayapman — birozdan keyin qayta urinib ko'ring.";
+    steps = [{ say: "Kechirasiz, hozir javob berolmayapman — birozdan keyin qayta urinib ko'ring." }];
   }
+
+  // Stored history is plain text (the concatenation of every "say") — the
+  // actions themselves aren't replayed on a later reload, only shown live
+  // the moment they're generated. That's an intentional scope cut for this
+  // phase, not an oversight: replaying past actions on reload risks
+  // re-navigating someone away from whatever they're doing right now.
+  const contentForHistory = steps.map((s) => s.say).join("\n\n");
 
   const [saved] = await db
     .insert(oneHelpMessagesTable)
-    .values({ userId, role: "assistant", content: reply })
+    .values({ userId, role: "assistant", content: contentForHistory })
     .returning();
 
-  res.json({ id: saved.id, role: "assistant", content: reply, createdAt: saved.createdAt.toISOString() });
+  res.json({
+    id: saved.id,
+    role: "assistant",
+    content: contentForHistory,
+    createdAt: saved.createdAt.toISOString(),
+    steps,
+  });
 });
 
 export default router;
