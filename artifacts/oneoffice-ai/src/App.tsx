@@ -6892,6 +6892,11 @@ function OneHelpBubble({
     pointerId: number;
   } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Tracks the highest real (server-assigned) message id we've seen, so the
+  // polling effect below can tell "a background task just wrote a new
+  // progress message" apart from messages we already know about — see its
+  // own comment for why polling is the mechanism at all.
+  const maxSeenIdRef = useRef(0);
 
   useEffect(() => {
     function onResize() {
@@ -6907,6 +6912,36 @@ function OneHelpBubble({
     }
   }, [messages, open]);
 
+  // Background tasks (run_task_now, or a scheduled task firing while the
+  // person happens to have the chat open) write their progress straight
+  // into one_help_messages as they go (see ai/autoPost.ts's report()) —
+  // there's no live connection to push them over, so this chat picks them
+  // up the same way Claude's own tool-call steps would read to someone
+  // watching, just via a light poll instead of a stream. Only runs while
+  // the panel is actually open, and only touches messages with an id past
+  // the highest one this tab already knows about.
+  useEffect(() => {
+    if (!open) return;
+    const interval = setInterval(async () => {
+      try {
+        const token = await firebaseUser?.getIdToken();
+        const res = await fetch(apiUrl("/api/onehelp/messages"), {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return;
+        const fresh: OneHelpMessage[] = await res.json();
+        const newer = fresh.filter((m) => m.id > maxSeenIdRef.current);
+        if (newer.length > 0) {
+          maxSeenIdRef.current = Math.max(maxSeenIdRef.current, ...newer.map((m) => m.id));
+          setMessages((prev) => [...prev, ...newer]);
+        }
+      } catch {
+        // best-effort — next poll tries again
+      }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [open, firebaseUser]);
+
   async function loadMessages() {
     if (messagesLoaded) return;
     try {
@@ -6915,7 +6950,11 @@ function OneHelpBubble({
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.ok) {
-        setMessages(await res.json());
+        const loaded: OneHelpMessage[] = await res.json();
+        setMessages(loaded);
+        if (loaded.length > 0) {
+          maxSeenIdRef.current = Math.max(...loaded.map((m) => m.id));
+        }
       }
     } catch {
       // best-effort — chat still works for the current session either way
@@ -6990,6 +7029,9 @@ function OneHelpBubble({
       });
       if (res.ok) {
         const data = await res.json();
+        if (typeof data.id === "number") {
+          maxSeenIdRef.current = Math.max(maxSeenIdRef.current, data.id);
+        }
         const steps: OneHelpStep[] =
           Array.isArray(data.steps) && data.steps.length > 0
             ? data.steps
@@ -7176,8 +7218,19 @@ function OneHelpBubble({
             )}
             {sending && (
               <div className="flex justify-start">
-                <div className="bg-white/5 border border-white/10 rounded-2xl px-3.5 py-2.5">
-                  <Loader2 className="h-3.5 w-3.5 text-slate-400 animate-spin" />
+                <div className="bg-white/5 border border-white/10 rounded-2xl px-4 py-3 flex items-center gap-1.5">
+                  <span
+                    className="onehelp-typing-dot h-2 w-2 rounded-full bg-violet-400"
+                    style={{ animationDelay: "0s" }}
+                  />
+                  <span
+                    className="onehelp-typing-dot h-2 w-2 rounded-full bg-violet-400"
+                    style={{ animationDelay: "0.15s" }}
+                  />
+                  <span
+                    className="onehelp-typing-dot h-2 w-2 rounded-full bg-violet-400"
+                    style={{ animationDelay: "0.3s" }}
+                  />
                 </div>
               </div>
             )}

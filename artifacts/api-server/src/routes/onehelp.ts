@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
-import { usersTable, oneHelpMessagesTable, oneHelpTasksTable } from "@workspace/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { usersTable, oneHelpMessagesTable, oneHelpTasksTable, productsTable } from "@workspace/db/schema";
+import { eq, desc, and } from "drizzle-orm";
 import { generateText } from "../ai/textProviders";
 import { runPublishRandomProductPost } from "../ai/autoPost";
 
@@ -24,20 +24,14 @@ async function getCurrentUserId(req: Parameters<typeof getAuth>[0]) {
 // ---------------------------------------------------------------------------
 // OneHelp can now narrate AND drive the site — through a small, explicit,
 // validated action set. It plans the WHOLE sequence of {say, action} steps
-// in one JSON response (generateText's JSON mode — the correct use case for
-// it here). Two kinds of action:
+// in one JSON response (generateText's JSON mode). Two kinds of action:
 //   - CLIENT actions (navigate, highlight, open_new_product_form,
-//     request_confirmation) are visual effects with no server-observable
-//     result — the frontend plays them back step by step, narration then
-//     the real effect.
+//     request_confirmation) are visual effects — the frontend plays them
+//     back step by step.
 //   - SERVER actions (schedule_task, run_task_now) are real backend writes
-//     (a DB row, an actual Telegram publish) with nothing for a browser to
-//     "play back" — these execute HERE, synchronously/fire-and-forget,
-//     the moment the plan is generated, before the response is even sent.
-//     Per explicit instruction, none of this asks for confirmation first —
-//     "vaqtni tejash" is the whole point, so request_confirmation exists in
-//     the vocabulary but the prompt no longer tells the model to use it by
-//     default the way an earlier version did.
+//     — these execute HERE, synchronously/fire-and-forget, before the
+//     response is even sent. No confirmation gate by default (explicit
+//     instruction: "vaqtni tejash" is the whole point).
 // ---------------------------------------------------------------------------
 
 const NAVIGATE_VIEWS = [
@@ -51,9 +45,6 @@ const NAVIGATE_VIEWS = [
   "profile",
 ] as const;
 
-// Mirrors the data-tour attributes already on real elements (see
-// TourOverlay/PRODUCT_TOUR_STEPS etc.) — reusing the exact same onboarding
-// spotlight mechanism instead of building a second one.
 const HIGHLIGHT_TARGETS = [
   "product-name-input",
   "product-price-input",
@@ -63,8 +54,6 @@ const HIGHLIGHT_TARGETS = [
   "button-approve",
 ] as const;
 
-// The whole security boundary of what a background task can ever do — see
-// schema/oneHelpTasks.ts's own comment on this same list.
 const TASK_ACTION_TYPES = ["publish_random_product_post"] as const;
 
 type ClientAction =
@@ -79,10 +68,10 @@ type ServerAction =
       description: string;
       actionType: (typeof TASK_ACTION_TYPES)[number];
       kind: "once" | "daily";
-      // "HH:mm" for kind="daily"; an ISO datetime string for kind="once".
-      time: string;
+      time: string; // "HH:mm" for daily; ISO datetime for once
+      productName?: string;
     }
-  | { type: "run_task_now"; actionType: (typeof TASK_ACTION_TYPES)[number] };
+  | { type: "run_task_now"; actionType: (typeof TASK_ACTION_TYPES)[number]; productName?: string };
 
 type AgentAction = ClientAction | ServerAction;
 
@@ -92,38 +81,39 @@ interface AgentStep {
 }
 
 function nowInTashkent(): string {
-  // Asia/Tashkent is UTC+5 year-round (no DST) — used both here (so the
-  // model knows "today"/"hozir" without guessing the server's own TZ) and
-  // in taskScheduler.ts's daily-time math.
-  return new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().replace("Z", " (Toshkent vaqti)");
+  return new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().replace("Z", " (Toshkent)");
 }
 
-const SYSTEM_PROMPT = `Siz OneHelp — OneOffice AI platformasining o'zi ichiga o'rnatilgan yordamchisisiz, saytning pastki burchagidagi chatda ishlaysiz.
+// Kept intentionally compact — a bloated prompt plus conversation history
+// was blowing past Groq's per-request size limit (413 errors observed in
+// production), which meant every single turn silently fell through to a
+// slower fallback provider. Every sentence here earns its place.
+function buildSystemPrompt(productNames: string[]): string {
+  const productList = productNames.length
+    ? `Faol mahsulotlar: ${productNames.slice(0, 25).join(", ")}.`
+    : "Hozircha faol mahsulot yo'q.";
 
-Hozirgi sana va vaqt: ${nowInTashkent()}. Foydalanuvchi "bugun", "ertaga", "hozir" kabi so'zlarni ishlatsa, shu vaqtga nisbatan hisoblang.
+  return `Siz OneHelp — OneOffice AI saytining pastki burchagidagi yordamchi chatisiz.
 
-OneOffice AI — kichik sotuvchilar uchun boshqaruv tizimi: mahsulot yaratish, AI yordamida Telegram kanaliga post yozish va joylashtirish, "PRO Vitrina" (ommaviy onlayn do'kon), buyurtmalarni boshqarish, statistika, va Telegram integratsiyasi.
+Vaqt: ${nowInTashkent()}. "bugun/ertaga/hozir" shu vaqtga nisbatan.
 
-SIZDA SAYTNI BOSHQARISH VA FON VAZIFALARINI BAJARISH IMKONIYATI BOR. Foydalanuvchi nima desa, ANIQ o'shani qiling — ruxsat so'ramasdan, ikkilanmasdan bajaring. Foydalanuvchi maqsadi ikki xil bo'lishi mumkin: (1) saytni tushunish/o'rganish — bunda nima qilayotganingizni ko'rsatib, sekin-asta bajaring; (2) ishni sizga topshirib, o'zi band bo'lish — bunda vazifani fon rejimida (background) bajaring va faqat natijani xabar qiling. Foydalanuvchining gapidan qaysi holat ekanini tushunib oling.
+Sayt: mahsulot yaratish, Telegram kanaliga post yozish/joylashtirish, PRO Vitrina (onlayn do'kon), buyurtmalar, statistika. ${productList}
 
-MAVJUD AMALLAR:
-- navigate: {"type":"navigate","view":"..."} — saytning bo'limiga o'tish. view: "dashboard", "inventory", "create", "connectors", "shopfront", "orders", "settings", "profile" — shulardan biri.
-- highlight: {"type":"highlight","target":"..."} — ekrandagi elementni yoritish. target: "product-name-input", "product-price-input", "product-save-button", "post-pick-product", "post-generate-button", "button-approve" — shulardan biri.
-- open_new_product_form: {"type":"open_new_product_form"} — yangi mahsulot formasini ochish.
-- run_task_now: {"type":"run_task_now","actionType":"publish_random_product_post"} — HOZIR bitta tasodifiy faol mahsulot haqida post tayyorlab, ulangan Telegram kanalga DARHOL joylashtirish (fon rejimida, natija keyin chatda xabar qilinadi).
-- schedule_task: {"type":"schedule_task","description":"qisqa tavsif","actionType":"publish_random_product_post","kind":"daily" yoki "once","time":"HH:mm" (daily uchun, Toshkent vaqti) yoki to'liq ISO sana-vaqt (once uchun)} — takrorlanuvchi yoki bir martalik vazifani REJALASHTIRISH. Masalan "har kuni soat 20:00 da post qo'y" -> kind:"daily", time:"20:00". Vazifa fon rejimida, hatto foydalanuvchi saytda bo'lmasa ham, aynan belgilangan vaqtda ishga tushadi.
-- request_confirmation: {"type":"request_confirmation","question":"..."} — juda kam hollarda, faqat foydalanuvchi ANIQ so'ramagan, lekin oqibati katta bo'lgan noaniq vaziyatda ishlating. Oddiy so'rovlar uchun ISHLATMANG — to'g'ridan-to'g'ri bajaring.
+QOIDA: foydalanuvchi nima desa — ANIQ o'shani, ruxsat so'ramasdan, darhol bajaring. Agar maqsadi o'rganish bo'lsa — sekin, ko'rsatib bajaring. Agar ishni sizga topshirsa — fon rejimida bajarib, natijani xabar qiling.
 
-MUHIM CHEKLOVLAR:
-- Faqat yuqoridagi ro'yxatlardagi qiymatlardan foydalaning — boshqasini o'ylab topmang.
-- Hozircha forma maydonlarini o'zingiz to'ldira olmaysiz (bu keyingi versiyada qo'shiladi) — buni so'rashsa, ochiq tan oling.
-- Faqat "publish_random_product_post" haqiqiy avtomatlashtirilgan amal — boshqa amal turlarini o'ylab topmang, agar so'ralsa buni hali qila olmasligingizni ayting.
-- Agar foydalanuvchi shunchaki savol bersa (amal talab qilinmasa), faqat bitta "say" qadami bilan javob bering, action qo'ymang.
+AMALLAR (action maydoniga aynan shu JSON obyektlardan birini qo'ying, aks holda null):
+{"type":"navigate","view":"dashboard|inventory|create|connectors|shopfront|orders|settings|profile"}
+{"type":"highlight","target":"product-name-input|product-price-input|product-save-button|post-pick-product|post-generate-button|button-approve"}
+{"type":"open_new_product_form"}
+{"type":"run_task_now","actionType":"publish_random_product_post","productName":"(ixtiyoriy — aniq mahsulot nomi, bo'lmasa tasodifiy)"}
+{"type":"schedule_task","description":"qisqa tavsif","actionType":"publish_random_product_post","kind":"daily|once","time":"HH:mm (daily) yoki ISO sana (once)","productName":"(ixtiyoriy)"}
+{"type":"request_confirmation","question":"..."} — FAQAT juda noaniq/xavfli holatda, aks holda ishlatmang.
 
-JAVOB FORMATI (JUDA MUHIM): faqat quyidagi JSON obyektini qaytaring, boshqa hech narsa yozmang:
-{"steps": [{"say": "gap matni", "action": null yoki yuqoridagi amallardan biri}, ...]}
+CHEKLOV: faqat shu qiymatlardan foydalaning, o'ylab topmang. Forma maydonlarini o'zingiz to'ldira olmaysiz — so'rashsa aytib qo'ying. Faqat "publish_random_product_post" haqiqiy amal.
 
-"say" matni — xuddi tirik odam yozgandek, oddiy, iliq, samimiy o'zbek tilida, QISQA (1-2 jumla har bir qadamda). "say" ichida QATʼIYAN ishlatmang: markdown belgilari (** # -), raqamlangan ro'yxat, kod bloklari — faqat sof gap.`;
+JAVOB — FAQAT shu JSON, boshqa hech narsa yo'q:
+{"steps":[{"say":"qisqa, jonli, samimiy o'zbekcha gap (markdown/ro'yxat/kod ISHLATMANG)","action":null yoki yuqoridagilardan biri}]}`;
+}
 
 function isClientAction(action: Record<string, unknown>): action is ClientAction {
   if (action.type === "navigate") return NAVIGATE_VIEWS.includes(action.view as never);
@@ -148,11 +138,10 @@ function isServerAction(action: Record<string, unknown>): action is ServerAction
   return false;
 }
 
-// The model is asked for JSON but, same lesson as the earlier plain-chat
-// bug, still needs defending against: missing/malformed fields, invented
-// action types/targets, or (rarely) not-quite-valid JSON. Never trust it
-// blindly — always fall back to a plain-text single step so the person
-// still gets SOME answer instead of a broken chat turn.
+// The model is asked for JSON but still needs defending against:
+// missing/malformed fields, invented action types/targets, or (rarely)
+// not-quite-valid JSON. Never trust it blindly — always fall back to a
+// plain-text single step so the person still gets SOME answer.
 function parseAgentPlan(raw: string): AgentStep[] {
   try {
     const parsed = JSON.parse(raw.trim());
@@ -177,17 +166,13 @@ function parseAgentPlan(raw: string): AgentStep[] {
   }
 }
 
-// Executes any SERVER actions in the plan right now (before responding),
-// and strips them out of what's sent to the frontend — there's nothing for
-// a browser to play back for these, only the "say" narration stands alone.
 async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]): Promise<AgentStep[]> {
   const result: AgentStep[] = [];
   for (const step of steps) {
     if (step.action?.type === "schedule_task") {
       const a = step.action;
       try {
-        const nextRunAt =
-          a.kind === "once" ? new Date(a.time) : computeNextDailyRunForNewTask(a.time);
+        const nextRunAt = a.kind === "once" ? new Date(a.time) : computeNextDailyRunForNewTask(a.time);
         await db.insert(oneHelpTasksTable).values({
           userId,
           description: a.description,
@@ -203,21 +188,16 @@ async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]):
       continue;
     }
     if (step.action?.type === "run_task_now") {
-      const actionType = step.action.actionType;
+      const { actionType, productName } = step.action;
       // Fire-and-forget — the chat reply shouldn't wait on a full
-      // research+publish round trip. The outcome gets logged as a new
-      // OneHelp message once it's done (same as a scheduled task), so the
-      // person sees it whether they're still watching or not.
+      // research+publish round trip. Progress + outcome get logged as new
+      // OneHelp messages as they happen (see ai/autoPost.ts's report()),
+      // which the frontend picks up via polling while the chat is open.
       void (async () => {
         try {
-          const outcome =
-            actionType === "publish_random_product_post"
-              ? await runPublishRandomProductPost(userId)
-              : { ok: false as const, error: "Noma'lum amal turi." };
-          const message = outcome.ok
-            ? `"${outcome.productName}" mahsuloti "${outcome.channelTitle}" kanaliga muvaffaqiyatli joylandi.`
-            : `Postni joylashda muammo chiqdi: ${outcome.error}`;
-          await db.insert(oneHelpMessagesTable).values({ userId, role: "assistant", content: message });
+          if (actionType === "publish_random_product_post") {
+            await runPublishRandomProductPost(userId, productName);
+          }
         } catch (err) {
           console.error("[onehelp] run_task_now failed", err);
         }
@@ -282,23 +262,39 @@ router.post("/onehelp/chat", async (req, res) => {
 
   await db.insert(oneHelpMessagesTable).values({ userId, role: "user", content: message });
 
-  // Recent history for context — folded into the user prompt as text
-  // since generateText() is single-turn (system + one user string, no
-  // messages array) across every provider it wraps.
+  // Recent history for context, kept deliberately small (last 8 turns,
+  // each truncated) — folded into the user prompt as text since
+  // generateText() is single-turn across every provider it wraps. An
+  // unbounded history (previously up to 20 full-length messages) was the
+  // main contributor to Groq's 413 "payload too large" errors seen in
+  // production, which silently pushed every request onto a slower
+  // fallback provider.
   const recent = await db
     .select({ role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content })
     .from(oneHelpMessagesTable)
     .where(eq(oneHelpMessagesTable.userId, userId))
     .orderBy(desc(oneHelpMessagesTable.createdAt))
-    .limit(20);
+    .limit(8);
   const history = recent
     .reverse()
-    .map((m) => `${m.role === "user" ? "Foydalanuvchi" : "OneHelp"}: ${m.content}`)
+    .map((m) => {
+      const truncated = m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content;
+      return `${m.role === "user" ? "U" : "AI"}: ${truncated}`;
+    })
     .join("\n");
+
+  const activeProducts = await db
+    .select({ name: productsTable.name })
+    .from(productsTable)
+    .where(and(eq(productsTable.userId, userId), eq(productsTable.status, "active")))
+    .limit(25);
 
   let steps: AgentStep[];
   try {
-    const raw = await generateText(SYSTEM_PROMPT, `Suhbat tarixi:\n${history}\n\nOneHelp javobi (faqat JSON):`);
+    const raw = await generateText(
+      buildSystemPrompt(activeProducts.map((p) => p.name)),
+      `Suhbat:\n${history}\n\nJavob (JSON):`,
+    );
     steps = parseAgentPlan(raw);
   } catch (err) {
     console.error("[onehelp] generateText failed", err);
@@ -307,11 +303,6 @@ router.post("/onehelp/chat", async (req, res) => {
 
   steps = await executeServerActionsAndStrip(userId, steps);
 
-  // Stored history is plain text (the concatenation of every "say") — the
-  // client actions themselves aren't replayed on a later reload, only
-  // shown live the moment they're generated. That's an intentional scope
-  // cut for this phase, not an oversight: replaying past actions on
-  // reload risks re-navigating someone away from whatever they're doing.
   const contentForHistory = steps.map((s) => s.say).join("\n\n");
 
   const [saved] = await db
