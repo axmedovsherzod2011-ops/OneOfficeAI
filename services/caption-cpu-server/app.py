@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
-MODEL_ID = os.getenv("MODEL_ID", "Qwen/Qwen2.5-0.5B-Instruct")
+MODEL_ID = os.getenv("MODEL_ID", "HuggingFaceTB/SmolLM2-135M-Instruct")
 
 app = FastAPI(title="OneOffice AI Product Caption CPU Server", version="1.0.0")
 
@@ -31,12 +31,7 @@ def get_generator():
     if _generator is None:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
-        _generator = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            device=-1,
-        )
+        _generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
     return _generator
 
 
@@ -46,7 +41,7 @@ def build_prompt(request: CaptionRequest) -> str:
     return f"""You are Product Caption AI for OneOffice AI.
 Your ONLY task is to write one professional, concise, sales-oriented product caption.
 Use ONLY the supplied facts. Never invent specifications, guarantees, discounts, delivery terms, certifications, reviews, availability, or other facts.
-If information is missing, omit it. Do not browse the web. Do not give marketing strategy. Do not use headings such as 'Marketing strategy'.
+If information is missing, omit it. Do not browse the web. Do not give marketing strategy.
 Write naturally in {request.language}.
 
 Product name: {p.name}
@@ -68,9 +63,8 @@ def health() -> dict[str, str]:
 def caption(request: CaptionRequest) -> CaptionResponse:
     try:
         generator = get_generator()
-        prompt = build_prompt(request)
         result: list[dict[str, Any]] = generator(
-            prompt,
+            build_prompt(request),
             max_new_tokens=220,
             do_sample=True,
             temperature=0.7,
