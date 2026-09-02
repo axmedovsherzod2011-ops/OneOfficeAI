@@ -16,6 +16,7 @@ import statsDashboardRouter from "./statsDashboard";
 import ordersRouter from "./orders";
 import onehelpRouter from "./onehelp";
 import externalAgentRouter from "./externalAgent";
+import captionRouter from "./caption";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use(statsDashboardRouter);
 router.use(ordersRouter);
 router.use(onehelpRouter);
 router.use(externalAgentRouter);
+router.use(captionRouter);
 
 export default router;
