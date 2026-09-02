@@ -13,6 +13,17 @@ import {
 } from "../ai/productActions";
 
 const router = Router();
+const ONEHELP_AI_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`OneHelp AI timeout after ${ms}ms`)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
 
 async function getCurrentUserId(req: Parameters<typeof getAuth>[0]) {
   const { userId: firebaseUid } = getAuth(req);
@@ -27,42 +38,12 @@ async function getCurrentUserId(req: Parameters<typeof getAuth>[0]) {
   return user?.id ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// OneHelp can narrate AND drive the site — through a validated action set —
-// AND now sees a real snapshot of the person's own data every turn (see
-// ai/businessContext.ts), so it can answer real questions ("nechta
-// buyurtmam bor") and target real things by name ("X mahsulotini Y
-// kanaliga post qil") instead of guessing or falling back to "random".
-//
-//   - CLIENT actions (navigate, highlight, open_new_product_form,
-//     request_confirmation) are visual effects the frontend plays back.
-//   - SERVER actions (schedule_task, run_task_now, create_product,
-//     update_product, delete_product) are real backend writes — executed
-//     HERE, synchronously/fire-and-forget, before the response is sent.
-//     No confirmation gate by default, except delete (destructive + a
-//     fuzzy name-match choosing the wrong item would be costly) — the
-//     prompt recommends request_confirmation specifically for delete,
-//     everything else proceeds immediately per explicit instruction.
-// ---------------------------------------------------------------------------
-
 const NAVIGATE_VIEWS = [
-  "dashboard",
-  "inventory",
-  "create",
-  "connectors",
-  "shopfront",
-  "orders",
-  "settings",
-  "profile",
+  "dashboard", "inventory", "create", "connectors", "shopfront", "orders", "settings", "profile",
 ] as const;
 
 const HIGHLIGHT_TARGETS = [
-  "product-name-input",
-  "product-price-input",
-  "product-save-button",
-  "post-pick-product",
-  "post-generate-button",
-  "button-approve",
+  "product-name-input", "product-price-input", "product-save-button", "post-pick-product", "post-generate-button", "button-approve",
 ] as const;
 
 type ClientAction =
@@ -72,55 +53,19 @@ type ClientAction =
   | { type: "request_confirmation"; question: string };
 
 type ServerAction =
-  | {
-      type: "schedule_task";
-      description: string;
-      actionType: "publish_random_product_post";
-      kind: "once" | "daily";
-      time: string; // "HH:mm" for daily; ISO datetime for once
-      productName?: string;
-      channelName?: string;
-    }
-  | {
-      type: "run_task_now";
-      actionType: "publish_random_product_post";
-      productName?: string;
-      channelName?: string;
-    }
-  | {
-      type: "create_product";
-      name: string;
-      category?: string;
-      sellPrice?: string;
-      costPrice?: string;
-      description?: string;
-      active?: boolean;
-    }
-  | {
-      type: "update_product";
-      productName: string;
-      sellPrice?: string;
-      costPrice?: string;
-      description?: string;
-      category?: string;
-      active?: boolean;
-    }
+  | { type: "schedule_task"; description: string; actionType: "publish_random_product_post"; kind: "once" | "daily"; time: string; productName?: string; channelName?: string }
+  | { type: "run_task_now"; actionType: "publish_random_product_post"; productName?: string; channelName?: string }
+  | { type: "create_product"; name: string; category?: string; sellPrice?: string; costPrice?: string; description?: string; active?: boolean }
+  | { type: "update_product"; productName: string; sellPrice?: string; costPrice?: string; description?: string; category?: string; active?: boolean }
   | { type: "delete_product"; productName: string };
 
 type AgentAction = ClientAction | ServerAction;
-
-interface AgentStep {
-  say: string;
-  action?: AgentAction;
-}
+interface AgentStep { say: string; action?: AgentAction; }
 
 function nowInTashkent(): string {
   return new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().replace("Z", " (Toshkent)");
 }
 
-// Kept compact — history + this snapshot already add real size to every
-// prompt, and an earlier bloated version of this was directly responsible
-// for Groq 413 "payload too large" errors in production.
 function buildSystemPrompt(snapshot: string): string {
   return `Siz OneHelp — OneOffice AI saytining pastki burchagidagi yordamchi chatisiz.
 
@@ -152,8 +97,7 @@ function isClientAction(action: Record<string, unknown>): action is ClientAction
   if (action.type === "navigate") return NAVIGATE_VIEWS.includes(action.view as never);
   if (action.type === "highlight") return HIGHLIGHT_TARGETS.includes(action.target as never);
   if (action.type === "open_new_product_form") return true;
-  if (action.type === "request_confirmation")
-    return typeof action.question === "string" && action.question.trim().length > 0;
+  if (action.type === "request_confirmation") return typeof action.question === "string" && action.question.trim().length > 0;
   return false;
 }
 
@@ -167,17 +111,11 @@ function isServerAction(action: Record<string, unknown>): action is ServerAction
     return false;
   }
   if (action.type === "create_product") return typeof action.name === "string" && action.name.trim().length > 0;
-  if (action.type === "update_product")
-    return typeof action.productName === "string" && action.productName.trim().length > 0;
-  if (action.type === "delete_product")
-    return typeof action.productName === "string" && action.productName.trim().length > 0;
+  if (action.type === "update_product") return typeof action.productName === "string" && action.productName.trim().length > 0;
+  if (action.type === "delete_product") return typeof action.productName === "string" && action.productName.trim().length > 0;
   return false;
 }
 
-// The model is asked for JSON but still needs defending against malformed
-// fields, invented action types, or invalid JSON — never trust it
-// blindly; a hallucinated action degrades to plain narration, never a
-// broken turn.
 function parseAgentPlan(raw: string): AgentStep[] {
   try {
     const parsed = JSON.parse(raw.trim());
@@ -205,80 +143,45 @@ function parseAgentPlan(raw: string): AgentStep[] {
 function computeNextDailyRunForNewTask(timeOfDay: string): Date {
   const [hh, mm] = timeOfDay.split(":").map(Number);
   const now = new Date();
-  const utcHour = hh - 5; // Asia/Tashkent, UTC+5, no DST
-  const candidate = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, mm, 0, 0),
-  );
+  const utcHour = hh - 5;
+  const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, mm, 0, 0));
   if (candidate.getTime() <= now.getTime()) candidate.setUTCDate(candidate.getUTCDate() + 1);
   return candidate;
 }
 
-// Executes any SERVER action right now (before responding) and strips it
-// from what's sent to the frontend — nothing for a browser to play back
-// for these, only the "say" narration stands alone. Immediate actions
-// (create/update/delete product) are awaited so the person's very next
-// message can already refer to the result; run_task_now is fire-and-
-// forget (see ai/autoPost.ts's own progress reporting for why).
 async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]): Promise<AgentStep[]> {
   const result: AgentStep[] = [];
   for (const step of steps) {
     const action = step.action;
-    if (!action) {
-      result.push(step);
-      continue;
-    }
-
+    if (!action) { result.push(step); continue; }
     if (action.type === "schedule_task") {
       try {
-        const nextRunAt =
-          action.kind === "once" ? new Date(action.time) : computeNextDailyRunForNewTask(action.time);
+        const nextRunAt = action.kind === "once" ? new Date(action.time) : computeNextDailyRunForNewTask(action.time);
         await db.insert(oneHelpTasksTable).values({
-          userId,
-          description: action.description,
-          actionType: action.actionType,
-          kind: action.kind,
-          timeOfDay: action.kind === "daily" ? action.time : null,
-          nextRunAt,
+          userId, description: action.description, actionType: action.actionType, kind: action.kind,
+          timeOfDay: action.kind === "daily" ? action.time : null, nextRunAt,
         });
-      } catch (err) {
-        console.error("[onehelp] schedule_task failed", err);
-      }
-      result.push({ say: step.say });
-      continue;
+      } catch (err) { console.error("[onehelp] schedule_task failed", err); }
+      result.push({ say: step.say }); continue;
     }
-
     if (action.type === "run_task_now") {
       const { productName, channelName } = action;
-      void (async () => {
-        try {
-          await runPublishRandomProductPost(userId, productName, channelName);
-        } catch (err) {
-          console.error("[onehelp] run_task_now failed", err);
-        }
-      })();
-      result.push({ say: step.say });
-      continue;
+      void (async () => { try { await runPublishRandomProductPost(userId, productName, channelName); } catch (err) { console.error("[onehelp] run_task_now failed", err); } })();
+      result.push({ say: step.say }); continue;
     }
-
     if (action.type === "create_product") {
       const r = await createProductViaOneHelp(userId, action);
-      result.push({ say: r.ok ? step.say : `${step.say} (${r.error})` });
-      continue;
+      result.push({ say: r.ok ? step.say : `${step.say} (${r.error})` }); continue;
     }
-
     if (action.type === "update_product") {
       const { productName, ...changes } = action;
       const r = await updateProductViaOneHelp(userId, productName, changes);
-      result.push({ say: r.ok ? step.say : `${step.say} (${r.error})` });
-      continue;
+      result.push({ say: r.ok ? step.say : `${step.say} (${r.error})` }); continue;
     }
-
     if (action.type === "delete_product") {
       const r = await deleteProductViaOneHelp(userId, action.productName);
-      result.push({ say: r.ok ? step.say : `${step.say} (${r.error})` });
-      continue;
+      result.push({ say: r.ok ? step.say : `${step.say} (${r.error})` }); continue;
     }
-
     result.push(step);
   }
   return result;
@@ -286,88 +189,65 @@ async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]):
 
 router.get("/onehelp/messages", async (req, res) => {
   const userId = await getCurrentUserId(req);
-  if (!userId) {
-    res.status(401).json({ error: "Tizimga kirilmagan." });
-    return;
-  }
-
+  if (!userId) { res.status(401).json({ error: "Tizimga kirilmagan." }); return; }
   const rows = await db
-    .select({
-      id: oneHelpMessagesTable.id,
-      role: oneHelpMessagesTable.role,
-      content: oneHelpMessagesTable.content,
-      createdAt: oneHelpMessagesTable.createdAt,
-    })
-    .from(oneHelpMessagesTable)
-    .where(eq(oneHelpMessagesTable.userId, userId))
-    .orderBy(desc(oneHelpMessagesTable.createdAt))
-    .limit(100);
-
+    .select({ id: oneHelpMessagesTable.id, role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content, createdAt: oneHelpMessagesTable.createdAt })
+    .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId))
+    .orderBy(desc(oneHelpMessagesTable.createdAt)).limit(100);
   res.json(rows.reverse().map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })));
 });
 
 router.post("/onehelp/chat", async (req, res) => {
-  const userId = await getCurrentUserId(req);
-  if (!userId) {
-    res.status(401).json({ error: "Tizimga kirilmagan." });
-    return;
-  }
+  try {
+    const userId = await getCurrentUserId(req);
+    if (!userId) { res.status(401).json({ error: "Tizimga kirilmagan." }); return; }
 
-  const message = String((req.body as { message?: string })?.message ?? "").trim();
-  if (!message) {
-    res.status(400).json({ error: "Xabar bo'sh bo'lishi mumkin emas." });
-    return;
-  }
-  if (message.length > 2000) {
-    res.status(400).json({ error: "Xabar juda uzun." });
-    return;
-  }
+    const message = String((req.body as { message?: string })?.message ?? "").trim();
+    if (!message) { res.status(400).json({ error: "Xabar bo'sh bo'lishi mumkin emas." }); return; }
+    if (message.length > 2000) { res.status(400).json({ error: "Xabar juda uzun." }); return; }
 
-  await db.insert(oneHelpMessagesTable).values({ userId, role: "user", content: message });
+    await db.insert(oneHelpMessagesTable).values({ userId, role: "user", content: message });
 
-  // Recent history, deliberately small (last 8 turns, each truncated) —
-  // an unbounded history was the direct cause of Groq 413s previously.
-  const recent = await db
-    .select({ role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content })
-    .from(oneHelpMessagesTable)
-    .where(eq(oneHelpMessagesTable.userId, userId))
-    .orderBy(desc(oneHelpMessagesTable.createdAt))
-    .limit(8);
-  const history = recent
-    .reverse()
-    .map((m) => {
+    const recent = await db
+      .select({ role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content })
+      .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId))
+      .orderBy(desc(oneHelpMessagesTable.createdAt)).limit(8);
+    const history = recent.reverse().map((m) => {
       const truncated = m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content;
       return `${m.role === "user" ? "U" : "AI"}: ${truncated}`;
-    })
-    .join("\n");
+    }).join("\n");
 
-  const snapshot = await buildBusinessSnapshot(userId);
+    // Never let a slow stats query or AI provider leave the browser spinner forever.
+    const snapshot = await withTimeout(buildBusinessSnapshot(userId), ONEHELP_AI_TIMEOUT_MS);
 
-  let steps: AgentStep[];
-  try {
-    const raw = await generateText(buildSystemPrompt(snapshot), `Suhbat:\n${history}\n\nJavob (JSON):`);
-    steps = parseAgentPlan(raw);
+    let steps: AgentStep[];
+    try {
+      const raw = await withTimeout(
+        generateText(buildSystemPrompt(snapshot), `Suhbat:\n${history}\n\nJavob (JSON):`),
+        ONEHELP_AI_TIMEOUT_MS,
+      );
+      steps = parseAgentPlan(raw);
+    } catch (err) {
+      console.error("[onehelp] generateText failed", err);
+      steps = [{ say: "Kechirasiz, AI server hozir javobni vaqtida qaytara olmadi. Qayta urinib ko'ring." }];
+    }
+
+    try {
+      steps = await withTimeout(executeServerActionsAndStrip(userId, steps), ONEHELP_AI_TIMEOUT_MS);
+    } catch (err) {
+      console.error("[onehelp] action execution failed", err);
+      steps = steps.map((s) => ({ say: s.say }));
+    }
+
+    const contentForHistory = steps.map((s) => s.say).join("\n\n");
+    const [saved] = await db.insert(oneHelpMessagesTable)
+      .values({ userId, role: "assistant", content: contentForHistory }).returning();
+
+    res.json({ id: saved.id, role: "assistant", content: contentForHistory, createdAt: saved.createdAt.toISOString(), steps });
   } catch (err) {
-    console.error("[onehelp] generateText failed", err);
-    steps = [{ say: "Kechirasiz, hozir javob berolmayapman — birozdan keyin qayta urinib ko'ring." }];
+    console.error("[onehelp] request failed", err);
+    res.status(500).json({ error: "OneHelp serverda xatolik yuz berdi. Qayta urinib ko'ring." });
   }
-
-  steps = await executeServerActionsAndStrip(userId, steps);
-
-  const contentForHistory = steps.map((s) => s.say).join("\n\n");
-
-  const [saved] = await db
-    .insert(oneHelpMessagesTable)
-    .values({ userId, role: "assistant", content: contentForHistory })
-    .returning();
-
-  res.json({
-    id: saved.id,
-    role: "assistant",
-    content: contentForHistory,
-    createdAt: saved.createdAt.toISOString(),
-    steps,
-  });
 });
 
 export default router;
