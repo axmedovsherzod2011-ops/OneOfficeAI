@@ -68,12 +68,14 @@ async function getOrBuildPostText(
 }
 
 // The one action type ONE_HELP_TASK_ACTION_TYPES currently has —
-// productName omitted or not matching anything picks a random active
-// product; a name that DOES match (case-insensitive substring) posts that
-// exact one. Reports progress into the chat at every stage.
+// productName/channelName omitted or not matching anything falls back to
+// a random active product / the first connected channel; a name that DOES
+// match (case-insensitive substring) targets that exact one. Reports
+// progress into the chat at every stage.
 export async function runPublishRandomProductPost(
   userId: number,
   productName?: string,
+  channelName?: string,
 ): Promise<AutoPostResult> {
   await report(userId, "🔍 Mahsulot tanlanmoqda...");
 
@@ -97,11 +99,17 @@ export async function runPublishRandomProductPost(
 
   await report(userId, `✍️ "${product.name}" uchun post matni tayyorlanmoqda...`);
 
-  const [channel] = await db
+  const allChannels = await db
     .select()
     .from(telegramChannelsTable)
-    .where(and(eq(telegramChannelsTable.userId, userId), eq(telegramChannelsTable.isActive, true)))
-    .limit(1);
+    .where(and(eq(telegramChannelsTable.userId, userId), eq(telegramChannelsTable.isActive, true)));
+
+  let channel = allChannels[0];
+  if (channelName?.trim()) {
+    const needle = channelName.trim().toLowerCase();
+    const match = allChannels.find((c) => c.channelTitle.toLowerCase().includes(needle));
+    if (match) channel = match;
+  }
 
   if (!channel) {
     const err = "Ulangan Telegram kanal topilmadi.";
