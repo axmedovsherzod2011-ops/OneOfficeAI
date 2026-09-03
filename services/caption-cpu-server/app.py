@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -8,7 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 MODEL_ID = os.getenv("MODEL_ID", "HuggingFaceTB/SmolLM2-135M-Instruct")
 
-app = FastAPI(title="OneOffice AI CPU Server", version="1.2.0")
+app = FastAPI(title="OneOffice AI CPU Server", version="1.3.0")
 
 class Product(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -48,9 +49,13 @@ _generator = None
 def get_generator():
     global _generator
     if _generator is None:
+        print(f"[CPU AI] MODEL_LOAD_START model={MODEL_ID}", flush=True)
+        started = time.perf_counter()
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
         _generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+        elapsed = time.perf_counter() - started
+        print(f"[CPU AI] MODEL_LOAD_FINISH model={MODEL_ID} seconds={elapsed:.2f}", flush=True)
     return _generator
 
 
@@ -132,31 +137,53 @@ USER REQUEST:
     return request.user_prompt
 
 
+def log_start(endpoint: str) -> float:
+    started = time.perf_counter()
+    print(f"[CPU AI] {endpoint} START model={MODEL_ID}", flush=True)
+    return started
+
+
+def log_finish(endpoint: str, started: float, extra: str = "") -> None:
+    elapsed = time.perf_counter() - started
+    suffix = f" {extra}" if extra else ""
+    print(f"[CPU AI] {endpoint} FINISH seconds={elapsed:.2f}{suffix}", flush=True)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
+    print(f"[CPU AI] /health model={MODEL_ID}", flush=True)
     return {"status": "ok", "model": MODEL_ID}
 
 
 @app.post("/generate", response_model=GenerateResponse)
 def generic_generate(request: GenerateRequest) -> GenerateResponse:
+    started = log_start("/generate")
     try:
         text = generate(build_generic_prompt(request), request.max_new_tokens)
-        return GenerateResponse(text=text[:20000])
+        response = GenerateResponse(text=text[:20000])
+        log_finish("/generate", started, f"tokens={request.max_new_tokens}")
+        return response
     except Exception as exc:
+        print(f"[CPU AI] /generate ERROR type={type(exc).__name__} message={exc}", flush=True)
         raise HTTPException(status_code=503, detail="CPU text model is temporarily unavailable") from exc
 
 
 @app.post("/caption", response_model=CaptionResponse)
 def caption(request: CaptionRequest) -> CaptionResponse:
+    started = log_start("/caption")
     try:
         text = generate(build_caption_prompt(request), 220)
-        return CaptionResponse(caption=text[:5000])
+        response = CaptionResponse(caption=text[:5000])
+        log_finish("/caption", started, "tokens=220")
+        return response
     except Exception as exc:
+        print(f"[CPU AI] /caption ERROR type={type(exc).__name__} message={exc}", flush=True)
         raise HTTPException(status_code=503, detail="CPU caption model is temporarily unavailable") from exc
 
 
 @app.post("/enrich", response_model=EnrichResponse)
 def enrich(request: EnrichRequest) -> EnrichResponse:
+    started = log_start("/enrich")
     try:
         raw = generate(build_enrich_prompt(request), 320)
         cleaned = raw.strip()
@@ -171,6 +198,9 @@ def enrich(request: EnrichRequest) -> EnrichResponse:
         parsed = json.loads(cleaned[start:end + 1])
         if not isinstance(parsed, dict):
             raise ValueError("CPU model returned non-object JSON")
-        return EnrichResponse(enriched=parsed)
+        response = EnrichResponse(enriched=parsed)
+        log_finish("/enrich", started, "tokens=320")
+        return response
     except Exception as exc:
+        print(f"[CPU AI] /enrich ERROR type={type(exc).__name__} message={exc}", flush=True)
         raise HTTPException(status_code=503, detail="CPU post generation is temporarily unavailable") from exc
