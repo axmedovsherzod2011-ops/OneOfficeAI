@@ -8,7 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 MODEL_ID = os.getenv("MODEL_ID", "HuggingFaceTB/SmolLM2-135M-Instruct")
 
-app = FastAPI(title="OneOffice AI CPU Server", version="1.1.0")
+app = FastAPI(title="OneOffice AI CPU Server", version="1.2.0")
 
 class Product(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -33,6 +33,14 @@ class EnrichRequest(BaseModel):
 
 class EnrichResponse(BaseModel):
     enriched: dict[str, Any]
+
+class GenerateRequest(BaseModel):
+    system_prompt: str = Field(default="", max_length=12000)
+    user_prompt: str = Field(min_length=1, max_length=20000)
+    max_new_tokens: int = Field(default=320, ge=32, le=1024)
+
+class GenerateResponse(BaseModel):
+    text: str
 
 _generator = None
 
@@ -113,9 +121,29 @@ JSON keys and value types:
 """
 
 
+def build_generic_prompt(request: GenerateRequest) -> str:
+    if request.system_prompt:
+        return f"""{request.system_prompt}
+
+IMPORTANT: Follow the user request exactly. Return only the requested answer.
+
+USER REQUEST:
+{request.user_prompt}"""
+    return request.user_prompt
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "model": MODEL_ID}
+
+
+@app.post("/generate", response_model=GenerateResponse)
+def generic_generate(request: GenerateRequest) -> GenerateResponse:
+    try:
+        text = generate(build_generic_prompt(request), request.max_new_tokens)
+        return GenerateResponse(text=text[:20000])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="CPU text model is temporarily unavailable") from exc
 
 
 @app.post("/caption", response_model=CaptionResponse)
