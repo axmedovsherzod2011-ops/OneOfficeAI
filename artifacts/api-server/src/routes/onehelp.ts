@@ -3,7 +3,7 @@ import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, oneHelpMessagesTable, oneHelpTasksTable } from "@workspace/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { generateText } from "../ai/textProviders";
+import { generateOneHelpText } from "../ai/textProviders";
 import { runPublishRandomProductPost } from "../ai/autoPost";
 import { buildBusinessSnapshot } from "../ai/businessContext";
 import {
@@ -13,7 +13,7 @@ import {
 } from "../ai/productActions";
 
 const router = Router();
-const ONEHELP_AI_TIMEOUT_MS = 30_000;
+const ONEHELP_AI_TIMEOUT_MS = 180_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -217,19 +217,18 @@ router.post("/onehelp/chat", async (req, res) => {
       return `${m.role === "user" ? "U" : "AI"}: ${truncated}`;
     }).join("\n");
 
-    // Never let a slow stats query or AI provider leave the browser spinner forever.
     const snapshot = await withTimeout(buildBusinessSnapshot(userId), ONEHELP_AI_TIMEOUT_MS);
 
     let steps: AgentStep[];
     try {
       const raw = await withTimeout(
-        generateText(buildSystemPrompt(snapshot), `Suhbat:\n${history}\n\nJavob (JSON):`),
+        generateOneHelpText(buildSystemPrompt(snapshot), `Suhbat:\n${history}\n\nJavob (JSON):`),
         ONEHELP_AI_TIMEOUT_MS,
       );
       steps = parseAgentPlan(raw);
     } catch (err) {
-      console.error("[onehelp] generateText failed", err);
-      steps = [{ say: "Kechirasiz, AI server hozir javobni vaqtida qaytara olmadi. Qayta urinib ko'ring." }];
+      console.error("[onehelp] dedicated CPU generate failed", err);
+      steps = [{ say: "Kechirasiz, OneHelp AI server hozir javobni vaqtida qaytara olmadi. Qayta urinib ko'ring." }];
     }
 
     try {
