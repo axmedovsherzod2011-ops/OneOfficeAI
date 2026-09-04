@@ -2,7 +2,7 @@ import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, oneHelpMessagesTable, oneHelpTasksTable } from "@workspace/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, lt, and, not } from "drizzle-orm";
 import { generateOneHelpText } from "../ai/textProviders";
 import { runPublishRandomProductPost } from "../ai/autoPost";
 import { buildBusinessSnapshot } from "../ai/businessContext";
@@ -10,6 +10,8 @@ import { createProductViaOneHelp, updateProductViaOneHelp, deleteProductViaOneHe
 
 const router = Router();
 const ONEHELP_AI_TIMEOUT_MS = 180_000;
+const MAX_VISIBLE_HISTORY = 20;
+const MEMORY_PREFIX = "__ONEHELP_MEMORY__\n";
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -46,10 +48,13 @@ interface AgentStep { say: string; action?: AgentAction; }
 
 function nowInTashkent(): string { return new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().replace("Z", " (Toshkent)"); }
 
-function buildSystemPrompt(snapshot: string): string {
+function buildSystemPrompt(snapshot: string, memory: string): string {
   return `Siz OneHelp — OneOffice AI saytining pastki burchagidagi yordamchi chatisiz.
 
 Vaqt: ${nowInTashkent()}. "bugun/ertaga/hozir" shu vaqtga nisbatan.
+
+Uzoq muddatli suhbat xotirasi (oldingi chatlardan siqilgan mazmun):
+${memory || "Hozircha oldingi suhbat xotirasi yo'q."}
 
 Sizning haqiqiy ma'lumotlaringiz (savollarga shu asosda ANIQ javob bering):
 ${snapshot}
@@ -159,13 +164,79 @@ async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]):
   return result;
 }
 
+async function getOneHelpMemory(userId: number): Promise<string> {
+  const [row] = await db.select({ content: oneHelpMessagesTable.content })
+    .from(oneHelpMessagesTable)
+    .where(and(eq(oneHelpMessagesTable.userId, userId), eq(oneHelpMessagesTable.role, "assistant")))
+    .orderBy(desc(oneHelpMessagesTable.id))
+    .limit(100);
+  const candidates = await db.select({ content: oneHelpMessagesTable.content })
+    .from(oneHelpMessagesTable)
+    .where(eq(oneHelpMessagesTable.userId, userId))
+    .orderBy(desc(oneHelpMessagesTable.id))
+    .limit(100);
+  const memoryRow = candidates.find((r) => r.content.startsWith(MEMORY_PREFIX));
+  return memoryRow ? memoryRow.content.slice(MEMORY_PREFIX.length).trim() : "";
+}
+
+async function compactOneHelpHistory(userId: number): Promise<void> {
+  const rows = await db.select({ id: oneHelpMessagesTable.id, role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content })
+    .from(oneHelpMessagesTable)
+    .where(eq(oneHelpMessagesTable.userId, userId))
+    .orderBy(desc(oneHelpMessagesTable.id))
+    .limit(MAX_VISIBLE_HISTORY + 1);
+
+  const realRows = rows.filter((r) => !r.content.startsWith(MEMORY_PREFIX));
+  if (realRows.length <= MAX_VISIBLE_HISTORY) return;
+
+  const keepIds = new Set(realRows.slice(0, MAX_VISIBLE_HISTORY).map((r) => r.id));
+  const oldRows = realRows.filter((r) => !keepIds.has(r.id)).reverse();
+  if (oldRows.length === 0) return;
+
+  const previousMemory = await getOneHelpMemory(userId);
+  const oldConversation = oldRows
+    .map((r) => `${r.role === "user" ? "Foydalanuvchi" : "OneHelp"}: ${r.content}`)
+    .join("\n");
+
+  let newMemory = previousMemory;
+  try {
+    newMemory = await withTimeout(generateOneHelpText(
+      `Siz OneHelp chat xotirasini ixchamlashtiruvchi yordamchisiz. Muhim faktlar, foydalanuvchining biznesi, afzalliklari, kelishilgan qarorlar, bajarilgan ishlar va davom etayotgan vazifalarni saqlang. Keraksiz salomlashuv va takrorlarni olib tashlang. O'zbekcha yozing. Maksimal 3500 belgi. Faqat xotira matnini qaytaring, JSON yozmang.`,
+      `Oldingi xotira:\n${previousMemory || "yo'q"}\n\nYangi siqiladigan suhbat:\n${oldConversation}`,
+    ), ONEHELP_AI_TIMEOUT_MS);
+  } catch (err) {
+    console.error("[onehelp] memory compaction failed", err);
+    return;
+  }
+
+  newMemory = newMemory.trim().slice(0, 3500);
+  const existingMemory = await db.select({ id: oneHelpMessagesTable.id })
+    .from(oneHelpMessagesTable)
+    .where(and(eq(oneHelpMessagesTable.userId, userId), eq(oneHelpMessagesTable.role, "assistant")))
+    .orderBy(desc(oneHelpMessagesTable.id));
+  const memoryId = (await db.select({ id: oneHelpMessagesTable.id, content: oneHelpMessagesTable.content })
+    .from(oneHelpMessagesTable)
+    .where(eq(oneHelpMessagesTable.userId, userId))
+    .orderBy(desc(oneHelpMessagesTable.id))
+    .limit(100)).find((r) => r.content.startsWith(MEMORY_PREFIX))?.id;
+
+  if (memoryId) {
+    await db.update(oneHelpMessagesTable).set({ content: `${MEMORY_PREFIX}${newMemory}` }).where(eq(oneHelpMessagesTable.id, memoryId));
+  } else {
+    await db.insert(oneHelpMessagesTable).values({ userId, role: "assistant", content: `${MEMORY_PREFIX}${newMemory}` });
+  }
+
+  const cutoffId = Math.min(...oldRows.map((r) => r.id));
+  await db.delete(oneHelpMessagesTable).where(and(eq(oneHelpMessagesTable.userId, userId), lt(oneHelpMessagesTable.id, cutoffId)));
+}
+
 router.get("/onehelp/messages", async (req, res) => {
   const userId = await getCurrentUserId(req);
   if (!userId) { res.status(401).json({ error: "Tizimga kirilmagan." }); return; }
-  const rows = await db.select({ id: oneHelpMessagesTable.id, role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content, createdAt: oneHelpMessagesTable.createdAt }).from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.createdAt)).limit(100);
-  // User messages are optimistic in the browser. Give them a negative client-visible id
-  // so the polling loop never treats the already-rendered user message as a new message.
-  res.json(rows.reverse().map((r) => ({ ...r, id: r.role === "user" ? -Math.abs(r.id) : r.id, createdAt: r.createdAt.toISOString() })));
+  const rows = await db.select({ id: oneHelpMessagesTable.id, role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content, createdAt: oneHelpMessagesTable.createdAt })
+    .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.createdAt)).limit(100);
+  const visible = rows.filter((r) => !r.content.startsWith(MEMORY_PREFIX)).slice(0, MAX_VISIBLE_HISTORY).reverse();
+  res.json(visible.map((r) => ({ ...r, id: r.role === "user" ? -Math.abs(r.id) : r.id, createdAt: r.createdAt.toISOString() })));
 });
 
 router.post("/onehelp/chat", async (req, res) => {
@@ -177,16 +248,19 @@ router.post("/onehelp/chat", async (req, res) => {
     if (message.length > 2000) { res.status(400).json({ error: "Xabar juda uzun." }); return; }
     await db.insert(oneHelpMessagesTable).values({ userId, role: "user", content: message });
 
-    const recent = await db.select({ role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content }).from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.createdAt)).limit(8);
-    const history = recent.reverse().map((m) => `${m.role === "user" ? "U" : "AI"}: ${m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content}`).join("\n");
+    const memory = await getOneHelpMemory(userId);
+    const recent = await db.select({ role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content })
+      .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.createdAt)).limit(MAX_VISIBLE_HISTORY);
+    const history = recent.filter((m) => !m.content.startsWith(MEMORY_PREFIX)).reverse()
+      .map((m) => `${m.role === "user" ? "U" : "AI"}: ${m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content}`).join("\n");
     const snapshot = await withTimeout(buildBusinessSnapshot(userId), ONEHELP_AI_TIMEOUT_MS);
 
     let steps: AgentStep[];
     try {
-      const raw = await withTimeout(generateOneHelpText(buildSystemPrompt(snapshot), `Suhbat:\n${history}\n\nJavob (JSON):`), ONEHELP_AI_TIMEOUT_MS);
+      const raw = await withTimeout(generateOneHelpText(buildSystemPrompt(snapshot, memory), `Suhbat:\n${history}\n\nJavob (JSON):`), ONEHELP_AI_TIMEOUT_MS);
       steps = parseAgentPlan(raw);
     } catch (err) {
-      console.error("[onehelp] dedicated CPU generate failed", err);
+      console.error("[onehelp] external AI generate failed", err);
       steps = [{ say: "Kechirasiz, OneHelp AI server hozir javobni vaqtida qaytara olmadi. Qayta urinib ko'ring." }];
     }
 
@@ -200,6 +274,8 @@ router.post("/onehelp/chat", async (req, res) => {
     const contentForHistory = steps.map((s) => s.say).join("\n\n");
     const [saved] = await db.insert(oneHelpMessagesTable).values({ userId, role: "assistant", content: contentForHistory }).returning();
     res.json({ id: saved.id, role: "assistant", content: contentForHistory, createdAt: saved.createdAt.toISOString(), steps });
+
+    void compactOneHelpHistory(userId).catch((err) => console.error("[onehelp] background history compaction failed", err));
   } catch (err) {
     console.error("[onehelp] request failed", err);
     res.status(500).json({ error: "OneHelp serverda xatolik yuz berdi. Qayta urinib ko'ring." });
