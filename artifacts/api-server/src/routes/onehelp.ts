@@ -2,9 +2,9 @@ import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, oneHelpMessagesTable, oneHelpTasksTable } from "@workspace/db/schema";
-import { eq, desc, lt, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { generateOneHelpText } from "../ai/textProviders";
-import { runPublishRandomProductPost } from "../ai/autoPost";
+import { runPublishRandomProductPost, runPublishAllProductsToAllChannels } from "../ai/autoPost";
 import { buildBusinessSnapshot } from "../ai/businessContext";
 import { createProductViaOneHelp, updateProductViaOneHelp, deleteProductViaOneHelp } from "../ai/productActions";
 
@@ -39,6 +39,7 @@ type ClientAction =
 type ServerAction =
   | { type: "schedule_task"; description: string; actionType: "publish_random_product_post"; kind: "once" | "daily"; time: string; productName?: string; channelName?: string }
   | { type: "run_task_now"; actionType: "publish_random_product_post"; productName?: string; channelName?: string }
+  | { type: "publish_all_products_all_channels"; actionType: "publish_all_products_all_channels" }
   | { type: "create_product"; name: string; category?: string; sellPrice?: string; costPrice?: string; description?: string; active?: boolean }
   | { type: "update_product"; productName: string; sellPrice?: string; costPrice?: string; description?: string; category?: string; active?: boolean }
   | { type: "delete_product"; productName: string };
@@ -59,13 +60,18 @@ ${memory || "Hozircha oldingi suhbat xotirasi yo'q."}
 Sizning haqiqiy ma'lumotlaringiz (savollarga shu asosda ANIQ javob bering):
 ${snapshot}
 
-QOIDA: foydalanuvchi nima desa — ANIQ o'shani, ruxsat so'ramasdan, darhol bajaring. Maqsadi o'rganish bo'lsa — sekin, ko'rsatib bajaring. Ishni topshirsa — fon rejimida bajarib, natijani xabar qiling. Savol berilsa (masalan "nechta buyurtmam bor", "eng qimmat mahsulot qaysi") — yuqoridagi ma'lumotdan to'g'ridan-to'g'ri javob bering, action qo'ymang.
+QOIDA: foydalanuvchi nima desa — ANIQ o'shani bajaring. Ishni topshirsa — fon rejimida bajarib, natijani xabar qiling. Savol berilsa — yuqoridagi ma'lumotdan javob bering, action qo'ymang.
+
+MUHIM POST QOIDASI: agar foydalanuvchi "barcha mahsulotlarni barcha kanallarga", "hamma mahsulotlarni barcha kanallarga", "har bir mahsulotni har bir kanalga", "all products to all channels" yoki ma'nosi shunga teng buyruq bersa, RANDOM action ishlatmang. FAQAT mana bu actionni ishlating:
+{"type":"publish_all_products_all_channels","actionType":"publish_all_products_all_channels"}
+Bu action haqiqatan ham barcha faol mahsulotlarni barcha faol Telegram kanallariga bittadan joylaydi. Bitta mahsulotni bitta kanalga random yuborish bu buyruq uchun noto'g'ri.
 
 AMALLAR (action maydoniga aynan shu JSON obyektlardan birini qo'ying, aks holda null):
 {"type":"navigate","view":"dashboard|inventory|create|connectors|shopfront|orders|settings|profile"}
 {"type":"highlight","target":"product-name-input|product-price-input|product-save-button|post-pick-product|post-generate-button|button-approve"}
 {"type":"open_new_product_form"}
 {"type":"run_task_now","actionType":"publish_random_product_post","productName":"(ixtiyoriy, aniq mahsulot)","channelName":"(ixtiyoriy, aniq kanal)"}
+{"type":"publish_all_products_all_channels","actionType":"publish_all_products_all_channels"}
 {"type":"schedule_task","description":"qisqa tavsif","actionType":"publish_random_product_post","kind":"daily|once","time":"HH:mm yoki ISO sana","productName":"(ixtiyoriy)","channelName":"(ixtiyoriy)"}
 {"type":"create_product","name":"...","category":"(ixtiyoriy)","sellPrice":"(ixtiyoriy)","costPrice":"(ixtiyoriy)","description":"(ixtiyoriy)","active":true/false}
 {"type":"update_product","productName":"mavjud mahsulot nomi","sellPrice":"(ixtiyoriy)","costPrice":"(ixtiyoriy)","description":"(ixtiyoriy)","category":"(ixtiyoriy)","active":true/false}
@@ -75,7 +81,7 @@ AMALLAR (action maydoniga aynan shu JSON obyektlardan birini qo'ying, aks holda 
 CHEKLOV: faqat shu qiymatlardan foydalaning, o'ylab topmang. productName/channelName — yuqoridagi ro'yxatdagi haqiqiy nomlarga eng yaqinini tanlang.
 
 JAVOB — FAQAT shu JSON, boshqa hech narsa yo'q:
-{"steps":[{"say":"qisqa, jonli, samimiy o'zbekcha gap (markdown/ro'yxat/kod ISHLATMANG)","action":null yoki yuqoridagilardan biri}]}`;
+{"steps":[{"say":"qisqa, jonli, samimiy o'zbekcha gap (markdown/ro'yxat/kod ISHLATMANG)","action":null yoki yuqoridagi amallardan biri}]}`;
 }
 
 function isClientAction(action: Record<string, unknown>): action is ClientAction {
@@ -88,6 +94,7 @@ function isClientAction(action: Record<string, unknown>): action is ClientAction
 
 function isServerAction(action: Record<string, unknown>): action is ServerAction {
   if (action.type === "run_task_now") return action.actionType === "publish_random_product_post";
+  if (action.type === "publish_all_products_all_channels") return action.actionType === "publish_all_products_all_channels";
   if (action.type === "schedule_task") {
     if (action.actionType !== "publish_random_product_post") return false;
     if (typeof action.description !== "string" || !action.description.trim()) return false;
@@ -144,6 +151,10 @@ async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]):
     if (action.type === "run_task_now") {
       const { productName, channelName } = action;
       void (async () => { try { await runPublishRandomProductPost(userId, productName, channelName); } catch (err) { console.error("[onehelp] run_task_now failed", err); } })();
+      result.push({ say: step.say }); continue;
+    }
+    if (action.type === "publish_all_products_all_channels") {
+      void (async () => { try { await runPublishAllProductsToAllChannels(userId); } catch (err) { console.error("[onehelp] publish_all_products_all_channels failed", err); } })();
       result.push({ say: step.say }); continue;
     }
     if (action.type === "create_product") {
