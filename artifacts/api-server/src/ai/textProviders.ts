@@ -1,7 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 
-if (!process.env.CAPTION_CPU_URL && !process.env.GEMINI_API_KEY) {
-  throw new Error("CAPTION_CPU_URL sozlanmagan");
+if (!process.env.CAPTION_CPU_URL && !process.env.ONEHELP_CPU_URL && !process.env.GEMINI_API_KEY) {
+  throw new Error("CAPTION_CPU_URL yoki ONEHELP_CPU_URL sozlanmagan");
 }
 
 const GEMINI_KEYS = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2].filter(
@@ -44,34 +44,45 @@ async function callGeminiText(systemPrompt: string, userPrompt: string, jsonMode
 async function callCpuText(systemPrompt: string, userPrompt: string, maxNewTokens = 1024): Promise<string> {
   const baseUrl = process.env.CAPTION_CPU_URL?.trim().replace(/\/$/, "");
   if (!baseUrl) throw new Error("CAPTION_CPU_URL sozlanmagan");
+  return callCpuEndpoint(baseUrl, systemPrompt, userPrompt, maxNewTokens, "caption-cpu");
+}
 
+async function callOneHelpCpuText(systemPrompt: string, userPrompt: string, maxNewTokens = 768): Promise<string> {
+  const baseUrl = process.env.ONEHELP_CPU_URL?.trim().replace(/\/$/, "");
+  if (!baseUrl) throw new Error("ONEHELP_CPU_URL sozlanmagan");
+  return callCpuEndpoint(baseUrl, systemPrompt, userPrompt, maxNewTokens, "onehelp-cpu");
+}
+
+async function callCpuEndpoint(
+  baseUrl: string,
+  systemPrompt: string,
+  userPrompt: string,
+  maxNewTokens: number,
+  engine: string,
+): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 180_000);
   try {
     const res = await fetch(`${baseUrl}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_prompt: systemPrompt,
-        user_prompt: userPrompt,
-        max_new_tokens: maxNewTokens,
-      }),
+      body: JSON.stringify({ system_prompt: systemPrompt, user_prompt: userPrompt, max_new_tokens: maxNewTokens }),
       signal: controller.signal,
     });
     if (!res.ok) {
       const bodyText = await res.text().catch(() => "");
-      throw new Error(`CPU AI error ${res.status}: ${bodyText.slice(0, 300)}`);
+      throw new Error(`${engine} AI error ${res.status}: ${bodyText.slice(0, 300)}`);
     }
     const data = (await res.json()) as { text?: string };
-    if (!data.text?.trim()) throw new Error("CPU AI javobida matn topilmadi");
-    console.log("[AI] engine=cpu model=SmolLM2-135M-Instruct endpoint=/generate");
+    if (!data.text?.trim()) throw new Error(`${engine} AI javobida matn topilmadi`);
+    console.log(`[AI] engine=${engine} model=SmolLM2-135M-Instruct endpoint=/generate`);
     return data.text.trim();
   } finally {
     clearTimeout(timer);
   }
 }
 
-// ALL server-side text generation is routed to the OneOffice CPU AI.
+// ALL server-side text generation is routed to dedicated OneOffice CPU AI servers.
 // There is intentionally NO Groq/Cerebras/Gemini/Mistral text fallback.
 export async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
   return callCpuText(systemPrompt, userPrompt, 1024);
@@ -79,6 +90,11 @@ export async function generateText(systemPrompt: string, userPrompt: string): Pr
 
 export async function generateFreeText(systemPrompt: string, userPrompt: string): Promise<string> {
   return callCpuText(systemPrompt, userPrompt, 1024);
+}
+
+// OneHelp has its own CPU AI service so its workload cannot block Caption AI.
+export async function generateOneHelpText(systemPrompt: string, userPrompt: string): Promise<string> {
+  return callOneHelpCpuText(systemPrompt, userPrompt, 768);
 }
 
 export async function fetchImageBuffer(
