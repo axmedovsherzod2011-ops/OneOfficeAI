@@ -15,14 +15,14 @@ export type AutoPostResult =
   | { ok: true; productName: string; channelTitle: string }
   | { ok: false; error: string };
 
-// Live progress, written straight into the person's OneHelp chat history as
-// it happens (not just a single message at the very end) — the point of a
-// background/fire-and-forget action is that a browser might not be there to
-// "play back" a response, so the ONLY way to show what's happening step by
-// step is to actually persist each step as its own message the moment it
-// happens. The frontend picks these up via light polling while the chat is
-// open (see OneHelpBubble) — same idea as Claude showing each tool call as
-// it runs, adapted to a store-and-poll model instead of a live stream.
+export type BulkAutoPostResult = {
+  ok: boolean;
+  products: number;
+  channels: number;
+  published: number;
+  failed: number;
+};
+
 async function report(userId: number, text: string): Promise<void> {
   try {
     await db.insert(oneHelpMessagesTable).values({ userId, role: "assistant", content: text });
@@ -31,9 +31,6 @@ async function report(userId: number, text: string): Promise<void> {
   }
 }
 
-// Same get-or-build-then-cache logic as POST /api/enrich's cached path
-// (routes/enrich.ts) — a product researched once (by a normal Create Post
-// use, or by a previous auto-post run) never re-runs AI/search here either.
 async function getOrBuildPostText(
   product: typeof productsTable.$inferSelect,
   userId: number,
@@ -67,11 +64,96 @@ async function getOrBuildPostText(
   return buildPostText(product.name, product.sellPrice, card, product.deliveryInfo);
 }
 
-// The one action type ONE_HELP_TASK_ACTION_TYPES currently has —
-// productName/channelName omitted or not matching anything falls back to
-// a random active product / the first connected channel; a name that DOES
-// match (case-insensitive substring) targets that exact one. Reports
-// progress into the chat at every stage.
+async function recordPublishedPost(
+  userId: number,
+  product: typeof productsTable.$inferSelect,
+  channel: typeof telegramChannelsTable.$inferSelect,
+  messageId?: number,
+): Promise<void> {
+  trackPublishedPost(channel.id, messageId);
+  try {
+    await db.insert(postsTable).values({
+      userId,
+      telegramChannelId: channel.id,
+      productId: product.id,
+      name: product.name,
+      price: product.sellPrice,
+      category: product.category,
+      status: "Published",
+      telegramMessageId: messageId ?? null,
+      platform: "telegram",
+    });
+  } catch (err) {
+    console.error("[autoPost] failed to record post row", err);
+  }
+}
+
+/**
+ * Explicit bulk command: publish EVERY active product to EVERY active
+ * Telegram channel. Nothing is random here. Products and channels are both
+ * snapshotted first, then processed one-by-one so a failure in one pair does
+ * not stop the remaining pairs.
+ */
+export async function runPublishAllProductsToAllChannels(userId: number): Promise<BulkAutoPostResult> {
+  const activeProducts = await db
+    .select()
+    .from(productsTable)
+    .where(and(eq(productsTable.userId, userId), eq(productsTable.status, "active")));
+
+  const allChannels = await db
+    .select()
+    .from(telegramChannelsTable)
+    .where(and(eq(telegramChannelsTable.userId, userId), eq(telegramChannelsTable.isActive, true)));
+
+  if (activeProducts.length === 0) {
+    await report(userId, "⚠️ Faol mahsulot topilmadi.");
+    return { ok: false, products: 0, channels: allChannels.length, published: 0, failed: 0 };
+  }
+  if (allChannels.length === 0) {
+    await report(userId, "⚠️ Faol Telegram kanal topilmadi.");
+    return { ok: false, products: activeProducts.length, channels: 0, published: 0, failed: 0 };
+  }
+
+  const total = activeProducts.length * allChannels.length;
+  let published = 0;
+  let failed = 0;
+  await report(userId, `🚀 ${activeProducts.length} ta mahsulotni ${allChannels.length} ta kanalning BARCHASIGA joylash boshlandi. Jami ${total} ta post.`);
+
+  for (const product of activeProducts) {
+    let postText: string;
+    try {
+      postText = await getOrBuildPostText(product, userId);
+    } catch (err) {
+      console.error("[autoPost] bulk research/build failed", { productId: product.id, err });
+      failed += allChannels.length;
+      await report(userId, `⚠️ "${product.name}" postini tayyorlab bo'lmadi — ${allChannels.length} ta kanal o'tkazib yuborildi.`);
+      continue;
+    }
+
+    for (const channel of allChannels) {
+      await report(userId, `📤 ${published + failed + 1}/${total}: "${product.name}" → "${channel.channelTitle}"`);
+      try {
+        const outcome = await sendPostToChannel(userId, channel, postText, product.images ?? []);
+        if (!outcome.ok) {
+          failed++;
+          await report(userId, `⚠️ "${product.name}" → "${channel.channelTitle}" joylanmadi: ${outcome.error}`);
+          continue;
+        }
+        published++;
+        await recordPublishedPost(userId, product, channel, outcome.messageId);
+        await report(userId, `✅ "${product.name}" → "${channel.channelTitle}" joylandi.`);
+      } catch (err) {
+        failed++;
+        console.error("[autoPost] bulk publish failed", { productId: product.id, channelId: channel.id, err });
+        await report(userId, `⚠️ "${product.name}" → "${channel.channelTitle}" joylashda xatolik.`);
+      }
+    }
+  }
+
+  await report(userId, `🏁 Tugadi: ${published} ta post joylandi, ${failed} ta postda xatolik bo'ldi.`);
+  return { ok: failed === 0, products: activeProducts.length, channels: allChannels.length, published, failed };
+}
+
 export async function runPublishRandomProductPost(
   userId: number,
   productName?: string,
@@ -135,23 +217,7 @@ export async function runPublishRandomProductPost(
     return { ok: false, error: outcome.error };
   }
 
-  trackPublishedPost(channel.id, outcome.messageId);
-  try {
-    await db.insert(postsTable).values({
-      userId,
-      telegramChannelId: channel.id,
-      productId: product.id,
-      name: product.name,
-      price: product.sellPrice,
-      category: product.category,
-      status: "Published",
-      telegramMessageId: outcome.messageId ?? null,
-      platform: "telegram",
-    });
-  } catch (err) {
-    console.error("[autoPost] failed to record post row", err);
-  }
-
+  await recordPublishedPost(userId, product, channel, outcome.messageId);
   await report(userId, `✅ "${product.name}" muvaffaqiyatli joylandi!`);
   return { ok: true, productName: product.name, channelTitle: channel.channelTitle };
 }
