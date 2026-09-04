@@ -31,6 +31,21 @@ async function report(userId: number, text: string): Promise<void> {
   }
 }
 
+// Telegram photo/album captions are limited to 1024 characters. The generic
+// publisher sends overflow as a follow-up message. For OneHelp auto-posts,
+// keep any order URL inside the main caption so it cannot disappear from the
+// post when a long caption is split.
+function protectOrderLinksInCaption(text: string): string {
+  const urls = Array.from(new Set(text.match(/https?:\/\/[^\s<>)]+/g) ?? []));
+  if (urls.length === 0 || text.length <= 1024) return text;
+
+  const withoutUrls = text
+    .replace(/https?:\/\/[^\s<>)]+/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return `🛒 Buyurtma berish: ${urls.join("\n")}\n\n${withoutUrls}`;
+}
+
 async function getOrBuildPostText(
   product: typeof productsTable.$inferSelect,
   userId: number,
@@ -43,7 +58,7 @@ async function getOrBuildPostText(
 
   if (cached && cached.status === "ready") {
     const card = cached.card as unknown as ProductCard;
-    return buildPostText(product.name, product.sellPrice, card, product.deliveryInfo);
+    return protectOrderLinksInCaption(buildPostText(product.name, product.sellPrice, card, product.deliveryInfo));
   }
 
   const { card, sources } = await runProductResearch({
@@ -61,7 +76,7 @@ async function getOrBuildPostText(
       set: { card, sources, status: "ready", updatedAt: new Date() },
     });
 
-  return buildPostText(product.name, product.sellPrice, card, product.deliveryInfo);
+  return protectOrderLinksInCaption(buildPostText(product.name, product.sellPrice, card, product.deliveryInfo));
 }
 
 async function recordPublishedPost(
@@ -88,12 +103,6 @@ async function recordPublishedPost(
   }
 }
 
-/**
- * Explicit bulk command: publish EVERY active product to EVERY active
- * Telegram channel. Nothing is random here. Products and channels are both
- * snapshotted first, then processed one-by-one so a failure in one pair does
- * not stop the remaining pairs.
- */
 export async function runPublishAllProductsToAllChannels(userId: number): Promise<BulkAutoPostResult> {
   const activeProducts = await db
     .select()
