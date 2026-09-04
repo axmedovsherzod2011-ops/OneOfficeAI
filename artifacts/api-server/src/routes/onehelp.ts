@@ -2,7 +2,7 @@ import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, oneHelpMessagesTable, oneHelpTasksTable } from "@workspace/db/schema";
-import { eq, desc, lt, and, not } from "drizzle-orm";
+import { eq, desc, lt, and, inArray } from "drizzle-orm";
 import { generateOneHelpText } from "../ai/textProviders";
 import { runPublishRandomProductPost } from "../ai/autoPost";
 import { buildBusinessSnapshot } from "../ai/businessContext";
@@ -165,40 +165,24 @@ async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]):
 }
 
 async function getOneHelpMemory(userId: number): Promise<string> {
-  const [row] = await db.select({ content: oneHelpMessagesTable.content })
-    .from(oneHelpMessagesTable)
-    .where(and(eq(oneHelpMessagesTable.userId, userId), eq(oneHelpMessagesTable.role, "assistant")))
-    .orderBy(desc(oneHelpMessagesTable.id))
-    .limit(100);
-  const candidates = await db.select({ content: oneHelpMessagesTable.content })
-    .from(oneHelpMessagesTable)
-    .where(eq(oneHelpMessagesTable.userId, userId))
-    .orderBy(desc(oneHelpMessagesTable.id))
-    .limit(100);
-  const memoryRow = candidates.find((r) => r.content.startsWith(MEMORY_PREFIX));
+  const rows = await db.select({ content: oneHelpMessagesTable.content })
+    .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.id)).limit(100);
+  const memoryRow = rows.find((r) => r.content.startsWith(MEMORY_PREFIX));
   return memoryRow ? memoryRow.content.slice(MEMORY_PREFIX.length).trim() : "";
 }
 
 async function compactOneHelpHistory(userId: number): Promise<void> {
   const rows = await db.select({ id: oneHelpMessagesTable.id, role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content })
-    .from(oneHelpMessagesTable)
-    .where(eq(oneHelpMessagesTable.userId, userId))
-    .orderBy(desc(oneHelpMessagesTable.id))
-    .limit(MAX_VISIBLE_HISTORY + 1);
+    .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.id)).limit(MAX_VISIBLE_HISTORY + 2);
 
   const realRows = rows.filter((r) => !r.content.startsWith(MEMORY_PREFIX));
   if (realRows.length <= MAX_VISIBLE_HISTORY) return;
 
-  const keepIds = new Set(realRows.slice(0, MAX_VISIBLE_HISTORY).map((r) => r.id));
-  const oldRows = realRows.filter((r) => !keepIds.has(r.id)).reverse();
-  if (oldRows.length === 0) return;
-
+  const oldRows = realRows.slice(MAX_VISIBLE_HISTORY).reverse();
   const previousMemory = await getOneHelpMemory(userId);
-  const oldConversation = oldRows
-    .map((r) => `${r.role === "user" ? "Foydalanuvchi" : "OneHelp"}: ${r.content}`)
-    .join("\n");
+  const oldConversation = oldRows.map((r) => `${r.role === "user" ? "Foydalanuvchi" : "OneHelp"}: ${r.content}`).join("\n");
 
-  let newMemory = previousMemory;
+  let newMemory: string;
   try {
     newMemory = await withTimeout(generateOneHelpText(
       `Siz OneHelp chat xotirasini ixchamlashtiruvchi yordamchisiz. Muhim faktlar, foydalanuvchining biznesi, afzalliklari, kelishilgan qarorlar, bajarilgan ishlar va davom etayotgan vazifalarni saqlang. Keraksiz salomlashuv va takrorlarni olib tashlang. O'zbekcha yozing. Maksimal 3500 belgi. Faqat xotira matnini qaytaring, JSON yozmang.`,
@@ -210,24 +194,17 @@ async function compactOneHelpHistory(userId: number): Promise<void> {
   }
 
   newMemory = newMemory.trim().slice(0, 3500);
-  const existingMemory = await db.select({ id: oneHelpMessagesTable.id })
-    .from(oneHelpMessagesTable)
-    .where(and(eq(oneHelpMessagesTable.userId, userId), eq(oneHelpMessagesTable.role, "assistant")))
-    .orderBy(desc(oneHelpMessagesTable.id));
-  const memoryId = (await db.select({ id: oneHelpMessagesTable.id, content: oneHelpMessagesTable.content })
-    .from(oneHelpMessagesTable)
-    .where(eq(oneHelpMessagesTable.userId, userId))
-    .orderBy(desc(oneHelpMessagesTable.id))
-    .limit(100)).find((r) => r.content.startsWith(MEMORY_PREFIX))?.id;
+  const memoryRow = (await db.select({ id: oneHelpMessagesTable.id, content: oneHelpMessagesTable.content })
+    .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.id)).limit(100))
+    .find((r) => r.content.startsWith(MEMORY_PREFIX));
 
-  if (memoryId) {
-    await db.update(oneHelpMessagesTable).set({ content: `${MEMORY_PREFIX}${newMemory}` }).where(eq(oneHelpMessagesTable.id, memoryId));
+  if (memoryRow) {
+    await db.update(oneHelpMessagesTable).set({ content: `${MEMORY_PREFIX}${newMemory}` }).where(eq(oneHelpMessagesTable.id, memoryRow.id));
   } else {
     await db.insert(oneHelpMessagesTable).values({ userId, role: "assistant", content: `${MEMORY_PREFIX}${newMemory}` });
   }
 
-  const cutoffId = Math.min(...oldRows.map((r) => r.id));
-  await db.delete(oneHelpMessagesTable).where(and(eq(oneHelpMessagesTable.userId, userId), lt(oneHelpMessagesTable.id, cutoffId)));
+  await db.delete(oneHelpMessagesTable).where(inArray(oneHelpMessagesTable.id, oldRows.map((r) => r.id)));
 }
 
 router.get("/onehelp/messages", async (req, res) => {
