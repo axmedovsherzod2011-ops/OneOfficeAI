@@ -6,11 +6,7 @@ import { eq, desc } from "drizzle-orm";
 import { generateOneHelpText } from "../ai/textProviders";
 import { runPublishRandomProductPost } from "../ai/autoPost";
 import { buildBusinessSnapshot } from "../ai/businessContext";
-import {
-  createProductViaOneHelp,
-  updateProductViaOneHelp,
-  deleteProductViaOneHelp,
-} from "../ai/productActions";
+import { createProductViaOneHelp, updateProductViaOneHelp, deleteProductViaOneHelp } from "../ai/productActions";
 
 const router = Router();
 const ONEHELP_AI_TIMEOUT_MS = 180_000;
@@ -18,33 +14,19 @@ const ONEHELP_AI_TIMEOUT_MS = 180_000;
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`OneHelp AI timeout after ${ms}ms`)), ms);
-    promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (error) => { clearTimeout(timer); reject(error); },
-    );
+    promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
   });
 }
 
 async function getCurrentUserId(req: Parameters<typeof getAuth>[0]) {
   const { userId: firebaseUid } = getAuth(req);
   if (!firebaseUid) return null;
-
-  const [user] = await db
-    .select({ id: usersTable.id })
-    .from(usersTable)
-    .where(eq(usersTable.firebaseUid, firebaseUid))
-    .limit(1);
-
+  const [user] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.firebaseUid, firebaseUid)).limit(1);
   return user?.id ?? null;
 }
 
-const NAVIGATE_VIEWS = [
-  "dashboard", "inventory", "create", "connectors", "shopfront", "orders", "settings", "profile",
-] as const;
-
-const HIGHLIGHT_TARGETS = [
-  "product-name-input", "product-price-input", "product-save-button", "post-pick-product", "post-generate-button", "button-approve",
-] as const;
+const NAVIGATE_VIEWS = ["dashboard", "inventory", "create", "connectors", "shopfront", "orders", "settings", "profile"] as const;
+const HIGHLIGHT_TARGETS = ["product-name-input", "product-price-input", "product-save-button", "post-pick-product", "post-generate-button", "button-approve"] as const;
 
 type ClientAction =
   | { type: "navigate"; view: (typeof NAVIGATE_VIEWS)[number] }
@@ -62,9 +44,7 @@ type ServerAction =
 type AgentAction = ClientAction | ServerAction;
 interface AgentStep { say: string; action?: AgentAction; }
 
-function nowInTashkent(): string {
-  return new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().replace("Z", " (Toshkent)");
-}
+function nowInTashkent(): string { return new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().replace("Z", " (Toshkent)"); }
 
 function buildSystemPrompt(snapshot: string): string {
   return `Siz OneHelp — OneOffice AI saytining pastki burchagidagi yordamchi chatisiz.
@@ -121,30 +101,25 @@ function parseAgentPlan(raw: string): AgentStep[] {
     const parsed = JSON.parse(raw.trim());
     const steps = Array.isArray(parsed?.steps) ? parsed.steps : null;
     if (!steps || steps.length === 0) throw new Error("no steps");
-    const cleaned: AgentStep[] = steps
-      .map((s: unknown): AgentStep | null => {
-        if (!s || typeof s !== "object") return null;
-        const say = String((s as Record<string, unknown>).say ?? "").trim();
-        if (!say) return null;
-        const rawAction = (s as Record<string, unknown>).action;
-        if (!rawAction || typeof rawAction !== "object") return { say };
-        const a = rawAction as Record<string, unknown>;
-        if (isClientAction(a) || isServerAction(a)) return { say, action: a as AgentAction };
-        return { say };
-      })
-      .filter((s: AgentStep | null): s is AgentStep => s !== null);
+    const cleaned: AgentStep[] = steps.map((s: unknown): AgentStep | null => {
+      if (!s || typeof s !== "object") return null;
+      const say = String((s as Record<string, unknown>).say ?? "").trim();
+      if (!say) return null;
+      const rawAction = (s as Record<string, unknown>).action;
+      if (!rawAction || typeof rawAction !== "object") return { say };
+      const a = rawAction as Record<string, unknown>;
+      if (isClientAction(a) || isServerAction(a)) return { say, action: a as AgentAction };
+      return { say };
+    }).filter((s: AgentStep | null): s is AgentStep => s !== null);
     if (cleaned.length === 0) throw new Error("no valid steps after cleaning");
     return cleaned;
-  } catch {
-    return [{ say: "Kechirasiz, hozir javob berolmayapman — birozdan keyin qayta urinib ko'ring." }];
-  }
+  } catch { return [{ say: "Kechirasiz, hozir javob berolmayapman — birozdan keyin qayta urinib ko'ring." }]; }
 }
 
 function computeNextDailyRunForNewTask(timeOfDay: string): Date {
   const [hh, mm] = timeOfDay.split(":").map(Number);
   const now = new Date();
-  const utcHour = hh - 5;
-  const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, mm, 0, 0));
+  const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh - 5, mm, 0, 0));
   if (candidate.getTime() <= now.getTime()) candidate.setUTCDate(candidate.getUTCDate() + 1);
   return candidate;
 }
@@ -157,10 +132,7 @@ async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]):
     if (action.type === "schedule_task") {
       try {
         const nextRunAt = action.kind === "once" ? new Date(action.time) : computeNextDailyRunForNewTask(action.time);
-        await db.insert(oneHelpTasksTable).values({
-          userId, description: action.description, actionType: action.actionType, kind: action.kind,
-          timeOfDay: action.kind === "daily" ? action.time : null, nextRunAt,
-        });
+        await db.insert(oneHelpTasksTable).values({ userId, description: action.description, actionType: action.actionType, kind: action.kind, timeOfDay: action.kind === "daily" ? action.time : null, nextRunAt });
       } catch (err) { console.error("[onehelp] schedule_task failed", err); }
       result.push({ say: step.say }); continue;
     }
@@ -190,41 +162,28 @@ async function executeServerActionsAndStrip(userId: number, steps: AgentStep[]):
 router.get("/onehelp/messages", async (req, res) => {
   const userId = await getCurrentUserId(req);
   if (!userId) { res.status(401).json({ error: "Tizimga kirilmagan." }); return; }
-  const rows = await db
-    .select({ id: oneHelpMessagesTable.id, role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content, createdAt: oneHelpMessagesTable.createdAt })
-    .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId))
-    .orderBy(desc(oneHelpMessagesTable.createdAt)).limit(100);
-  res.json(rows.reverse().map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })));
+  const rows = await db.select({ id: oneHelpMessagesTable.id, role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content, createdAt: oneHelpMessagesTable.createdAt }).from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.createdAt)).limit(100);
+  // User messages are optimistic in the browser. Give them a negative client-visible id
+  // so the polling loop never treats the already-rendered user message as a new message.
+  res.json(rows.reverse().map((r) => ({ ...r, id: r.role === "user" ? -Math.abs(r.id) : r.id, createdAt: r.createdAt.toISOString() })));
 });
 
 router.post("/onehelp/chat", async (req, res) => {
   try {
     const userId = await getCurrentUserId(req);
     if (!userId) { res.status(401).json({ error: "Tizimga kirilmagan." }); return; }
-
     const message = String((req.body as { message?: string })?.message ?? "").trim();
     if (!message) { res.status(400).json({ error: "Xabar bo'sh bo'lishi mumkin emas." }); return; }
     if (message.length > 2000) { res.status(400).json({ error: "Xabar juda uzun." }); return; }
-
     await db.insert(oneHelpMessagesTable).values({ userId, role: "user", content: message });
 
-    const recent = await db
-      .select({ role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content })
-      .from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId))
-      .orderBy(desc(oneHelpMessagesTable.createdAt)).limit(8);
-    const history = recent.reverse().map((m) => {
-      const truncated = m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content;
-      return `${m.role === "user" ? "U" : "AI"}: ${truncated}`;
-    }).join("\n");
-
+    const recent = await db.select({ role: oneHelpMessagesTable.role, content: oneHelpMessagesTable.content }).from(oneHelpMessagesTable).where(eq(oneHelpMessagesTable.userId, userId)).orderBy(desc(oneHelpMessagesTable.createdAt)).limit(8);
+    const history = recent.reverse().map((m) => `${m.role === "user" ? "U" : "AI"}: ${m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content}`).join("\n");
     const snapshot = await withTimeout(buildBusinessSnapshot(userId), ONEHELP_AI_TIMEOUT_MS);
 
     let steps: AgentStep[];
     try {
-      const raw = await withTimeout(
-        generateOneHelpText(buildSystemPrompt(snapshot), `Suhbat:\n${history}\n\nJavob (JSON):`),
-        ONEHELP_AI_TIMEOUT_MS,
-      );
+      const raw = await withTimeout(generateOneHelpText(buildSystemPrompt(snapshot), `Suhbat:\n${history}\n\nJavob (JSON):`), ONEHELP_AI_TIMEOUT_MS);
       steps = parseAgentPlan(raw);
     } catch (err) {
       console.error("[onehelp] dedicated CPU generate failed", err);
@@ -239,9 +198,7 @@ router.post("/onehelp/chat", async (req, res) => {
     }
 
     const contentForHistory = steps.map((s) => s.say).join("\n\n");
-    const [saved] = await db.insert(oneHelpMessagesTable)
-      .values({ userId, role: "assistant", content: contentForHistory }).returning();
-
+    const [saved] = await db.insert(oneHelpMessagesTable).values({ userId, role: "assistant", content: contentForHistory }).returning();
     res.json({ id: saved.id, role: "assistant", content: contentForHistory, createdAt: saved.createdAt.toISOString(), steps });
   } catch (err) {
     console.error("[onehelp] request failed", err);
