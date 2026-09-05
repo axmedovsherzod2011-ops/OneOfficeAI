@@ -2694,7 +2694,7 @@ function YoutubeConnectorCard() {
 
   async function authedFetch(path: string, init: RequestInit = {}) {
     const token = await firebaseUser?.getIdToken();
-    const res = await fetch(path, {
+    const res = await fetch(apiUrl(path), {
       ...init,
       headers: {
         ...(init.body ? { "Content-Type": "application/json" } : {}),
