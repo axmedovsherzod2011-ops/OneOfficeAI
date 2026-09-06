@@ -34,6 +34,14 @@ app.use(cors());
 app.use(express.json({ limit: "40mb" }));
 app.use(express.urlencoded({ extended: true, limit: "40mb" }));
 
+// Google OAuth redirects to the backend root. Forward the complete OAuth
+// query string to the production frontend, where the client-side callback
+// validates state and exchanges the authorization code with the API.
+app.get("/", (req, res) => {
+  const frontendUrl = (process.env.FRONTEND_PUBLIC_URL ?? "https://oneofficeai.pages.dev").replace(/\/$/, "");
+  res.redirect(302, `${frontendUrl}/${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`);
+});
+
 // Verifies the Firebase ID token sent as `Authorization: Bearer <idToken>`
 // and attaches req.auth so routes can read the signed-in Firebase user via
 // getAuth(req) — same call shape routes/connect.ts already used for Clerk.
