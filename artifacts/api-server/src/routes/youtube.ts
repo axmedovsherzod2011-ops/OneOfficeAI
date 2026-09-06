@@ -432,59 +432,62 @@ router.post(
       return;
     }
 
-      const accessToken = await ensureFreshToken(account);
-    const refreshToken = tokenData.refresh_token ?? null;
+    const accessToken = tokenData.access_token;
     const tokenExpiresAt = new Date(
       Date.now() + (tokenData.expires_in ?? 3600) * 1000,
     );
 
     // 2) Fetch the user's YouTube channel info
-    let channelId = "";
-    let title = "";
-    let customUrl = "";
-    let thumbnailUrl = "";
-    try {
-      const channelRes = await fetch(
-        "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
-        { headers: { Authorization: `Bearer ${accessToken}` } },
+    const channelRes = await fetch(
+      "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    const channelData = (await channelRes.json()) as {
+      items?: Array<{
+        id?: string;
+        snippet?: {
+          title?: string;
+          customUrl?: string;
+          thumbnails?: { default?: { url?: string } };
+        };
+      }>;
+      error?: { message?: string };
+    };
+
+    if (!channelRes.ok) {
+      throw new Error(
+        `YouTube kanal ma'lumotini olishda xato: ${channelData.error?.message ?? channelRes.status}`,
       );
-      const channelData = (await channelRes.json()) as {
-        items?: Array<{
-          id?: string;
-          snippet?: {
-            title?: string;
-            customUrl?: string;
-            thumbnails?: { default?: { url?: string } };
-          };
-        }>;
-      };
-      const ch = channelData.items?.[0];
-      if (ch) {
-        channelId = ch.id ?? "";
-        title = ch.snippet?.title ?? "";
-        customUrl = ch.snippet?.customUrl ?? "";
-        thumbnailUrl = ch.snippet?.thumbnails?.default?.url ?? "";
-      }
-    } catch (err) {
-      console.warn("[youtube] channel info fetch failed (non-fatal):", err);
     }
 
-    // 3) Upsert — same channel re-connected updates tokens
-    const [already] = channelId
-      ? await db
-          .select({ id: youtubeAccountsTable.id })
-          .from(youtubeAccountsTable)
-          .where(
-            and(
-              eq(youtubeAccountsTable.userId, userId),
-              eq(youtubeAccountsTable.channelId, channelId),
-            ),
-          )
-      : [];
+    const ch = channelData.items?.[0];
+    if (!ch?.id) {
+      throw new Error(
+        "Google akkauntga ruxsat berildi, lekin YouTube kanali topilmadi. YouTube kanalingiz mavjudligini tekshiring.",
+      );
+    }
 
+    const channelId = ch.id;
+    const title = ch.snippet?.title ?? "";
+    const customUrl = ch.snippet?.customUrl ?? "";
+    const thumbnailUrl = ch.snippet?.thumbnails?.default?.url ?? "";
+
+    // Google may omit refresh_token when an account is re-authorized.
+    const [already] = await db
+      .select()
+      .from(youtubeAccountsTable)
+      .where(
+        and(
+          eq(youtubeAccountsTable.userId, userId),
+          eq(youtubeAccountsTable.channelId, channelId),
+        ),
+      )
+      .limit(1);
+
+    const refreshToken = tokenData.refresh_token ?? already?.refreshToken ?? null;
     const values = {
       userId,
-      channelId: channelId || `google-${Date.now()}`,
+      channelId,
       title,
       customUrl,
       thumbnailUrl,
@@ -493,18 +496,26 @@ router.post(
       tokenExpiresAt,
     };
 
-    const [account] = await db
-      .select()
-      .from(youtubeAccountsTable)
-      .where(
-        and(
-          eq(youtubeAccountsTable.id, accountId),
-          eq(youtubeAccountsTable.userId, userId),
-        ),
-      )
-      .limit(1);
+    // 3) Upsert — same channel reconnect updates tokens; new channel inserts a row.
+    let savedAccount;
+    if (already) {
+      [savedAccount] = await db
+        .update(youtubeAccountsTable)
+        .set(values)
+        .where(eq(youtubeAccountsTable.id, already.id))
+        .returning();
+    } else {
+      [savedAccount] = await db
+        .insert(youtubeAccountsTable)
+        .values(values)
+        .returning();
+    }
 
-    res.json(toAccountResponse(account));
+    if (!savedAccount) {
+      throw new Error("YouTube kanalini bazaga saqlash muvaffaqiyatsiz.");
+    }
+
+    res.json(toAccountResponse(savedAccount));
   }),
 );
 
