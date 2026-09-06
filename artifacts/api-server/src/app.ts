@@ -42,6 +42,26 @@ app.get("/", (req, res) => {
   res.redirect(302, `${frontendUrl}/${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`);
 });
 
+// The redirect URI used for Google's authorization-code exchange must be
+// byte-for-byte identical to the URI used in the authorization request.
+// Derive it from the backend's canonical PUBLIC_APP_URL instead of trusting
+// a browser-provided value, preventing Cloudflare/local-origin/sessionStorage
+// differences from causing a silent OAuth exchange failure.
+app.use("/api/connectors/youtube/exchange", (req, _res, next) => {
+  if (req.method === "POST" && req.body && typeof req.body === "object") {
+    const rawPublicUrl = (process.env.PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+    const publicUrl = rawPublicUrl
+      ? rawPublicUrl.startsWith("http")
+        ? rawPublicUrl
+        : `https://${rawPublicUrl}`
+      : "";
+    if (publicUrl) {
+      req.body.redirectUri = `${publicUrl}/`;
+    }
+  }
+  next();
+});
+
 // Verifies the Firebase ID token sent as `Authorization: Bearer <idToken>`
 // and attaches req.auth so routes can read the signed-in Firebase user via
 // getAuth(req) — same call shape routes/connect.ts already used for Clerk.
