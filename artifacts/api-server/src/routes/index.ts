@@ -20,6 +20,14 @@ import captionRouter from "./caption";
 
 const router: IRouter = Router();
 
+// Google OAuth uses the backend as the registered redirect URI.
+// After Google grants access, forward the OAuth query parameters to the
+// frontend so the existing client-side callback can exchange the code.
+router.get("/", (req, res) => {
+  const frontendUrl = process.env.FRONTEND_PUBLIC_URL ?? "https://oneofficeai.pages.dev";
+  res.redirect(302, `${frontendUrl.replace(/\/$/, "")}${req.originalUrl}`);
+});
+
 router.use(healthRouter);
 router.use(connectRouter);
 router.use(connectorsRouter);
