@@ -129,13 +129,48 @@ async function callExternalTextProvider(
   }
 }
 
-// Caption/product generation stays on the dedicated OneOffice CPU server.
+// Shared content-generation path. The dedicated OneOffice CPU caption server is
+// always tried first. If it is rate-limited, unavailable, or times out, fall
+// back automatically so one provider cannot break publishing flows.
 export async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
-  return callCpuText(systemPrompt, userPrompt, 1024);
+  const errors: string[] = [];
+
+  if (process.env.CAPTION_CPU_URL?.trim()) {
+    try {
+      console.log("[AI] trying OneOffice caption CPU");
+      return await callCpuText(systemPrompt, userPrompt, 1024);
+    } catch (err) {
+      errors.push(`caption-cpu: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn("[AI] caption CPU failed, falling back to Gemini", err);
+    }
+  }
+
+  if (geminiClients.length > 0) {
+    try {
+      console.log("[AI] trying Gemini fallback");
+      return await callGeminiText(systemPrompt, userPrompt, true);
+    } catch (err) {
+      errors.push(`Gemini: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn("[AI] Gemini fallback failed", err);
+    }
+  }
+
+  for (const provider of EXTERNAL_TEXT_PROVIDERS) {
+    if (!provider.key) continue;
+    try {
+      console.log(`[AI] trying ${provider.name} fallback`);
+      return await callExternalTextProvider(provider, systemPrompt, userPrompt);
+    } catch (err) {
+      errors.push(`${provider.name}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[AI] ${provider.name} fallback failed`, err);
+    }
+  }
+
+  throw new Error(`AI content generation failed on all providers: ${errors.join(" | ")}`);
 }
 
 export async function generateFreeText(systemPrompt: string, userPrompt: string): Promise<string> {
-  return callCpuText(systemPrompt, userPrompt, 1024);
+  return generateText(systemPrompt, userPrompt);
 }
 
 // OneHelp intentionally does NOT use the OneOffice CPU server.
