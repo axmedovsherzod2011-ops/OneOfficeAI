@@ -13,3 +13,4 @@ export * from "./orders";
 export * from "./oneHelpMessages";
 export * from "./oneHelpTasks";
 export * from "./externalAgentSessions";
+export * from "./youtubeProductContents";
