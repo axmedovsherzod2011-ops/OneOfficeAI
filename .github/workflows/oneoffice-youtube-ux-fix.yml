@@ -1,0 +1,91 @@
+name: OneOffice YouTube UX fix
+
+on:
+  push:
+    branches:
+      - chore/remove-replit
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/remove-replit
+          fetch-depth: 0
+
+      - name: Apply YouTube preview and account fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          app = Path('artifacts/oneoffice-ai/src/App.tsx')
+          text = app.read_text()
+          start = text.index('function YtMetadataReview(')
+          end = text.index('// Step 3 — upload video', start)
+          section = text[start:end]
+
+          old = 'const res = await fetch(path, {'
+          new = 'const res = await fetch(apiUrl(path), {'
+          if old not in section:
+              raise SystemExit('YOUTUBE_ACCOUNT_FETCH_FIX_NOT_FOUND')
+          section = section.replace(old, new, 1)
+
+          old_state = '  const [regenerating, setRegenerating] = useState(false);\n'
+          new_state = old_state + '  const [previewUrl, setPreviewUrl] = useState<string | null>(ytMetadata?.previewUrl ?? null);\n'
+          if old_state not in section:
+              raise SystemExit('PREVIEW_STATE_ANCHOR_NOT_FOUND')
+          section = section.replace(old_state, new_state, 1)
+
+          old_regen = '      setTagsStr((data.tags ?? []).join(", "));\n'
+          new_regen = old_regen + '      setPreviewUrl(data.previewUrl ?? null);\n'
+          if old_regen not in section:
+              raise SystemExit('PREVIEW_REGEN_ANCHOR_NOT_FOUND')
+          section = section.replace(old_regen, new_regen, 1)
+
+          marker = '      {/* Account picker */}\n'
+          preview = '''      {previewUrl && (\n        <Glass className="p-5 space-y-3">\n          <div className="flex items-center justify-between gap-3">\n            <div>\n              <h3 className="text-white font-semibold text-sm">Video preview</h3>\n              <p className="text-slate-400 text-xs mt-0.5">5 soniyalik video YouTube'ga shu ko'rinishda yuboriladi.</p>\n            </div>\n            <span className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2.5 py-1">5s</span>\n          </div>\n          <div className={`w-full overflow-hidden rounded-2xl border border-white/10 bg-black ${isShort ? "max-w-[280px] mx-auto aspect-[9/16]" : "aspect-video"}`}>\n            <video\n              key={previewUrl}\n              src={previewUrl}\n              controls\n              playsInline\n              preload="metadata"\n              className="w-full h-full object-contain"\n            />\n          </div>\n        </Glass>\n      )}\n\n'''
+          if marker not in section:
+              raise SystemExit('PREVIEW_UI_ANCHOR_NOT_FOUND')
+          section = section.replace(marker, preview + marker, 1)
+
+          text = text[:start] + section + text[end:]
+          app.write_text(text)
+
+          yt = Path('artifacts/api-server/src/routes/youtube.ts')
+          y = yt.read_text()
+          y = y.replace('import { rm, writeFile } from "fs/promises";', 'import { rm, writeFile, readFile } from "fs/promises";')
+
+          marker = '  const hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.map((x: string) => String(x).replace(/^#/, "")).slice(0, 10) : [];\n  res.json({ title, description, tags, hashtags, isShort });'
+          replacement = '''  const hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.map((x: string) => String(x).replace(/^#/, "")).slice(0, 10) : [];\n\n  // Generate the exact same lightweight 5-second video used by publish, so\n  // the review screen can show a real preview before the user uploads.\n  let previewUrl: string | null = null;\n  const previewImages = (product.images as string[]) || [];\n  if (previewImages[0]) {\n    const previewDir = join(tmpdir(), `yt-preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);\n    mkdirSync(previewDir, { recursive: true });\n    const previewImagePath = join(previewDir, "product.jpg");\n    const previewVideoPath = join(previewDir, "preview.mp4");\n    try {\n      if (await downloadImage(previewImages[0], previewImagePath)) {\n        await buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort));\n        const previewBuffer = await readFile(previewVideoPath);\n        previewUrl = `data:video/mp4;base64,${previewBuffer.toString("base64")}`;\n      }\n    } finally {\n      await rm(previewDir, { recursive: true, force: true }).catch(() => {});\n    }\n  }\n\n  res.json({ title, description, tags, hashtags, isShort, previewUrl });'''
+          if marker not in y:
+              raise SystemExit('METADATA_PREVIEW_ANCHOR_NOT_FOUND')
+          y = y.replace(marker, replacement, 1)
+          yt.write_text(y)
+
+      - name: Verify changes
+        run: |
+          grep -q 'fetch(apiUrl(path), {' artifacts/oneoffice-ai/src/App.tsx
+          grep -q 'previewUrl' artifacts/oneoffice-ai/src/App.tsx
+          grep -q 'readFile' artifacts/api-server/src/routes/youtube.ts
+          grep -q 'previewUrl' artifacts/api-server/src/routes/youtube.ts
+
+      - name: Commit fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/oneoffice-ai/src/App.tsx artifacts/api-server/src/routes/youtube.ts
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: repair YouTube account loading and add video preview'
+          git push origin chore/remove-replit
+
+      - name: Remove one-time workflow
+        if: success()
+        run: |
+          git rm -f .github/workflows/oneoffice-youtube-ux-fix.yml
+          git commit -m 'chore: remove one-time YouTube fix workflow'
+          git push origin chore/remove-replit
