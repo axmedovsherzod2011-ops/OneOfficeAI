@@ -1,7 +1,15 @@
 (() => {
   const PRIVACY_URL = "/privacy/";
   const TERMS_URL = "/terms-of-use/";
+  const YOUTUBE_REDIRECT_URI = "https://oneofficeai-1.onrender.com/";
   const MARKER = "data-oneoffice-legal-links";
+
+  // Keep the OAuth callback URI stable across Cloudflare Pages and local/browser origins.
+  try {
+    sessionStorage.setItem("yt_oauth_redirect_uri", YOUTUBE_REDIRECT_URI);
+  } catch {
+    // Ignore storage restrictions; the YouTube connector will surface its normal error.
+  }
 
   function addLegalLinks() {
     const signOut = document.querySelector('[data-testid="button-profile-signout"]');
