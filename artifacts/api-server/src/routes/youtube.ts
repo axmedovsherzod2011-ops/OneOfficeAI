@@ -154,8 +154,11 @@ router.post("/connectors/youtube/exchange", handle(async (req, res) => {
   const clientId = getGoogleClientId();
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) { res.status(400).json({ error: "YouTube ulanishi hali sozlanmagan (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET server sozlamalarida yo'q)." }); return; }
-  const { code, redirectUri } = req.body as { code?: string; redirectUri?: string };
-  if (!code || !redirectUri) { res.status(400).json({ error: "code va redirectUri majburiy." }); return; }
+  const { code } = req.body as { code?: string; redirectUri?: string };
+  const rawPublicUrl = (process.env.PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+  const publicUrl = rawPublicUrl ? (rawPublicUrl.startsWith("http") ? rawPublicUrl : `https://${rawPublicUrl}`) : "";
+  const redirectUri = publicUrl ? `${publicUrl}/` : "";
+  if (!code || !redirectUri) { res.status(400).json({ error: "YouTube OAuth redirect URI serverda sozlanmagan." }); return; }
   const existing = await db.select({ id: youtubeAccountsTable.id }).from(youtubeAccountsTable).where(eq(youtubeAccountsTable.userId, userId));
   if (existing.length >= MAX_YOUTUBE_ACCOUNTS_PER_USER) { res.status(400).json({ error: `Siz eng ko'pi bilan ${MAX_YOUTUBE_ACCOUNTS_PER_USER} ta YouTube kanal ulashingiz mumkin.` }); return; }
 
