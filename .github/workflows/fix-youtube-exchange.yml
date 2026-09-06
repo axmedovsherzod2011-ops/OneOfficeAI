@@ -1,0 +1,33 @@
+name: Repair YouTube OAuth exchange
+on:
+  push:
+    branches: [chore/remove-replit]
+    paths: [.github/workflows/fix-youtube-exchange.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/remove-replit
+      - name: Repair exchange handler
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('artifacts/api-server/src/routes/youtube.ts')
+          s = p.read_text()
+          start = s.index('      const accessToken = await ensureFreshToken(account);')
+          end = s.index('// ---------------------------------------------------------------------------\n// DELETE /connectors/youtube/:id', start)
+          replacement = '''    const accessToken = tokenData.access_token;\n    const tokenExpiresAt = new Date(\n      Date.now() + (tokenData.expires_in ?? 3600) * 1000,\n    );\n\n    // 2) Fetch the user's YouTube channel info\n    const channelRes = await fetch(\n      "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",\n      { headers: { Authorization: `Bearer ${accessToken}` } },\n    );\n    const channelData = (await channelRes.json()) as {\n      items?: Array<{\n        id?: string;\n        snippet?: {\n          title?: string;\n          customUrl?: string;\n          thumbnails?: { default?: { url?: string } };\n        };\n      }>;\n      error?: { message?: string };\n    };\n\n    if (!channelRes.ok) {\n      throw new Error(\n        `YouTube kanal ma'lumotini olishda xato: ${channelData.error?.message ?? channelRes.status}`,\n      );\n    }\n\n    const ch = channelData.items?.[0];\n    if (!ch?.id) {\n      throw new Error(\n        "Google akkauntga ruxsat berildi, lekin YouTube kanali topilmadi. YouTube kanalingiz mavjudligini tekshiring.",\n      );\n    }\n\n    const channelId = ch.id;\n    const title = ch.snippet?.title ?? "";\n    const customUrl = ch.snippet?.customUrl ?? "";\n    const thumbnailUrl = ch.snippet?.thumbnails?.default?.url ?? "";\n\n    // Google may omit refresh_token when an account is re-authorized.\n    const [already] = await db\n      .select()\n      .from(youtubeAccountsTable)\n      .where(\n        and(\n          eq(youtubeAccountsTable.userId, userId),\n          eq(youtubeAccountsTable.channelId, channelId),\n        ),\n      )\n      .limit(1);\n\n    const refreshToken = tokenData.refresh_token ?? already?.refreshToken ?? null;\n    const values = {\n      userId,\n      channelId,\n      title,\n      customUrl,\n      thumbnailUrl,\n      accessToken,\n      refreshToken,\n      tokenExpiresAt,\n    };\n\n    // 3) Upsert — same channel reconnect updates tokens; new channel inserts a row.\n    let savedAccount;\n    if (already) {\n      [savedAccount] = await db\n        .update(youtubeAccountsTable)\n        .set(values)\n        .where(eq(youtubeAccountsTable.id, already.id))\n        .returning();\n    } else {\n      [savedAccount] = await db\n        .insert(youtubeAccountsTable)\n        .values(values)\n        .returning();\n    }\n\n    if (!savedAccount) {\n      throw new Error("YouTube kanalini bazaga saqlash muvaffaqiyatsiz.");\n    }\n\n    res.json(toAccountResponse(savedAccount));\n  }),\n);\n\n'''
+          p.write_text(s[:start] + replacement + s[end:])
+      - name: Verify and commit
+        run: |
+          grep -n "const accessToken = tokenData.access_token" artifacts/api-server/src/routes/youtube.ts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/fix-youtube-exchange.yml
+          git add artifacts/api-server/src/routes/youtube.ts .github/workflows/fix-youtube-exchange.yml
+          git commit -m "fix: persist YouTube channel after OAuth" || exit 0
+          git push origin chore/remove-replit
