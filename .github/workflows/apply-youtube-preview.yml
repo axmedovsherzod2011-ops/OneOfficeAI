@@ -1,0 +1,145 @@
+name: Apply YouTube Preview Patch
+on:
+  push:
+    branches: [main]
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch chore/remove-replit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin chore/remove-replit
+          git checkout -B chore/remove-replit origin/chore/remove-replit
+          git show b83e4674795dc065fb3ab60fc04cb3a570869af1:artifacts/oneoffice-ai/src/App.tsx > /tmp/App.tsx
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('/tmp/App.tsx').read_text()
+          a = src.index('function YtMetadataReview')
+          b = src.index('// Step 3 — upload video', a)
+          section = src[a:b]
+          section = section.replace(
+              '  const [regenerating, setRegenerating] = useState(false);',
+              '  const [regenerating, setRegenerating] = useState(false);\n  const [previewUrl, setPreviewUrl] = useState("");\n  const [previewLoading, setPreviewLoading] = useState(false);\n  const [previewError, setPreviewError] = useState("");', 1)
+          marker = '  async function handleRegenerate() {'
+          insert = '''  async function loadPreview() {
+    if (!product?.id || !firebaseUser) return;
+    setPreviewLoading(true);
+    setPreviewError("");
+    try {
+      const token = await firebaseUser.getIdToken();
+      const res = await fetch(`/api/connectors/youtube/preview?productId=${encodeURIComponent(product.id)}&isShort=${isShort}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? "Video preview yaratib bo'lmadi.");
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      setPreviewUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return objectUrl;
+      });
+    } catch (err: any) {
+      setPreviewError(err?.message ?? "Video preview yuklanmadi.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl = "";
+    async function fetchPreview() {
+      if (!product?.id || !firebaseUser) return;
+      setPreviewLoading(true);
+      setPreviewError("");
+      try {
+        const token = await firebaseUser.getIdToken();
+        const res = await fetch(`/api/connectors/youtube/preview?productId=${encodeURIComponent(product.id)}&isShort=${isShort}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error ?? "Video preview yaratib bo'lmadi.");
+        }
+        const blob = await res.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setPreviewUrl(objectUrl);
+      } catch (err: any) {
+        if (!cancelled) setPreviewError(err?.message ?? "Video preview yuklanmadi.");
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }
+    fetchPreview();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [product?.id, isShort, firebaseUser]);
+
+'''
+          assert marker in section
+          section = section.replace(marker, insert + marker, 1)
+          old2 = '      setTagsStr((data.tags ?? []).join(", "));\n'
+          assert old2 in section
+          section = section.replace(old2, old2 + '      await loadPreview();\n', 1)
+          marker2 = '      {/* Metadata fields */}'
+          ui = '''      {/* Video preview */}
+      <Glass className="p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Play className="h-4 w-4 text-red-400" />
+              <h3 className="text-white font-semibold text-sm">Video preview</h3>
+              <span className="text-[10px] uppercase tracking-wider text-slate-500 border border-white/10 rounded-full px-2 py-0.5">{isShort ? "9:16 Shorts" : "16:9 YouTube"}</span>
+            </div>
+            <p className="text-slate-400 text-xs mt-1">Publish qilinadigan 5 soniyalik video aynan shu formatda tayyorlanadi.</p>
+          </div>
+          <button onClick={loadPreview} disabled={previewLoading} className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 disabled:opacity-40 transition">
+            {previewLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Yangilash
+          </button>
+        </div>
+        <div className={`relative mx-auto overflow-hidden rounded-2xl border border-white/10 bg-black/40 shadow-2xl ${isShort ? "w-full max-w-[300px] aspect-[9/16]" : "w-full aspect-video"}`}>
+          {previewUrl ? (
+            <video key={previewUrl} src={previewUrl} controls playsInline preload="metadata" className="h-full w-full object-contain" />
+          ) : previewLoading ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400">
+              <Loader2 className="h-7 w-7 animate-spin text-violet-400" />
+              <span className="text-xs">5 soniyalik preview tayyorlanmoqda…</span>
+            </div>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
+              <AlertCircle className="h-6 w-6 text-amber-400" />
+              <span className="text-xs text-slate-400">{previewError || "Preview hozircha mavjud emas."}</span>
+            </div>
+          )}
+        </div>
+        <p className="text-[11px] text-slate-500 text-center">Mahsulot o'zgarsa, yangi preview avtomatik yaratiladi. Qayta publish qilishda mos cache ishlatiladi.</p>
+      </Glass>
+
+'''
+          assert marker2 in section
+          section = section.replace(marker2, ui + marker2, 1)
+          Path('artifacts/oneoffice-ai/src/App.tsx').write_text(src[:a] + section + src[b:])
+          PY
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/oneoffice-ai/src/App.tsx
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'feat: add YouTube video preview'
+          git push origin chore/remove-replit
