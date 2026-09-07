@@ -5678,6 +5678,65 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
   const [metaError, setMetaError] = useState("");
   const [regenerating, setRegenerating] = useState(false);
 
+  // Video preview — the actual 5-second MP4 that will be published, fetched
+  // straight from the backend's own cache (GET /connectors/youtube/preview).
+  // The backend already handles hashing the product's content and reusing
+  // the cached video when nothing's changed, or building a fresh one when
+  // it has — the frontend never generates or caches anything itself, only
+  // ever displays whatever comes back.
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+
+  async function loadPreview() {
+    if (!product?.id || !firebaseUser) return;
+
+    setPreviewLoading(true);
+    setPreviewError("");
+
+    try {
+      const token = await firebaseUser.getIdToken();
+
+      const res = await fetch(
+        `/api/connectors/youtube/preview?productId=${encodeURIComponent(product.id)}&isShort=${isShort}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        },
+      );
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? "Video preview yaratib bo'lmadi.");
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      setPreviewUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return objectUrl;
+      });
+    } catch (err: any) {
+      setPreviewError(err?.message ?? "Video preview yuklanmadi.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  // Auto-loads on open and whenever the product, the Shorts toggle, or the
+  // signed-in user changes — and always revokes the previous object URL on
+  // cleanup so switching formats or unmounting never leaks blob memory.
+  useEffect(() => {
+    void loadPreview();
+    return () => {
+      setPreviewUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return previous;
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id, isShort, firebaseUser]);
+
   async function authedFetch(path: string, init: RequestInit = {}) {
     const token = await firebaseUser?.getIdToken();
     const res = await fetch(path, {
@@ -5717,6 +5776,9 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
       setTitle(data.title ?? "");
       setDescription(data.description ?? "");
       setTagsStr((data.tags ?? []).join(", "));
+      // The new metadata may have come from freshly (re)built content —
+      // reload the preview so it can't show a stale video after this.
+      void loadPreview();
     } catch (err: any) {
       setMetaError(err?.message ?? "Metadata regeneratsiya muvaffaqiyatsiz.");
     } finally {
@@ -5805,6 +5867,66 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
         >
           <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${isShort ? "left-5" : "left-0.5"}`} />
         </button>
+      </Glass>
+
+      {/* Video preview — the exact 5-second clip that will be published */}
+      <Glass className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Play className="h-4 w-4 text-red-400" />
+            <h3 className="text-white font-semibold text-sm">Video preview</h3>
+            <span
+              className={`font-mono text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${
+                isShort
+                  ? "text-red-300 border-red-500/30 bg-red-500/10"
+                  : "text-slate-300 border-white/15 bg-white/5"
+              }`}
+            >
+              {isShort ? "9:16 Shorts" : "16:9 YouTube"}
+            </span>
+          </div>
+          <button
+            onClick={() => void loadPreview()}
+            disabled={previewLoading}
+            className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 disabled:opacity-40 transition"
+          >
+            {previewLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            Yangilash
+          </button>
+        </div>
+        <p className="text-slate-500 text-xs">
+          Bu — YouTube'ga joylanadigan haqiqiy 5 soniyalik video.
+        </p>
+
+        <div
+          className={`mx-auto bg-black rounded-xl overflow-hidden border border-white/10 flex items-center justify-center ${
+            isShort ? "aspect-[9/16] max-w-[220px]" : "aspect-video w-full"
+          }`}
+        >
+          {previewLoading ? (
+            <Loader2 className="h-6 w-6 text-slate-500 animate-spin" />
+          ) : previewError ? (
+            <div className="flex flex-col items-center gap-2 text-center px-4">
+              <AlertCircle className="h-5 w-5 text-rose-400" />
+              <p className="text-rose-300 text-xs">{previewError}</p>
+            </div>
+          ) : previewUrl ? (
+            <video
+              key={previewUrl}
+              src={previewUrl}
+              controls
+              playsInline
+              preload="metadata"
+              className="w-full h-full"
+            />
+          ) : (
+            <p className="text-slate-600 text-xs">Video hali yuklanmadi.</p>
+          )}
+        </div>
       </Glass>
 
       {/* Metadata fields */}
