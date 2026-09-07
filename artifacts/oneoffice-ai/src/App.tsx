@@ -5698,7 +5698,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
       const token = await firebaseUser.getIdToken();
 
       const res = await fetch(
-        `/api/connectors/youtube/preview?productId=${encodeURIComponent(product.id)}&isShort=${isShort}`,
+        apiUrl(`/api/connectors/youtube/preview?productId=${encodeURIComponent(product.id)}&isShort=${isShort}`),
         {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         },
