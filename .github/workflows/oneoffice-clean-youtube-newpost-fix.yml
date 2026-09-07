@@ -1,0 +1,182 @@
+name: OneOffice clean YouTube and New Post fix
+
+on:
+  push:
+    branches:
+      - chore/remove-replit
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/remove-replit
+          fetch-depth: 0
+
+      - name: Apply clean frontend fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          app = Path('artifacts/oneoffice-ai/src/App.tsx')
+          text = app.read_text()
+
+          # 1-3. Every YouTube connector/metadata authedFetch request goes
+          # through the configured Render API base instead of the Pages origin.
+          old = 'const res = await fetch(path, {'
+          new = 'const res = await fetch(apiUrl(path), {'
+          count = text.count(old)
+          if count < 1:
+              raise SystemExit('AUTHED_FETCH_ANCHOR_NOT_FOUND')
+          text = text.replace(old, new)
+
+          # New Post destination picker. It deliberately happens before the
+          # product picker so the selected platform can control which AI flow
+          # runs, avoiding unnecessary generation for the other platform.
+          marker = 'function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any) {'
+          if marker not in text:
+              raise SystemExit('CREATE_FORM_ANCHOR_NOT_FOUND')
+
+          destination_component = r'''function PostDestinationPicker({ onSelect }: { onSelect: (destination: "telegram" | "youtube") => void }) {
+  return (
+    <div className="p-6 md:p-10 max-w-2xl">
+      <Glass className="p-8">
+        <div className="flex items-center gap-3 mb-2">
+          <Send className="h-5 w-5 text-violet-400" />
+          <h3 className="text-white text-xl font-semibold">New Post</h3>
+        </div>
+        <p className="text-slate-400 text-sm mb-6">
+          Avval qaysi platformaga post tayyorlashni tanlang.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => onSelect("telegram")}
+            className="group text-left rounded-2xl border border-white/10 bg-white/5 p-5 hover:bg-white/10 hover:border-violet-400/40 transition"
+          >
+            <div className="h-11 w-11 rounded-xl bg-sky-500/15 flex items-center justify-center mb-4">
+              <Send className="h-5 w-5 text-sky-400" />
+            </div>
+            <div className="text-white font-semibold">Telegram</div>
+            <div className="text-slate-400 text-xs mt-1">Telegram uchun post tayyorlash</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelect("youtube")}
+            className="group text-left rounded-2xl border border-white/10 bg-white/5 p-5 hover:bg-white/10 hover:border-red-400/40 transition"
+          >
+            <div className="h-11 w-11 rounded-xl bg-red-500/15 flex items-center justify-center mb-4">
+              <Youtube className="h-5 w-5 text-red-400" />
+            </div>
+            <div className="text-white font-semibold">YouTube</div>
+            <div className="text-slate-400 text-xs mt-1">YouTube uchun metadata tayyorlash</div>
+          </button>
+        </div>
+      </Glass>
+    </div>
+  );
+}
+
+'''
+          text = text.replace(marker, destination_component + marker, 1)
+
+          # Add destination state alongside the existing create flow state.
+          old_state = '  const [flow, setFlow] = useState("product");\n'
+          new_state = '  const [flow, setFlow] = useState("destination");\n  const [postDestination, setPostDestination] = useState<"telegram" | "youtube" | null>(null);\n'
+          if old_state not in text:
+              raise SystemExit('FLOW_STATE_ANCHOR_NOT_FOUND')
+          text = text.replace(old_state, new_state, 1)
+
+          # Reset the New Post flow back to the destination picker.
+          old_reset = '  function resetCreate() {\n    setFlow("product");\n'
+          new_reset = '  function resetCreate() {\n    setFlow("destination");\n    setPostDestination(null);\n'
+          if old_reset not in text:
+              raise SystemExit('RESET_CREATE_ANCHOR_NOT_FOUND')
+          text = text.replace(old_reset, new_reset, 1)
+
+          # Selecting a product now branches immediately into the selected
+          # platform's AI flow. Telegram keeps the existing form/generation;
+          # YouTube goes directly to YouTube metadata generation.
+          old_pick_end = '    setFlow("form");\n  }\n\n  function toggleImage(img: any) {'
+          new_pick_end = '    setFlow(postDestination === "youtube" ? "yt-metadata" : "form");\n  }\n\n  function toggleImage(img: any) {'
+          if old_pick_end not in text:
+              raise SystemExit('PICK_PRODUCT_ANCHOR_NOT_FOUND')
+          text = text.replace(old_pick_end, new_pick_end, 1)
+
+          # Topbar New Post always starts with the destination picker.
+          old_top = '''              ? () => {
+                  setNavView("create");
+                  resetCreate();
+                }'''
+          new_top = '''              ? () => {
+                  setNavView("create");
+                  resetCreate();
+                }'''
+          if old_top not in text:
+              raise SystemExit('TOPBAR_ANCHOR_NOT_FOUND')
+
+          # Insert destination selection before the existing product flow.
+          marker_render = '''        {navView === "create" && (
+          <>
+            {flow === "product" && ('''
+          replacement_render = '''        {navView === "create" && (
+          <>
+            {flow === "destination" && (
+              <PostDestinationPicker
+                onSelect={(destination) => {
+                  setPostDestination(destination);
+                  setFlow("product");
+                }}
+              />
+            )}
+            {flow === "product" && ('''
+          if marker_render not in text:
+              raise SystemExit('CREATE_RENDER_ANCHOR_NOT_FOUND')
+          text = text.replace(marker_render, replacement_render, 1)
+
+          # Do not expose the old cross-platform YouTube button in Telegram
+          # results; YouTube is now chosen at the beginning of New Post.
+          old_result_prop = '                onYtApprove={selectedProduct?.id ? handleYtApprove : undefined}\n'
+          if old_result_prop in text:
+              text = text.replace(old_result_prop, '', 1)
+
+          # If a YouTube metadata generation fails, return to product choice
+          # rather than falling into Telegram results.
+          old_error = '''  function handleYtMetadataError(msg: string) {
+    setPublishError(msg);
+    setFlow("results");
+  }'''
+          new_error = '''  function handleYtMetadataError(msg: string) {
+    setPublishError(msg);
+    setFlow("product");
+  }'''
+          if old_error in text:
+              text = text.replace(old_error, new_error, 1)
+
+          app.write_text(text)
+
+      - name: Verify
+        run: |
+          grep -q 'fetch(apiUrl(path), {' artifacts/oneoffice-ai/src/App.tsx
+          grep -q 'function PostDestinationPicker' artifacts/oneoffice-ai/src/App.tsx
+          grep -q 'setFlow("destination")' artifacts/oneoffice-ai/src/App.tsx
+          grep -q 'postDestination === "youtube"' artifacts/oneoffice-ai/src/App.tsx
+
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/oneoffice-ai/src/App.tsx .github/workflows/oneoffice-clean-youtube-newpost-fix.yml
+          git commit -m 'fix: restore New Post destination and Render API routing'
+          git push origin chore/remove-replit
+
+      - name: Remove one-time workflow
+        run: |
+          git rm -f .github/workflows/oneoffice-clean-youtube-newpost-fix.yml
+          git commit -m 'chore: remove one-time frontend fix workflow'
+          git push origin chore/remove-replit
