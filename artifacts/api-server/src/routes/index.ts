@@ -10,6 +10,7 @@ import publishRouter from "./publish";
 import enrichRouter from "./enrich";
 import productsRouter from "./products";
 import productResearchRouter from "./productResearch";
+import youtubePreviewCompatRouter from "./youtubePreviewCompat";
 import youtubeMarketingRouter from "./youtubeMarketing";
 import youtubeMarketingPublishRouter from "./youtubeMarketingPublish";
 import youtubeRouter from "./youtube";
@@ -41,6 +42,10 @@ router.use(publishRouter);
 router.use(enrichRouter);
 router.use(productsRouter);
 router.use(productResearchRouter);
+// Recover a missing preview product id before the AI-director route. When the
+// client sends a valid productId this middleware is a no-op and simply passes
+// through to the normal director preview handler.
+router.use(youtubePreviewCompatRouter);
 // AI director owns YouTube metadata + preview + publish. OAuth/account routes
 // stay in the legacy YouTube router below.
 router.use(youtubeMarketingRouter);
