@@ -6,14 +6,15 @@ import { eq, sql } from "drizzle-orm";
 
 const router = Router();
 
-// Some clients can reach preview without a usable productId. Do not mutate
-// Express req.query (it is a read-only getter in the current runtime). Resolve
-// the product from the latest director plan and issue a 307 redirect instead.
-// fetch() follows the redirect automatically, preserving the Authorization
-// header and causing Express to parse the new query string normally.
+// Some clients can reach preview without a usable productId. Resolve the
+// product from the latest director plan and override Express's prototype
+// getter with an own query object. This keeps the request in-process and
+// avoids a 307 redirect, which can surface to cross-origin fetch() as
+// "Failed to fetch" before the actual preview handler is reached.
 router.get("/connectors/youtube/preview", async (req: any, res: any, next: any) => {
   try {
-    const rawProductId = req.query?.productId;
+    const currentQuery = req.query ?? {};
+    const rawProductId = currentQuery.productId;
     const numericProductId = Number(rawProductId);
     if (Number.isFinite(numericProductId)) return next();
 
@@ -27,7 +28,7 @@ router.get("/connectors/youtube/preview", async (req: any, res: any, next: any) 
       .limit(1);
     if (!user) return next();
 
-    const isShort = String(req.query?.isShort ?? "false") === "true";
+    const isShort = String(currentQuery.isShort ?? "false") === "true";
     const result = await db.execute(sql`
       SELECT product_id
       FROM youtube_video_director_plans
@@ -40,9 +41,13 @@ router.get("/connectors/youtube/preview", async (req: any, res: any, next: any) 
     const productId = Number(row?.product_id);
     if (!Number.isFinite(productId)) return next();
 
-    const parsedUrl = new URL(req.originalUrl || req.url, "http://localhost");
-    parsedUrl.searchParams.set("productId", String(productId));
-    return res.redirect(307, `${parsedUrl.pathname}${parsedUrl.search}`);
+    Object.defineProperty(req, "query", {
+      value: { ...currentQuery, productId: String(productId) },
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+    return next();
   } catch (error) {
     console.warn("[youtube preview compat] could not recover product id:", error);
     return next();
