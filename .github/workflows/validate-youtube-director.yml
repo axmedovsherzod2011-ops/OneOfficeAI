@@ -21,4 +21,6 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @workspace/db exec tsc -p tsconfig.json
+      - run: pnpm --filter @workspace/api-zod exec tsc -p tsconfig.json
       - run: pnpm --filter api-server typecheck
