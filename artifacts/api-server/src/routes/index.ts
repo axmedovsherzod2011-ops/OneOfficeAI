@@ -10,6 +10,7 @@ import publishRouter from "./publish";
 import enrichRouter from "./enrich";
 import productsRouter from "./products";
 import productResearchRouter from "./productResearch";
+import youtubeMarketingRouter from "./youtubeMarketing";
 import youtubeRouter from "./youtube";
 import telegramMtprotoRouter from "./telegramMtproto";
 import statsDashboardRouter from "./statsDashboard";
@@ -39,6 +40,9 @@ router.use(publishRouter);
 router.use(enrichRouter);
 router.use(productsRouter);
 router.use(productResearchRouter);
+// The AI-director router intentionally comes before the legacy YouTube router.
+// It owns metadata + preview; OAuth/account/publish remain in youtube.ts.
+router.use(youtubeMarketingRouter);
 router.use(youtubeRouter);
 router.use(telegramMtprotoRouter);
 router.use(statsDashboardRouter);
