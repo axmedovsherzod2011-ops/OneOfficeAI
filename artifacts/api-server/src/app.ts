@@ -27,7 +27,19 @@ app.use(
   }),
 );
 
-app.use(cors());
+// The frontend is hosted on Cloudflare Pages while the API is on Render.
+// Keep CORS explicit so browser preflighted YouTube POST requests are
+// accepted consistently instead of falling back to the generic "Failed to fetch".
+app.use(
+  cors({
+    origin: "https://oneofficeai.pages.dev",
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+    optionsSuccessStatus: 204,
+    maxAge: 0,
+  }),
+);
 // Raised from 15mb to fit several base64-encoded product photos in one
 // request (New Product form supports multi-image select). The frontend
 // also downsizes images client-side before sending, this is just headroom.
