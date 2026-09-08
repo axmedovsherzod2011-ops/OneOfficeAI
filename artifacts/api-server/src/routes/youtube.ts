@@ -13,6 +13,7 @@ import { join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { generateText } from "../ai/textProviders";
+import { buildMarketingVideo, VIDEO_DURATION_SECONDS } from "../video/video-engine";
 
 const execFileAsync = promisify(execFile);
 const router = Router();
@@ -80,231 +81,8 @@ async function downloadImage(url: string, dest: string) {
   } catch { return false; }
 }
 
-function writeMarketingWav(outputPath: string) {
-  const sampleRate = 44100;
-  const seconds = 5;
-  const frames = sampleRate * seconds;
-  const channels = 2;
-  const bitsPerSample = 16;
-  const dataSize = frames * channels * 2;
-  const buffer = Buffer.alloc(44 + dataSize);
-
-  const writeString = (offset: number, value: string) => buffer.write(value, offset, 'ascii');
-  writeString(0, 'RIFF');
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(channels, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * channels * 2, 28);
-  buffer.writeUInt16LE(channels * 2, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34);
-  writeString(36, 'data');
-  buffer.writeUInt32LE(dataSize, 40);
-
-  const roots = [220, 233, 247, 262, 277, 294, 311, 330];
-  const scales = [0, 2, 4, 7, 9, 12, 14];
-  const root = roots[Math.floor(Math.random() * roots.length)];
-  const tempo = 112 + Math.floor(Math.random() * 24);
-  const beat = 60 / tempo;
-  const progression = [0, 5, 3, 4];
-  const melody = Array.from({ length: 20 }, () => scales[Math.floor(Math.random() * scales.length)]);
-
-  const freq = (semitones: number) => root * Math.pow(2, semitones / 12);
-  const envelope = (t: number, duration: number) => {
-    const attack = Math.min(0.025, duration * 0.2);
-    const release = Math.min(0.09, duration * 0.35);
-    if (t < 0 || t > duration) return 0;
-    if (t < attack) return t / attack;
-    if (t > duration - release) return Math.max(0, (duration - t) / release);
-    return 1;
-  };
-
-  let peak = 0;
-  const samples = new Float32Array(frames * 2);
-  for (let i = 0; i < frames; i++) {
-    const t = i / sampleRate;
-    const beatIndex = Math.floor(t / beat);
-    const beatT = t % beat;
-    const chordIndex = Math.floor((beatIndex % 8) / 2);
-    const chordRoot = progression[chordIndex] ?? 0;
-
-    let left = 0;
-    let right = 0;
-
-    // Warm chord pad.
-    for (const interval of [chordRoot, chordRoot + 4, chordRoot + 7]) {
-      const f = freq(interval);
-      const pad = 0.07 * (Math.sin(2 * Math.PI * f * t) + 0.35 * Math.sin(2 * Math.PI * 2 * f * t));
-      left += pad;
-      right += pad * 0.96;
-    }
-
-    // Short bass pulse on each beat.
-    const bassT = beatT;
-    const bassDur = beat * 0.72;
-    if (bassT < bassDur) {
-      const f = freq(chordRoot - 12);
-      const a = envelope(bassT, bassDur);
-      const bass = 0.22 * a * Math.sin(2 * Math.PI * f * bassT);
-      left += bass;
-      right += bass;
-    }
-
-    // Bright melody with a different random note pattern per video.
-    const noteT = t % (beat / 2);
-    const noteIndex = Math.floor(t / (beat / 2)) % melody.length;
-    const note = melody[noteIndex];
-    if (noteT < beat * 0.42) {
-      const f = freq(note + 12);
-      const a = envelope(noteT, beat * 0.42);
-      const lead = 0.12 * a * Math.sin(2 * Math.PI * f * noteT);
-      left += lead * 0.94;
-      right += lead;
-    }
-
-    // Simple kick + hi-hat rhythm, synthesized locally so no external
-    // music file or copyrighted asset is needed.
-    const kickT = beatT;
-    if (kickT < 0.16) {
-      const a = Math.exp(-kickT * 24);
-      const f = 105 - 55 * Math.min(1, kickT / 0.16);
-      const kick = 0.22 * a * Math.sin(2 * Math.PI * f * kickT);
-      left += kick;
-      right += kick;
-    }
-    const hatT = t % (beat / 2);
-    if (hatT < 0.045) {
-      const a = Math.exp(-hatT * 90);
-      const noise = (Math.random() * 2 - 1) * 0.035 * a;
-      left += noise;
-      right += noise * 0.9;
-    }
-
-    const fade = Math.min(1, t / 0.08, (seconds - t) / 0.12);
-    left *= Math.max(0, fade);
-    right *= Math.max(0, fade);
-    const idx = i * 2;
-    samples[idx] = left;
-    samples[idx + 1] = right;
-    peak = Math.max(peak, Math.abs(left), Math.abs(right));
-  }
-
-  const gain = peak > 0 ? Math.min(0.82 / peak, 1.8) : 1;
-  for (let i = 0; i < samples.length; i++) {
-    const value = Math.max(-1, Math.min(1, samples[i] * gain));
-    buffer.writeInt16LE(Math.round(value * 32767), 44 + i * 2);
-  }
-  return writeFile(outputPath, buffer);
-}
-
-function writeMarketingWav(outputPath: string) {
-  const sampleRate = 44100;
-  const seconds = 5;
-  const frames = sampleRate * seconds;
-  const channels = 2;
-  const bitsPerSample = 16;
-  const dataSize = frames * channels * 2;
-  const buffer = Buffer.alloc(44 + dataSize);
-  const writeString = (offset: number, value: string) => buffer.write(value, offset, 'ascii');
-  writeString(0, 'RIFF'); buffer.writeUInt32LE(36 + dataSize, 4); writeString(8, 'WAVE');
-  writeString(12, 'fmt '); buffer.writeUInt32LE(16, 16); buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(channels, 22); buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * channels * 2, 28); buffer.writeUInt16LE(channels * 2, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34); writeString(36, 'data'); buffer.writeUInt32LE(dataSize, 40);
-
-  const roots = [220, 233, 247, 262, 277, 294, 311, 330];
-  const scales = [0, 2, 4, 7, 9, 12, 14];
-  const root = roots[Math.floor(Math.random() * roots.length)];
-  const tempo = 112 + Math.floor(Math.random() * 24);
-  const beat = 60 / tempo;
-  const progression = [0, 5, 3, 4];
-  const melody = Array.from({ length: 20 }, () => scales[Math.floor(Math.random() * scales.length)]);
-  const freq = (semitones: number) => root * Math.pow(2, semitones / 12);
-  const envelope = (t: number, duration: number) => {
-    const attack = Math.min(0.025, duration * 0.2);
-    const release = Math.min(0.09, duration * 0.35);
-    if (t < 0 || t > duration) return 0;
-    if (t < attack) return t / attack;
-    if (t > duration - release) return Math.max(0, (duration - t) / release);
-    return 1;
-  };
-
-  let peak = 0;
-  const samples = new Float32Array(frames * 2);
-  for (let i = 0; i < frames; i++) {
-    const t = i / sampleRate;
-    const beatIndex = Math.floor(t / beat);
-    const beatT = t % beat;
-    const chordRoot = progression[Math.floor((beatIndex % 8) / 2)] ?? 0;
-    let left = 0, right = 0;
-
-    for (const interval of [chordRoot, chordRoot + 4, chordRoot + 7]) {
-      const f = freq(interval);
-      const pad = 0.07 * (Math.sin(2 * Math.PI * f * t) + 0.35 * Math.sin(2 * Math.PI * 2 * f * t));
-      left += pad; right += pad * 0.96;
-    }
-
-    const bassDur = beat * 0.72;
-    if (beatT < bassDur) {
-      const f = freq(chordRoot - 12);
-      const bass = 0.22 * envelope(beatT, bassDur) * Math.sin(2 * Math.PI * f * beatT);
-      left += bass; right += bass;
-    }
-
-    const noteT = t % (beat / 2);
-    const note = melody[Math.floor(t / (beat / 2)) % melody.length];
-    if (noteT < beat * 0.42) {
-      const f = freq(note + 12);
-      const lead = 0.12 * envelope(noteT, beat * 0.42) * Math.sin(2 * Math.PI * f * noteT);
-      left += lead * 0.94; right += lead;
-    }
-
-    if (beatT < 0.16) {
-      const a = Math.exp(-beatT * 24);
-      const f = 105 - 55 * Math.min(1, beatT / 0.16);
-      const kick = 0.22 * a * Math.sin(2 * Math.PI * f * beatT);
-      left += kick; right += kick;
-    }
-    const hatT = t % (beat / 2);
-    if (hatT < 0.045) {
-      const noise = (Math.random() * 2 - 1) * 0.035 * Math.exp(-hatT * 90);
-      left += noise; right += noise * 0.9;
-    }
-
-    const fade = Math.min(1, t / 0.08, (seconds - t) / 0.12);
-    const idx = i * 2;
-    samples[idx] = left * Math.max(0, fade);
-    samples[idx + 1] = right * Math.max(0, fade);
-    peak = Math.max(peak, Math.abs(samples[idx]), Math.abs(samples[idx + 1]));
-  }
-
-  const gain = peak > 0 ? Math.min(0.82 / peak, 1.8) : 1;
-  for (let i = 0; i < samples.length; i++) {
-    const value = Math.max(-1, Math.min(1, samples[i] * gain));
-    buffer.writeInt16LE(Math.round(value * 32767), 44 + i * 2);
-  }
-  return writeFile(outputPath, buffer);
-}
-
-async function buildFiveSecondVideo(imagePath: string, outputPath: string, isShort: boolean) {
-  const [w, h] = isShort ? [1080, 1920] : [1920, 1080];
-  const vf = `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
-  const musicPath = join(tmpdir(), `oneoffice-marketing-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
-  try {
-    await writeMarketingWav(musicPath);
-    const args = [
-      "-loop", "1", "-i", imagePath, "-i", musicPath, "-t", "5", "-vf", vf, "-r", "30",
-      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-      "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-      "-shortest", "-movflags", "+faststart", "-y", outputPath,
-    ];
-    await execFileAsync("ffmpeg", args, { timeout: 45_000 });
-  } finally {
-    await rm(musicPath, { force: true }).catch(() => {});
-  }
+async function buildFiveSecondVideo(imagePath: string, outputPath: string, isShort: boolean, product: any) {
+  await buildMarketingVideo(imagePath, outputPath, product, isShort);
 }
 
 async function uploadToYouTube(opts: { accessToken: string; title: string; description: string; tags: string[]; videoPath: string; fileSize: number }) {
@@ -384,7 +162,7 @@ router.get("/connectors/youtube/preview", handle(async (req, res) => {
   if (!product) { res.status(404).json({ error: "Mahsulot topilmadi." }); return; }
   await ensureYoutubeCacheTable();
   const contentHash = productContentHash(product);
-  let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);
+  let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);
   if (!cached?.videoData) {
     const images = (product.images as string[]) || [];
     if (!images.length) { res.status(400).json({ error: "Mahsulot rasmi topilmadi." }); return; }
@@ -393,7 +171,7 @@ router.get("/connectors/youtube/preview", handle(async (req, res) => {
     try {
       const imagePath = join(tmpDir, "product.jpg");
       if (!(await downloadImage(images[0], imagePath))) { res.status(400).json({ error: "Mahsulot rasmini yuklab bo'lmadi." }); return; }
-      await buildFiveSecondVideo(imagePath, videoPath, isShort);
+      await buildFiveSecondVideo(imagePath, videoPath, isShort, product);
       const videoData = (await readFile(videoPath)).toString("base64");
       if (cached) {
         await db.update(youtubeProductContentsTable).set({ videoData, updatedAt: new Date() }).where(eq(youtubeProductContentsTable.id, cached.id));
@@ -500,7 +278,7 @@ router.post("/connectors/youtube/publish", handle(async (req, res) => {
     else [cached] = await db.insert(youtubeProductContentsTable).values({ ...cacheValues, createdAt: new Date() }).returning();
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     await db.insert(postsTable).values({ userId, productId: body.productId, name: product.name, price: product.sellPrice, category: product.category, status: "Published", telegramMessageId: null, platform: "youtube", platformPostId: videoId });
-    res.json({ success: true, videoId, url: videoUrl, durationSeconds: 5, cachedVideo: Boolean(cached?.videoData) });
+    res.json({ success: true, videoId, url: videoUrl, durationSeconds: VIDEO_DURATION_SECONDS, cachedVideo: Boolean(cached?.videoData) });
   } finally { await rm(tmpDir, { recursive: true, force: true }).catch(() => {}); }
 }));
 
