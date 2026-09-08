@@ -1,13 +1,9 @@
-name: OneOffice clean YouTube and New Post fix
-
+name: OneOffice one-time YouTube video upgrade
 on:
   push:
-    branches:
-      - chore/remove-replit
-
+    branches: [chore/remove-replit]
 permissions:
   contents: write
-
 jobs:
   patch:
     if: github.actor != 'github-actions[bot]'
@@ -17,166 +13,103 @@ jobs:
         with:
           ref: chore/remove-replit
           fetch-depth: 0
-
-      - name: Apply clean frontend fix
-        shell: python
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply video engine
+        shell: bash
         run: |
-          from pathlib import Path
+          node <<'NODE'
+          const fs = require('fs');
+          const pkgPath = 'artifacts/api-server/package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.dependencies['node-edge-tts'] = '^1.2.10';
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
-          app = Path('artifacts/oneoffice-ai/src/App.tsx')
-          text = app.read_text()
+          const file = 'artifacts/api-server/src/routes/youtube.ts';
+          let s = fs.readFileSync(file, 'utf8');
+          if (!s.includes('from "node-edge-tts"')) s = s.replace('import { generateText } from "../ai/textProviders";', 'import { generateText } from "../ai/textProviders";\nimport { EdgeTTS } from "node-edge-tts";');
+          const start = s.indexOf('function writeMarketingWav(');
+          const end = s.indexOf('async function uploadToYouTube(', start);
+          if (start < 0 || end < 0) throw new Error('VIDEO_BUILDER_NOT_FOUND');
+          const block = String.raw`const VIDEO_DURATION_SECONDS = 15;
+const VIDEO_CACHE_VERSION = 'v2';
 
-          # 1-3. Every YouTube connector/metadata authedFetch request goes
-          # through the configured Render API base instead of the Pages origin.
-          old = 'const res = await fetch(path, {'
-          new = 'const res = await fetch(apiUrl(path), {'
-          count = text.count(old)
-          if count < 1:
-              raise SystemExit('AUTHED_FETCH_ANCHOR_NOT_FOUND')
-          text = text.replace(old, new)
-
-          # New Post destination picker. It deliberately happens before the
-          # product picker so the selected platform can control which AI flow
-          # runs, avoiding unnecessary generation for the other platform.
-          marker = 'function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any) {'
-          if marker not in text:
-              raise SystemExit('CREATE_FORM_ANCHOR_NOT_FOUND')
-
-          destination_component = r'''function PostDestinationPicker({ onSelect }: { onSelect: (destination: "telegram" | "youtube") => void }) {
-  return (
-    <div className="p-6 md:p-10 max-w-2xl">
-      <Glass className="p-8">
-        <div className="flex items-center gap-3 mb-2">
-          <Send className="h-5 w-5 text-violet-400" />
-          <h3 className="text-white text-xl font-semibold">New Post</h3>
-        </div>
-        <p className="text-slate-400 text-sm mb-6">
-          Avval qaysi platformaga post tayyorlashni tanlang.
-        </p>
-        <div className="grid sm:grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={() => onSelect("telegram")}
-            className="group text-left rounded-2xl border border-white/10 bg-white/5 p-5 hover:bg-white/10 hover:border-violet-400/40 transition"
-          >
-            <div className="h-11 w-11 rounded-xl bg-sky-500/15 flex items-center justify-center mb-4">
-              <Send className="h-5 w-5 text-sky-400" />
-            </div>
-            <div className="text-white font-semibold">Telegram</div>
-            <div className="text-slate-400 text-xs mt-1">Telegram uchun post tayyorlash</div>
-          </button>
-          <button
-            type="button"
-            onClick={() => onSelect("youtube")}
-            className="group text-left rounded-2xl border border-white/10 bg-white/5 p-5 hover:bg-white/10 hover:border-red-400/40 transition"
-          >
-            <div className="h-11 w-11 rounded-xl bg-red-500/15 flex items-center justify-center mb-4">
-              <Youtube className="h-5 w-5 text-red-400" />
-            </div>
-            <div className="text-white font-semibold">YouTube</div>
-            <div className="text-slate-400 text-xs mt-1">YouTube uchun metadata tayyorlash</div>
-          </button>
-        </div>
-      </Glass>
-    </div>
-  );
+function writeMarketingWav(outputPath: string) {
+  const sampleRate = 44100, seconds = VIDEO_DURATION_SECONDS, channels = 2;
+  const frames = sampleRate * seconds, dataSize = frames * channels * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  const ws = (o: number, v: string) => buffer.write(v, o, 'ascii');
+  ws(0, 'RIFF'); buffer.writeUInt32LE(36 + dataSize, 4); ws(8, 'WAVE'); ws(12, 'fmt ');
+  buffer.writeUInt32LE(16, 16); buffer.writeUInt16LE(1, 20); buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(sampleRate, 24); buffer.writeUInt32LE(sampleRate * channels * 2, 28); buffer.writeUInt16LE(channels * 2, 32);
+  buffer.writeUInt16LE(16, 34); ws(36, 'data'); buffer.writeUInt32LE(dataSize, 40);
+  const roots=[220,233,247,262,277,294,311,330], scale=[0,2,4,7,9,12,14];
+  const root=roots[Math.floor(Math.random()*roots.length)], tempo=112+Math.floor(Math.random()*24), beat=60/tempo, progression=[0,5,3,4];
+  const melody=Array.from({length:64},()=>scale[Math.floor(Math.random()*scale.length)]), freq=(n:number)=>root*Math.pow(2,n/12);
+  const env=(t:number,d:number)=>{const a=Math.min(.025,d*.2),r=Math.min(.09,d*.35);if(t<0||t>d)return 0;if(t<a)return t/a;if(t>d-r)return Math.max(0,(d-t)/r);return 1;};
+  const samples=new Float32Array(frames*2); let peak=0;
+  for(let i=0;i<frames;i++){const t=i/sampleRate,bi=Math.floor(t/beat),bt=t%beat,cr=progression[Math.floor((bi%8)/2)]??0;let l=0,r=0;
+    for(const n of [cr,cr+4,cr+7]){const f=freq(n),p=.055*(Math.sin(2*Math.PI*f*t)+.35*Math.sin(2*Math.PI*f*2*t));l+=p;r+=p*.96;}
+    const bd=beat*.72;if(bt<bd){const b=.18*env(bt,bd)*Math.sin(2*Math.PI*freq(cr-12)*bt);l+=b;r+=b;}
+    const nt=t%(beat/2),note=melody[Math.floor(t/(beat/2))%melody.length];if(nt<beat*.42){const m=.09*env(nt,beat*.42)*Math.sin(2*Math.PI*freq(note+12)*nt);l+=m*.94;r+=m;}
+    if(bt<.16){const k=.18*Math.exp(-bt*24)*Math.sin(2*Math.PI*(105-55*Math.min(1,bt/.16))*bt);l+=k;r+=k;}
+    const ht=t%(beat/2);if(ht<.045){const h=(Math.random()*2-1)*.028*Math.exp(-ht*90);l+=h;r+=h*.9;}
+    const fade=Math.max(0,Math.min(1,t/.08,(seconds-t)/.12));l*=fade;r*=fade;samples[i*2]=l;samples[i*2+1]=r;peak=Math.max(peak,Math.abs(l),Math.abs(r));}
+  const gain=peak>0?Math.min(.82/peak,1.8):1;for(let i=0;i<samples.length;i++)buffer.writeInt16LE(Math.round(Math.max(-1,Math.min(1,samples[i]*gain))*32767),44+i*2);
+  return writeFile(outputPath,buffer);
 }
+function narrationForProduct(product:any){const name=String(product.name??'').replace(/\s+/g,' ').trim(),d=String(product.description??'').replace(/\s+/g,' ').trim(),first=d.split(/[.!?]/)[0]?.trim()??'',price=product.sellPrice!=null&&product.currency?`Narxi ${product.sellPrice} ${product.currency}`:'';return [name,first,price].filter(Boolean).join('. ').slice(0,360);}
+function escapeDrawText(v:string){return v.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/%/g,'\\%').replace(/,/g,'\\,');}
+function twoWordCues(raw:Array<{part:string;start:number;end:number}>){const w=raw.map(x=>({text:String(x.part??'').trim(),start:Number(x.start),end:Number(x.end)})).filter(x=>x.text&&Number.isFinite(x.start)&&Number.isFinite(x.end));const out:Array<{text:string;start:number;end:number}>=[];for(let i=0;i<w.length;i+=2){const a=w[i],b=w[i+1];out.push({text:[a.text,b?.text].filter(Boolean).join(' ').slice(0,80),start:a.start,end:b?.end??a.end});}return out;}
+async function buildMarketingVideo(imagePath:string,outputPath:string,product:any,isShort:boolean){
+  const [width,height]=isShort?[1080,1920]:[1920,1080],dir=join(tmpdir(),`oneoffice-video-${Date.now()}-${Math.random().toString(36).slice(2)}`);mkdirSync(dir,{recursive:true});
+  const musicPath=join(dir,'music.wav'),voicePath=join(dir,'voice.mp3'),subPath=voicePath+'.json';
+  try{await writeMarketingWav(musicPath);const tts=new EdgeTTS({voice:Math.random()<.5?'uz-UZ-MadinaNeural':'uz-UZ-SardorNeural',lang:'uz-UZ',outputFormat:'audio-24khz-96kbitrate-mono-mp3',saveSubtitles:true,rate:'+4%',timeout:20000});await tts.ttsPromise(narrationForProduct(product),voicePath);
+    const raw=JSON.parse(await readFile(subPath,'utf8')) as Array<{part:string;start:number;end:number}>;const cues=twoWordCues(raw).filter(x=>x.start<15000&&x.end>0).map(x=>({...x,start:Math.max(0,x.start)/1000,end:Math.min(15000,x.end)/1000}));
+    const base=`scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;const draw=cues.map(x=>`drawtext=text='${escapeDrawText(x.text)}':fontcolor=white:fontsize=${isShort?72:54}:font='DejaVu Sans':borderw=3:bordercolor=black@0.7:box=1:boxcolor=black@0.48:boxborderw=18:x=(w-text_w)/2:y=h*0.80:enable='between(t,${x.start.toFixed(3)},${x.end.toFixed(3)})'`).join(',');const vf=draw?`${base},${draw}`:base;
+    await execFileAsync('ffmpeg',['-loop','1','-i',imagePath,'-i',musicPath,'-i',voicePath,'-filter_complex','[1:a]volume=0.16[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[audio]','-map','0:v:0','-map','[audio]','-vf',vf,'-t','15','-r','30','-c:v','libx264','-preset','ultrafast','-crf','27','-c:a','aac','-b:a','128k','-ar','44100','-ac','2','-movflags','+faststart','-y',outputPath],{timeout:120000});
+  }finally{await rm(dir,{recursive:true,force:true}).catch(()=>{});}
+}
+function isReusableVideo(v:string|null|undefined){return Boolean(v?.startsWith(`${VIDEO_CACHE_VERSION}:`));}
+function encodeVideoCache(b:Buffer){return `${VIDEO_CACHE_VERSION}:${b.toString('base64')}`;}
+function decodeVideoCache(v:string){return Buffer.from(v.slice(`${VIDEO_CACHE_VERSION}:`.length),'base64');}
 
-'''
-          text = text.replace(marker, destination_component + marker, 1)
+`;
+          s=s.slice(0,start)+block+s.slice(end);
+          s=s.replace(/buildFiveSecondVideo\(imagePath, videoPath, isShort\)/g,'buildMarketingVideo(imagePath, videoPath, product, isShort)');
+          s=s.replace(/eq\(youtubeProductContentsTable\.contentHash, contentHash\),\s*/g,'');
+          s=s.replace(/Buffer\.from\(cached!\.videoData!, "base64"\)/g,'decodeVideoCache(cached!.videoData!)');
+          s=s.replace(/Buffer\.from\(cached\.videoData, "base64"\)/g,'decodeVideoCache(cached.videoData)');
+          s=s.replace(/const videoData = \(await readFile\(videoPath\)\)\.toString\("base64"\);/g,'const videoData = encodeVideoCache(await readFile(videoPath));');
+          s=s.replace(/durationSeconds: 5/g,'durationSeconds: VIDEO_DURATION_SECONDS');
 
-          # Add destination state alongside the existing create flow state.
-          old_state = '  const [flow, setFlow] = useState("product");\n'
-          new_state = '  const [flow, setFlow] = useState("destination");\n  const [postDestination, setPostDestination] = useState<"telegram" | "youtube" | null>(null);\n'
-          if old_state not in text:
-              raise SystemExit('FLOW_STATE_ANCHOR_NOT_FOUND')
-          text = text.replace(old_state, new_state, 1)
-
-          # Reset the New Post flow back to the destination picker.
-          old_reset = '  function resetCreate() {\n    setFlow("product");\n'
-          new_reset = '  function resetCreate() {\n    setFlow("destination");\n    setPostDestination(null);\n'
-          if old_reset not in text:
-              raise SystemExit('RESET_CREATE_ANCHOR_NOT_FOUND')
-          text = text.replace(old_reset, new_reset, 1)
-
-          # Selecting a product now branches immediately into the selected
-          # platform's AI flow. Telegram keeps the existing form/generation;
-          # YouTube goes directly to YouTube metadata generation.
-          old_pick_end = '    setFlow("form");\n  }\n\n  function toggleImage(img: any) {'
-          new_pick_end = '    setFlow(postDestination === "youtube" ? "yt-metadata" : "form");\n  }\n\n  function toggleImage(img: any) {'
-          if old_pick_end not in text:
-              raise SystemExit('PICK_PRODUCT_ANCHOR_NOT_FOUND')
-          text = text.replace(old_pick_end, new_pick_end, 1)
-
-          # Topbar New Post always starts with the destination picker.
-          old_top = '''              ? () => {
-                  setNavView("create");
-                  resetCreate();
-                }'''
-          new_top = '''              ? () => {
-                  setNavView("create");
-                  resetCreate();
-                }'''
-          if old_top not in text:
-              raise SystemExit('TOPBAR_ANCHOR_NOT_FOUND')
-
-          # Insert destination selection before the existing product flow.
-          marker_render = '''        {navView === "create" && (
-          <>
-            {flow === "product" && ('''
-          replacement_render = '''        {navView === "create" && (
-          <>
-            {flow === "destination" && (
-              <PostDestinationPicker
-                onSelect={(destination) => {
-                  setPostDestination(destination);
-                  setFlow("product");
-                }}
-              />
-            )}
-            {flow === "product" && ('''
-          if marker_render not in text:
-              raise SystemExit('CREATE_RENDER_ANCHOR_NOT_FOUND')
-          text = text.replace(marker_render, replacement_render, 1)
-
-          # Do not expose the old cross-platform YouTube button in Telegram
-          # results; YouTube is now chosen at the beginning of New Post.
-          old_result_prop = '                onYtApprove={selectedProduct?.id ? handleYtApprove : undefined}\n'
-          if old_result_prop in text:
-              text = text.replace(old_result_prop, '', 1)
-
-          # If a YouTube metadata generation fails, return to product choice
-          # rather than falling into Telegram results.
-          old_error = '''  function handleYtMetadataError(msg: string) {
-    setPublishError(msg);
-    setFlow("results");
-  }'''
-          new_error = '''  function handleYtMetadataError(msg: string) {
-    setPublishError(msg);
-    setFlow("product");
-  }'''
-          if old_error in text:
-              text = text.replace(old_error, new_error, 1)
-
-          app.write_text(text)
-
-      - name: Verify
-        run: |
-          grep -q 'fetch(apiUrl(path), {' artifacts/oneoffice-ai/src/App.tsx
-          grep -q 'function PostDestinationPicker' artifacts/oneoffice-ai/src/App.tsx
-          grep -q 'setFlow("destination")' artifacts/oneoffice-ai/src/App.tsx
-          grep -q 'postDestination === "youtube"' artifacts/oneoffice-ai/src/App.tsx
-
-      - name: Commit
-        run: |
+          const p='let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);';
+          if(s.includes(p)){
+            s=s.replace(p,p+'\n  const videoRows = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(20);\n  const videoCache = videoRows.find((row) => isReusableVideo(row.videoData));');
+            s=s.replace('if (!cached?.videoData) {','if (!videoCache) {');
+            s=s.replace('res.send(Buffer.from(cached!.videoData!, "base64"));','res.send(videoCache ? decodeVideoCache(videoCache.videoData!) : decodeVideoCache(cached!.videoData!));');
+          }
+          const pub='let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);';
+          if(s.includes(pub)){
+            s=s.replace(pub,pub+'\n  const videoRows = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(20);\n  const videoCache = videoRows.find((row) => isReusableVideo(row.videoData));');
+            s=s.replace('if (cached?.videoData) await writeFile(videoPath, Buffer.from(cached.videoData, "base64"));','if (videoCache?.videoData) await writeFile(videoPath, decodeVideoCache(videoCache.videoData));');
+            s=s.replace('const videoData = cached?.videoData ?? (await readFile(videoPath)).toString("base64");','const videoData = videoCache?.videoData ?? encodeVideoCache(await readFile(videoPath));');
+          }
+          s=s.replace('videoCached: Boolean(cached.videoData)','videoCached: isReusableVideo(cached.videoData)');
+          fs.writeFileSync(file,s);
+          NODE
+          pnpm install --lockfile-only
+          pnpm --filter @workspace/api-server typecheck
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add artifacts/oneoffice-ai/src/App.tsx .github/workflows/oneoffice-clean-youtube-newpost-fix.yml
-          git commit -m 'fix: restore New Post destination and Render API routing'
-          git push origin chore/remove-replit
-
-      - name: Remove one-time workflow
-        run: |
-          git rm -f .github/workflows/oneoffice-clean-youtube-newpost-fix.yml
-          git commit -m 'chore: remove one-time frontend fix workflow'
-          git push origin chore/remove-replit
+          git add artifacts/api-server/package.json pnpm-lock.yaml artifacts/api-server/src/routes/youtube.ts
+          git commit -m 'feat: upgrade YouTube videos to 15s TTS and reusable cache'
+          git push
+          git rm .github/workflows/oneoffice-clean-youtube-newpost-fix.yml .github/workflows/one-time-youtube-video-v2.yml .github/upgrade-youtube-video-trigger.txt .github/one-time-youtube-video-v2-trigger.txt 2>/dev/null || true
+          git commit -m 'chore: remove temporary YouTube upgrade workflows' || true
+          git push || true
