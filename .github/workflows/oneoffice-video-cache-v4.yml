@@ -1,0 +1,34 @@
+name: oneoffice-video-cache-v4
+on:
+  push:
+    paths:
+      - .github/video-cache-v4-trigger.txt
+permissions:
+  contents: write
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update video cache version
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('artifacts/api-server/src/routes/youtube.ts')
+          s = p.read_text()
+          s = s.replace('videoData?.startsWith("v3:")', 'videoData?.startsWith("v4:")')
+          s = s.replace('const videoData = "v3:" + (await readFile(videoPath)).toString("base64");', 'const videoData = "v4:" + (await readFile(videoPath)).toString("base64");')
+          s = s.replace('cached!.videoData!.slice(3)', 'cached!.videoData!.slice(3)')
+          p.write_text(s)
+          trigger = Path('.github/video-cache-v4-trigger.txt')
+          trigger.unlink(missing_ok=True)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/api-server/src/routes/youtube.ts .github/video-cache-v4-trigger.txt
+          git commit -m 'fix: invalidate legacy YouTube video cache'
+          git push
+          rm -f .github/workflows/oneoffice-video-cache-v4.yml
+          git add -A
+          git commit -m 'chore: remove one-time video cache migration'
+          git push
