@@ -1,0 +1,199 @@
+name: one-time-youtube-video-v2
+on:
+  push:
+    branches: [chore/remove-replit]
+    paths: ['.github/workflows/one-time-youtube-video-v2.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Apply clean video engine
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const pkgPath = 'artifacts/api-server/package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.dependencies['node-edge-tts'] = '^1.2.10';
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+
+          const file = 'artifacts/api-server/src/routes/youtube.ts';
+          let s = fs.readFileSync(file, 'utf8');
+          if (!s.includes('from "node-edge-tts"')) {
+            s = s.replace('import { generateText } from "../ai/textProviders";', 'import { generateText } from "../ai/textProviders";\nimport { EdgeTTS } from "node-edge-tts";');
+          }
+          const start = s.indexOf('function writeMarketingWav(');
+          const upload = s.indexOf('async function uploadToYouTube(', start);
+          if (start < 0 || upload < 0) throw new Error('video builder boundaries not found');
+          const block = String.raw`const VIDEO_DURATION_SECONDS = 15;
+const VIDEO_CACHE_VERSION = 'v2';
+
+function writeMarketingWav(outputPath: string) {
+  const sampleRate = 44100;
+  const seconds = VIDEO_DURATION_SECONDS;
+  const frames = sampleRate * seconds;
+  const channels = 2;
+  const dataSize = frames * channels * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  const writeString = (offset: number, value: string) => buffer.write(value, offset, 'ascii');
+  writeString(0, 'RIFF'); buffer.writeUInt32LE(36 + dataSize, 4); writeString(8, 'WAVE');
+  writeString(12, 'fmt '); buffer.writeUInt32LE(16, 16); buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22); buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * channels * 2, 28); buffer.writeUInt16LE(channels * 2, 32);
+  buffer.writeUInt16LE(16, 34); writeString(36, 'data'); buffer.writeUInt32LE(dataSize, 40);
+  const roots = [220, 233, 247, 262, 277, 294, 311, 330];
+  const scale = [0, 2, 4, 7, 9, 12, 14];
+  const root = roots[Math.floor(Math.random() * roots.length)];
+  const tempo = 112 + Math.floor(Math.random() * 24);
+  const beat = 60 / tempo;
+  const progression = [0, 5, 3, 4];
+  const melody = Array.from({ length: 64 }, () => scale[Math.floor(Math.random() * scale.length)]);
+  const freq = (n: number) => root * Math.pow(2, n / 12);
+  const env = (t: number, d: number) => {
+    const a = Math.min(0.025, d * 0.2), r = Math.min(0.09, d * 0.35);
+    if (t < 0 || t > d) return 0;
+    if (t < a) return t / a;
+    if (t > d - r) return Math.max(0, (d - t) / r);
+    return 1;
+  };
+  const samples = new Float32Array(frames * 2);
+  let peak = 0;
+  for (let i = 0; i < frames; i++) {
+    const t = i / sampleRate;
+    const beatIndex = Math.floor(t / beat);
+    const beatT = t % beat;
+    const chordRoot = progression[Math.floor((beatIndex % 8) / 2)] ?? 0;
+    let left = 0, right = 0;
+    for (const interval of [chordRoot, chordRoot + 4, chordRoot + 7]) {
+      const f = freq(interval);
+      const pad = 0.055 * (Math.sin(2 * Math.PI * f * t) + 0.35 * Math.sin(2 * Math.PI * f * 2 * t));
+      left += pad; right += pad * 0.96;
+    }
+    const bassDuration = beat * 0.72;
+    if (beatT < bassDuration) {
+      const bass = 0.18 * env(beatT, bassDuration) * Math.sin(2 * Math.PI * freq(chordRoot - 12) * beatT);
+      left += bass; right += bass;
+    }
+    const noteT = t % (beat / 2);
+    const note = melody[Math.floor(t / (beat / 2)) % melody.length];
+    if (noteT < beat * 0.42) {
+      const lead = 0.09 * env(noteT, beat * 0.42) * Math.sin(2 * Math.PI * freq(note + 12) * noteT);
+      left += lead * 0.94; right += lead;
+    }
+    if (beatT < 0.16) {
+      const kick = 0.18 * Math.exp(-beatT * 24) * Math.sin(2 * Math.PI * (105 - 55 * Math.min(1, beatT / 0.16)) * beatT);
+      left += kick; right += kick;
+    }
+    const hatT = t % (beat / 2);
+    if (hatT < 0.045) {
+      const hat = (Math.random() * 2 - 1) * 0.028 * Math.exp(-hatT * 90);
+      left += hat; right += hat * 0.9;
+    }
+    const fade = Math.min(1, t / 0.08, (seconds - t) / 0.12);
+    left *= Math.max(0, fade); right *= Math.max(0, fade);
+    const idx = i * 2;
+    samples[idx] = left; samples[idx + 1] = right;
+    peak = Math.max(peak, Math.abs(left), Math.abs(right));
+  }
+  const gain = peak > 0 ? Math.min(0.82 / peak, 1.8) : 1;
+  for (let i = 0; i < samples.length; i++) buffer.writeInt16LE(Math.round(Math.max(-1, Math.min(1, samples[i] * gain)) * 32767), 44 + i * 2);
+  return writeFile(outputPath, buffer);
+}
+
+function narrationForProduct(product: any) {
+  const name = String(product.name ?? '').replace(/\s+/g, ' ').trim();
+  const description = String(product.description ?? '').replace(/\s+/g, ' ').trim();
+  const first = description.split(/[.!?]/)[0]?.trim() ?? '';
+  const price = product.sellPrice != null && product.currency ? `Narxi ${product.sellPrice} ${product.currency}` : '';
+  return [name, first, price].filter(Boolean).join('. ').slice(0, 360);
+}
+
+function escapeDrawText(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/:/g, '\\:').replace(/%/g, '\\%').replace(/,/g, '\\,');
+}
+
+function twoWordCues(raw: Array<{ part: string; start: number; end: number }>) {
+  const words = raw.map((x) => ({ text: String(x.part ?? '').trim(), start: Number(x.start), end: Number(x.end) })).filter((x) => x.text && Number.isFinite(x.start) && Number.isFinite(x.end));
+  const result: Array<{ text: string; start: number; end: number }> = [];
+  for (let i = 0; i < words.length; i += 2) {
+    const a = words[i], b = words[i + 1];
+    result.push({ text: [a.text, b?.text].filter(Boolean).join(' ').slice(0, 80), start: a.start, end: b?.end ?? a.end });
+  }
+  return result;
+}
+
+async function buildMarketingVideo(imagePath: string, outputPath: string, product: any, isShort: boolean) {
+  const [width, height] = isShort ? [1080, 1920] : [1920, 1080];
+  const dir = join(tmpdir(), `oneoffice-video-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(dir, { recursive: true });
+  const musicPath = join(dir, 'music.wav');
+  const voicePath = join(dir, 'voice.mp3');
+  const subtitlePath = `${voicePath}.json`;
+  try {
+    await writeMarketingWav(musicPath);
+    const text = narrationForProduct(product);
+    const voice = Math.random() < 0.5 ? 'uz-UZ-MadinaNeural' : 'uz-UZ-SardorNeural';
+    const tts = new EdgeTTS({ voice, lang: 'uz-UZ', outputFormat: 'audio-24khz-96kbitrate-mono-mp3', saveSubtitles: true, rate: '+4%', timeout: 20000 });
+    await tts.ttsPromise(text, voicePath);
+    const raw = JSON.parse(await readFile(subtitlePath, 'utf8')) as Array<{ part: string; start: number; end: number }>;
+    const cues = twoWordCues(raw).filter((x) => x.start < VIDEO_DURATION_SECONDS * 1000 && x.end > 0).map((x) => ({ ...x, start: Math.max(0, x.start) / 1000, end: Math.min(VIDEO_DURATION_SECONDS * 1000, x.end) / 1000 }));
+    const base = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p`;
+    const captions = cues.map((x) => `drawtext=text='${escapeDrawText(x.text)}':fontcolor=white:fontsize=${isShort ? 72 : 54}:font='DejaVu Sans':borderw=3:bordercolor=black@0.7:box=1:boxcolor=black@0.48:boxborderw=18:x=(w-text_w)/2:y=h*0.80:enable='between(t,${x.start.toFixed(3)},${x.end.toFixed(3)})'`).join(',');
+    const vf = captions ? `${base},${captions}` : base;
+    await execFileAsync('ffmpeg', [
+      '-loop', '1', '-i', imagePath, '-i', musicPath, '-i', voicePath,
+      '-filter_complex', '[1:a]volume=0.16[music];[2:a]volume=1.0[voice];[music][voice]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[audio]',
+      '-map', '0:v:0', '-map', '[audio]', '-vf', vf, '-t', String(VIDEO_DURATION_SECONDS), '-r', '30',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '27', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2', '-movflags', '+faststart', '-y', outputPath,
+    ], { timeout: 120_000 });
+  } finally { await rm(dir, { recursive: true, force: true }).catch(() => {}); }
+}
+
+function isReusableVideo(value: string | null | undefined) { return Boolean(value?.startsWith(`${VIDEO_CACHE_VERSION}:`)); }
+function encodeVideoCache(buffer: Buffer) { return `${VIDEO_CACHE_VERSION}:${buffer.toString('base64')}`; }
+function decodeVideoCache(value: string) { return Buffer.from(value.slice(`${VIDEO_CACHE_VERSION}:`.length), 'base64'); }
+
+`;
+          s = s.slice(0, start) + block + s.slice(upload);
+          s = s.replace(/buildFiveSecondVideo\(imagePath, videoPath, isShort\)/g, 'buildMarketingVideo(imagePath, videoPath, product, isShort)');
+          s = s.replace(/eq\(youtubeProductContentsTable\.contentHash, contentHash\),\s*/g, '');
+          s = s.replace(/Buffer\.from\(cached!\.videoData!, "base64"\)/g, 'decodeVideoCache(cached!.videoData!)');
+          s = s.replace(/Buffer\.from\(cached\.videoData, "base64"\)/g, 'decodeVideoCache(cached.videoData)');
+          s = s.replace(/const videoData = \(await readFile\(videoPath\)\)\.toString\("base64"\);/g, 'const videoData = encodeVideoCache(await readFile(videoPath));');
+          s = s.replace(/const videoData = cached\?\.videoData \?\? \(await readFile\(videoPath\)\)\.toString\("base64"\);/g, 'const videoData = cached?.videoData && isReusableVideo(cached.videoData) ? cached.videoData : encodeVideoCache(await readFile(videoPath));');
+          s = s.replace(/durationSeconds: 5/g, 'durationSeconds: VIDEO_DURATION_SECONDS');
+
+          // Preview: use the existing v2 video for this product + format, regardless of metadata hash.
+          s = s.replace(
+            'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);',
+            'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);\n  const [videoCache] = (await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(20)).filter((row) => isReusableVideo(row.videoData)).slice(0, 1);'
+          );
+          s = s.replace('if (!cached?.videoData) {', 'if (!videoCache) {');
+          s = s.replace('res.send(Buffer.from(cached!.videoData!, "base64"));', 'res.send(videoCache ? decodeVideoCache(videoCache.videoData!) : decodeVideoCache(cached!.videoData!));');
+
+          // Publish: prefer the reusable v2 video for this product + format.
+          const publishNeedle = 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);';
+          const publishReplacement = publishNeedle + '\n  const [videoCache] = (await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(20)).filter((row) => isReusableVideo(row.videoData)).slice(0, 1);';
+          s = s.replace(publishNeedle, publishReplacement);
+          s = s.replace('if (cached?.videoData) await writeFile(videoPath, decodeVideoCache(cached.videoData));', 'if (videoCache?.videoData) await writeFile(videoPath, decodeVideoCache(videoCache.videoData));');
+          s = s.replace('const videoData = cached?.videoData && isReusableVideo(cached.videoData) ? cached.videoData : encodeVideoCache(await readFile(videoPath));', 'const videoData = videoCache?.videoData && isReusableVideo(videoCache.videoData) ? videoCache.videoData : encodeVideoCache(await readFile(videoPath));');
+
+          fs.writeFileSync(file, s);
+          NODE
+          pnpm install --lockfile-only
+          pnpm --filter @workspace/api-server typecheck
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/api-server/package.json pnpm-lock.yaml artifacts/api-server/src/routes/youtube.ts
+          git commit -m 'feat: upgrade YouTube videos to 15s TTS and reusable cache'
+          git push
