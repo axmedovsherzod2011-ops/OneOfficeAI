@@ -231,7 +231,7 @@ router.post("/connectors/youtube/metadata", handle(async (req, res) => {
   const [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, Boolean(isShort)))).limit(1);
   if (cached) return res.json({ title: cached.title, description: cached.description, tags: parseCachedArray(cached.tags), hashtags: parseCachedArray(cached.hashtags), isShort: Boolean(isShort), cached: true, videoCached: Boolean(cached.videoData?.startsWith("v3:")) });
   const system = `Sen professional YouTube SEO marketologisan. Mahsulot uchun sotuvga yo'naltirilgan, tabiiy va professional metadata yarat. FAQAT JSON qaytar: {"title":"...","description":"...","tags":["..."],"hashtags":["..."]}. title <=100 belgi. description 150-300 so'z, hook + foydalar + muhim detallar + CTA. tags 10-20 ta, jami <=500 belgi. hashtags 5-10 ta. O'zbek auditoriyasi uchun yoz, kerak bo'lsa ruscha qidiruv kalitlarini tabiiy qo'sh.`;
-  const prompt = `Mahsulot: ${product.name}\nNarx: ${product.sellPrice} ${product.currency}\nKategoriya: ${product.category}\nTavsif: ${product.description || "Yo'q"}\nFormat: ${isShort ? "5 soniyalik YouTube Short" : "5 soniyalik YouTube video"}`;
+  const prompt = `Mahsulot: ${product.name}\nNarx: ${product.sellPrice} ${product.currency}\nKategoriya: ${product.category}\nTavsif: ${product.description || "Yo'q"}\nFormat: ${isShort ? "15 soniyalik YouTube Short" : "15 soniyalik YouTube video"}`;
   const raw = await generateText(system, prompt);
   let parsed: any = {};
   try { parsed = JSON.parse(raw); } catch { const m = raw.match(/\{[\s\S]*\}/); if (m) { try { parsed = JSON.parse(m[0]); } catch {} } }
@@ -257,7 +257,7 @@ router.post("/connectors/youtube/publish", handle(async (req, res) => {
   await ensureYoutubeCacheTable();
   const contentHash = productContentHash(product);
   const isShort = Boolean(body.isShort);
-  let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);
+  let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);
   const tmpDir = join(tmpdir(), `yt-${Date.now()}`); mkdirSync(tmpDir, { recursive: true });
   const videoPath = join(tmpDir, "video.mp4");
   try {
@@ -266,7 +266,7 @@ router.post("/connectors/youtube/publish", handle(async (req, res) => {
     else {
       const imagePath = join(tmpDir, "product.jpg");
       if (!(await downloadImage(images[0], imagePath))) { res.status(400).json({ error: "Mahsulot rasmini yuklab bo'lmadi." }); return; }
-      await buildFiveSecondVideo(imagePath, videoPath, isShort);
+      await buildFiveSecondVideo(imagePath, videoPath, isShort, product);
     }
     const fileSize = statSync(videoPath).size;
     const hashtagLine = (body.hashtags ?? []).map((x) => `#${String(x).replace(/^#/, "")}`).join(" ");
