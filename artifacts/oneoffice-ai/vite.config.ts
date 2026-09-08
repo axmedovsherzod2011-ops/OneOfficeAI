@@ -133,6 +133,15 @@ function newPostDestinationTransform() {
       // Route the metadata account request through the shared API base URL.
       s = s.replace('const res = await fetch(path, {', 'const res = await fetch(apiUrl(path), {');
 
+      // YouTube video rendering now uses the product's DB images directly on the backend.
+      // Do not send selected base64 image payloads from the browser; large requests can fail
+      // before reaching Render with the generic browser "Failed to fetch" error.
+      s = s.replace(
+        '        const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);',
+        '        const imageUrls: string[] = [];',
+      );
+      s = s.replace('            imageUrls,\n', '');
+
       return { code: s, map: null };
     },
   };
