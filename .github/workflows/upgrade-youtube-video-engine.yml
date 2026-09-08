@@ -4,6 +4,7 @@ on:
     branches: [chore/remove-replit]
     paths:
       - '.github/workflows/upgrade-youtube-video-engine.yml'
+      - '.github/upgrade-youtube-video-trigger.txt'
 permissions:
   contents: write
 jobs:
@@ -180,10 +181,11 @@ async function buildMarketingVideo(imagePath: string, outputPath: string, produc
           s = s.replace(/where\(and\(eq\(youtubeProductContentsTable\.productId, body\.productId\), eq\(youtubeProductContentsTable\.contentHash, contentHash\), eq\(youtubeProductContentsTable\.isShort, isShort\)\)\)/g, 'where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort)))');
           fs.writeFileSync(file, s);
           NODE
+          rm -f .github/upgrade-youtube-video-trigger.txt
           pnpm install --lockfile-only
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add artifacts/api-server/package.json pnpm-lock.yaml artifacts/api-server/src/routes/youtube.ts
+          git add artifacts/api-server/package.json pnpm-lock.yaml artifacts/api-server/src/routes/youtube.ts .github/upgrade-youtube-video-trigger.txt
           git rm .github/workflows/upgrade-youtube-video-engine.yml
           git commit -m 'feat: upgrade YouTube videos to 15s voice and cached captions'
           git push
