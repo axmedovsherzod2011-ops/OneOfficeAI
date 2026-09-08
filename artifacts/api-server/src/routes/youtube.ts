@@ -163,7 +163,7 @@ router.get("/connectors/youtube/preview", handle(async (req, res) => {
   await ensureYoutubeCacheTable();
   const contentHash = productContentHash(product);
   let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);
-  if (!cached?.videoData?.startsWith("v3:")) {
+  if (!cached?.videoData?.startsWith("v4:")) {
     const images = (product.images as string[]) || [];
     if (!images.length) { res.status(400).json({ error: "Mahsulot rasmi topilmadi." }); return; }
     const tmpDir = join(tmpdir(), `yt-preview-${Date.now()}`); mkdirSync(tmpDir, { recursive: true });
@@ -172,7 +172,7 @@ router.get("/connectors/youtube/preview", handle(async (req, res) => {
       const imagePath = join(tmpDir, "product.jpg");
       if (!(await downloadImage(images[0], imagePath))) { res.status(400).json({ error: "Mahsulot rasmini yuklab bo'lmadi." }); return; }
       await buildFiveSecondVideo(imagePath, videoPath, isShort, product);
-      const videoData = "v3:" + (await readFile(videoPath)).toString("base64");
+      const videoData = "v4:" + (await readFile(videoPath)).toString("base64");
       if (cached) {
         await db.update(youtubeProductContentsTable).set({ videoData, updatedAt: new Date() }).where(eq(youtubeProductContentsTable.id, cached.id));
       } else {
@@ -229,7 +229,7 @@ router.post("/connectors/youtube/metadata", handle(async (req, res) => {
   await ensureYoutubeCacheTable();
   const contentHash = productContentHash(product);
   const [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, Boolean(isShort)))).limit(1);
-  if (cached) return res.json({ title: cached.title, description: cached.description, tags: parseCachedArray(cached.tags), hashtags: parseCachedArray(cached.hashtags), isShort: Boolean(isShort), cached: true, videoCached: Boolean(cached.videoData?.startsWith("v3:")) });
+  if (cached) return res.json({ title: cached.title, description: cached.description, tags: parseCachedArray(cached.tags), hashtags: parseCachedArray(cached.hashtags), isShort: Boolean(isShort), cached: true, videoCached: Boolean(cached.videoData?.startsWith("v4:")) });
   const system = `Sen professional YouTube SEO marketologisan. Mahsulot uchun sotuvga yo'naltirilgan, tabiiy va professional metadata yarat. FAQAT JSON qaytar: {"title":"...","description":"...","tags":["..."],"hashtags":["..."]}. title <=100 belgi. description 150-300 so'z, hook + foydalar + muhim detallar + CTA. tags 10-20 ta, jami <=500 belgi. hashtags 5-10 ta. O'zbek auditoriyasi uchun yoz, kerak bo'lsa ruscha qidiruv kalitlarini tabiiy qo'sh.`;
   const prompt = `Mahsulot: ${product.name}\nNarx: ${product.sellPrice} ${product.currency}\nKategoriya: ${product.category}\nTavsif: ${product.description || "Yo'q"}\nFormat: ${isShort ? "15 soniyalik YouTube Short" : "15 soniyalik YouTube video"}`;
   const raw = await generateText(system, prompt);
@@ -262,7 +262,7 @@ router.post("/connectors/youtube/publish", handle(async (req, res) => {
   const videoPath = join(tmpDir, "video.mp4");
   try {
     const accessToken = await ensureFreshToken(account);
-    if (cached?.videoData?.startsWith("v3:")) await writeFile(videoPath, Buffer.from(cached.videoData.slice(3), "base64"));
+    if (cached?.videoData?.startsWith("v4:")) await writeFile(videoPath, Buffer.from(cached.videoData.slice(3), "base64"));
     else {
       const imagePath = join(tmpDir, "product.jpg");
       if (!(await downloadImage(images[0], imagePath))) { res.status(400).json({ error: "Mahsulot rasmini yuklab bo'lmadi." }); return; }
@@ -272,7 +272,7 @@ router.post("/connectors/youtube/publish", handle(async (req, res) => {
     const hashtagLine = (body.hashtags ?? []).map((x) => `#${String(x).replace(/^#/, "")}`).join(" ");
     const description = [body.description ?? "", hashtagLine].filter(Boolean).join("\n\n");
     const videoId = await uploadToYouTube({ accessToken, title: body.title, description, tags: body.tags ?? [], videoPath, fileSize });
-    const videoData = cached?.videoData?.startsWith("v3:") ? cached.videoData : "v3:" + (await readFile(videoPath)).toString("base64");
+    const videoData = cached?.videoData?.startsWith("v4:") ? cached.videoData : "v3:" + (await readFile(videoPath)).toString("base64");
     const cacheValues = { userId, productId: body.productId, contentHash, isShort, title: body.title.slice(0, 100), description: body.description ?? "", tags: JSON.stringify(body.tags ?? []), hashtags: JSON.stringify(body.hashtags ?? []), videoData, updatedAt: new Date() };
     if (cached) await db.update(youtubeProductContentsTable).set(cacheValues).where(eq(youtubeProductContentsTable.id, cached.id));
     else [cached] = await db.insert(youtubeProductContentsTable).values({ ...cacheValues, createdAt: new Date() }).returning();
