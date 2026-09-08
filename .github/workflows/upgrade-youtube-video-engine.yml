@@ -13,36 +13,35 @@ jobs:
         with:
           ref: chore/remove-replit
           fetch-depth: 0
-      - name: Apply source integration
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Finalize video cache
         shell: bash
         run: |
           set -e
           node - <<'NODE'
-          const fs = require('fs');
-          const pkg = 'artifacts/api-server/package.json';
-          const j = JSON.parse(fs.readFileSync(pkg, 'utf8'));
-          j.dependencies['node-edge-tts'] = '^1.2.10';
-          fs.writeFileSync(pkg, JSON.stringify(j, null, 2) + '\n');
-
-          const file = 'artifacts/api-server/src/routes/youtube.ts';
-          let s = fs.readFileSync(file, 'utf8');
-          const imp = 'import { buildMarketingVideo, VIDEO_DURATION_SECONDS } from "../video/video-engine";';
-          if (!s.includes(imp)) s = s.replace('import { generateText } from "../ai/textProviders";', 'import { generateText } from "../ai/textProviders";\n' + imp);
-
-          const start = s.indexOf('function writeMarketingWav(');
-          const end = s.indexOf('async function uploadToYouTube(', start);
-          if (start === -1 || end === -1) throw new Error('VIDEO_ENGINE_MARKERS_NOT_FOUND');
-          s = s.slice(0, start) + 'async function buildFiveSecondVideo(imagePath: string, outputPath: string, isShort: boolean, product: any) {\n  await buildMarketingVideo(imagePath, outputPath, product, isShort);\n}\n\n' + s.slice(end);
-
-          s = s.replace('buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort))', 'buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort), product)');
-          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, isShort)', 'buildFiveSecondVideo(imagePath, videoPath, isShort, product)');
-          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort))', 'buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort), product)');
-          s = s.replace('eq(youtubeProductContentsTable.contentHash, contentHash), ', '');
-          s = s.replace(/durationSeconds: 5/g, 'durationSeconds: VIDEO_DURATION_SECONDS');
-          fs.writeFileSync(file, s);
+          const fs=require('fs');
+          const pkg='artifacts/api-server/package.json';
+          const j=JSON.parse(fs.readFileSync(pkg,'utf8'));
+          j.dependencies['node-edge-tts']='^1.2.10';
+          fs.writeFileSync(pkg,JSON.stringify(j,null,2)+'\n');
+          const file='artifacts/api-server/src/routes/youtube.ts';
+          let s=fs.readFileSync(file,'utf8');
+          s=s.replace('const videoData = (await readFile(videoPath)).toString("base64");','const videoData = "v3:" + (await readFile(videoPath)).toString("base64");');
+          s=s.replace('if (!cached?.videoData) {','if (!cached?.videoData?.startsWith("v3:")) {');
+          s=s.replace('res.send(Buffer.from(cached!.videoData!, "base64"));','res.send(Buffer.from(cached!.videoData!.slice(3), "base64"));');
+          s=s.replace('if (cached?.videoData) await writeFile(videoPath, Buffer.from(cached.videoData, "base64"));','if (cached?.videoData?.startsWith("v3:")) await writeFile(videoPath, Buffer.from(cached.videoData.slice(3), "base64"));');
+          s=s.replace('const videoData = cached?.videoData ?? (await readFile(videoPath)).toString("base64");','const videoData = cached?.videoData?.startsWith("v3:") ? cached.videoData : "v3:" + (await readFile(videoPath)).toString("base64");');
+          s=s.replace('videoCached: Boolean(cached.videoData)','videoCached: Boolean(cached.videoData?.startsWith("v3:"))');
+          fs.writeFileSync(file,s);
           NODE
+          pnpm install --lockfile-only
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add artifacts/api-server/package.json artifacts/api-server/src/routes/youtube.ts
-          git commit -m 'feat: clean 15s YouTube video engine with TTS and reusable cache'
+          git add artifacts/api-server/package.json pnpm-lock.yaml artifacts/api-server/src/routes/youtube.ts
+          git commit -m 'feat: finalize reusable 15s YouTube video cache'
           git push origin HEAD:chore/remove-replit
