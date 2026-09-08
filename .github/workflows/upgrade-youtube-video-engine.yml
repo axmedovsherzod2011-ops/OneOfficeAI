@@ -2,8 +2,7 @@ name: one-time-youtube-video-engine-fix
 on:
   push:
     branches: [chore/remove-replit]
-    paths:
-      - '.github/upgrade-youtube-video-trigger.txt'
+    paths: ['.github/upgrade-youtube-video-trigger.txt']
 permissions:
   contents: write
 jobs:
@@ -21,49 +20,51 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Apply clean engine integration
+      - name: Patch source
         shell: bash
         run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const pkgPath = 'artifacts/api-server/package.json';
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-          pkg.dependencies['node-edge-tts'] = '^1.2.10';
-          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          pkg_path = Path('artifacts/api-server/package.json')
+          pkg = json.loads(pkg_path.read_text())
+          pkg.setdefault('dependencies', {})['node-edge-tts'] = '^1.2.10'
+          pkg_path.write_text(json.dumps(pkg, indent=2) + '\n')
 
-          const file = 'artifacts/api-server/src/routes/youtube.ts';
-          let s = fs.readFileSync(file, 'utf8');
-          if (!s.includes('from "../video/video-engine"')) {
-            s = s.replace('import { generateText } from "../ai/textProviders";', 'import { generateText } from "../ai/textProviders";\nimport { buildMarketingVideo, VIDEO_DURATION_SECONDS } from "../video/video-engine";');
-          }
-          const start = s.indexOf('function writeMarketingWav(');
-          const end = s.indexOf('async function uploadToYouTube(', start);
-          if (start < 0 || end < 0) throw new Error('VIDEO_ENGINE_MARKERS_NOT_FOUND');
-          s = s.slice(0, start) + 'async function buildFiveSecondVideo(imagePath: string, outputPath: string, isShort: boolean, product: any) {\n  await buildMarketingVideo(imagePath, outputPath, product, isShort);\n}\n\n' + s.slice(end);
+          path = Path('artifacts/api-server/src/routes/youtube.ts')
+          s = path.read_text()
+          imp = 'import { buildMarketingVideo, VIDEO_DURATION_SECONDS } from "../video/video-engine";'
+          if imp not in s:
+              s = s.replace('import { generateText } from "../ai/textProviders";', 'import { generateText } from "../ai/textProviders";\n' + imp)
 
-          s = s.replace('buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort))', 'buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort), product)');
-          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, isShort)', 'buildFiveSecondVideo(imagePath, videoPath, isShort, product)');
-          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort))', 'buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort), product)');
+          start = s.find('function writeMarketingWav(')
+          end = s.find('async function uploadToYouTube(', start)
+          if start < 0 or end < 0:
+              raise SystemExit('VIDEO_ENGINE_MARKERS_NOT_FOUND')
+          wrapper = '''async function buildFiveSecondVideo(imagePath: string, outputPath: string, isShort: boolean, product: any) {\n  await buildMarketingVideo(imagePath, outputPath, product, isShort);\n}\n\n'''
+          s = s[:start] + wrapper + s[end:]
 
-          // Video reuse is keyed by product + format. Metadata may vary, but the rendered product video is reusable.
-          const previewQuery = 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);';
-          if (s.includes(previewQuery)) {
-            s = s.replace(previewQuery, 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).orderBy(sql`updated_at DESC`).limit(1);');
-          }
-          const publishQuery = 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);';
-          if (s.includes(publishQuery)) {
-            s = s.replace(publishQuery, 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort))).orderBy(sql`updated_at DESC`).limit(1);');
-          }
-          s = s.replace(/durationSeconds: 5/g, 'durationSeconds: VIDEO_DURATION_SECONDS');
-          fs.writeFileSync(file, s);
-          NODE
+          s = s.replace('buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort))', 'buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort), product)')
+          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, isShort)', 'buildFiveSecondVideo(imagePath, videoPath, isShort, product)')
+          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort))', 'buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort), product)')
+
+          old_preview = 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);'
+          new_preview = 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, productId), eq(youtubeProductContentsTable.isShort, isShort))).orderBy(sql`updated_at DESC`).limit(1);'
+          s = s.replace(old_preview, new_preview)
+
+          old_publish = 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.contentHash, contentHash), eq(youtubeProductContentsTable.isShort, isShort))).limit(1);'
+          new_publish = 'let [cached] = await db.select().from(youtubeProductContentsTable).where(and(eq(youtubeProductContentsTable.productId, body.productId), eq(youtubeProductContentsTable.isShort, isShort))).orderBy(sql`updated_at DESC`).limit(1);'
+          s = s.replace(old_publish, new_publish)
+
+          path.write_text(s)
+          PY
           pnpm install --lockfile-only
           pnpm --filter @workspace/api-server typecheck
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add artifacts/api-server/package.json pnpm-lock.yaml artifacts/api-server/src/routes/youtube.ts artifacts/api-server/src/video/video-engine.ts
-          git commit -m 'feat: clean 15s YouTube video engine with TTS and cache'
+          git commit -m 'feat: clean 15s YouTube video engine with TTS and reusable cache'
           git push
           git rm -f .github/upgrade-youtube-video-trigger.txt .github/workflows/upgrade-youtube-video-engine.yml
-          git commit -m 'chore: remove one-time video engine workflow'
+          git commit -m 'chore: remove temporary video engine workflow'
           git push
