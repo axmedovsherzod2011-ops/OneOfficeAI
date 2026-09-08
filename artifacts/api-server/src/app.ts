@@ -27,12 +27,24 @@ app.use(
   }),
 );
 
-// The frontend is hosted on Cloudflare Pages while the API is on Render.
-// Keep CORS explicit so browser preflighted YouTube POST requests are
-// accepted consistently instead of falling back to the generic "Failed to fetch".
+// Cloudflare Pages production + preview deployments both need to reach the
+// Render API. Preview deployments use generated *.oneofficeai.pages.dev hosts.
+// Reject every other origin.
 app.use(
   cors({
-    origin: "https://oneofficeai.pages.dev",
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      try {
+        const url = new URL(origin);
+        const allowed =
+          url.protocol === "https:" &&
+          (url.hostname === "oneofficeai.pages.dev" ||
+            url.hostname.endsWith(".oneofficeai.pages.dev"));
+        callback(null, allowed);
+      } catch {
+        callback(null, false);
+      }
+    },
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: false,
