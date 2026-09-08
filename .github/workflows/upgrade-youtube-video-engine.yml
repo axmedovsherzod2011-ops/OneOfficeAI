@@ -13,22 +13,36 @@ jobs:
         with:
           ref: chore/remove-replit
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.20.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Patch source
+      - name: Apply source integration
+        shell: bash
         run: |
-          node -e 'const fs=require("fs");const p="artifacts/api-server/package.json";const j=JSON.parse(fs.readFileSync(p,"utf8"));j.dependencies["node-edge-tts"]="^1.2.10";fs.writeFileSync(p,JSON.stringify(j,null,2)+"\n");'
-          node -e 'const fs=require("fs");const p="artifacts/api-server/src/routes/youtube.ts";let s=fs.readFileSync(p,"utf8");if(!s.includes("../video/video-engine"))s=s.replace("import { generateText } from \"../ai/textProviders\";","import { generateText } from \"../ai/textProviders\";\nimport { buildMarketingVideo, VIDEO_DURATION_SECONDS } from \"../video/video-engine\";");const a=s.indexOf("function writeMarketingWav(");const b=s.indexOf("async function uploadToYouTube(",a);if(a<0||b<0)throw Error("VIDEO_ENGINE_MARKERS_NOT_FOUND");s=s.slice(0,a)+"async function buildFiveSecondVideo(imagePath: string, outputPath: string, isShort: boolean, product: any) { await buildMarketingVideo(imagePath, outputPath, product, isShort); }\n\n"+s.slice(b);s=s.replace(/buildFiveSecondVideo\\(([^,]+), ([^,]+), isShort\\)/g,"buildFiveSecondVideo($1, $2, isShort, product)");s=s.replace(/buildFiveSecondVideo\\(([^,]+), ([^,]+), Boolean\\(isShort\\)\\)/g,"buildFiveSecondVideo($1, $2, Boolean(isShort), product)");s=s.replace(/eq\\(youtubeProductContentsTable\\.contentHash, contentHash\\), /g,"");s=s.replace(/durationSeconds: 5/g,"durationSeconds: VIDEO_DURATION_SECONDS");fs.writeFileSync(p,s);'
-          pnpm install --lockfile-only
-          pnpm --filter @workspace/api-server typecheck
-      - name: Commit
-        run: |
+          set -e
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = 'artifacts/api-server/package.json';
+          const j = JSON.parse(fs.readFileSync(pkg, 'utf8'));
+          j.dependencies['node-edge-tts'] = '^1.2.10';
+          fs.writeFileSync(pkg, JSON.stringify(j, null, 2) + '\n');
+
+          const file = 'artifacts/api-server/src/routes/youtube.ts';
+          let s = fs.readFileSync(file, 'utf8');
+          const imp = 'import { buildMarketingVideo, VIDEO_DURATION_SECONDS } from "../video/video-engine";';
+          if (!s.includes(imp)) s = s.replace('import { generateText } from "../ai/textProviders";', 'import { generateText } from "../ai/textProviders";\n' + imp);
+
+          const start = s.indexOf('function writeMarketingWav(');
+          const end = s.indexOf('async function uploadToYouTube(', start);
+          if (start === -1 || end === -1) throw new Error('VIDEO_ENGINE_MARKERS_NOT_FOUND');
+          s = s.slice(0, start) + 'async function buildFiveSecondVideo(imagePath: string, outputPath: string, isShort: boolean, product: any) {\n  await buildMarketingVideo(imagePath, outputPath, product, isShort);\n}\n\n' + s.slice(end);
+
+          s = s.replace('buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort))', 'buildFiveSecondVideo(previewImagePath, previewVideoPath, Boolean(isShort), product)');
+          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, isShort)', 'buildFiveSecondVideo(imagePath, videoPath, isShort, product)');
+          s = s.replace('buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort))', 'buildFiveSecondVideo(imagePath, videoPath, Boolean(isShort), product)');
+          s = s.replace('eq(youtubeProductContentsTable.contentHash, contentHash), ', '');
+          s = s.replace(/durationSeconds: 5/g, 'durationSeconds: VIDEO_DURATION_SECONDS');
+          fs.writeFileSync(file, s);
+          NODE
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add artifacts/api-server/package.json pnpm-lock.yaml artifacts/api-server/src/routes/youtube.ts artifacts/api-server/src/video/video-engine.ts
+          git add artifacts/api-server/package.json artifacts/api-server/src/routes/youtube.ts
           git commit -m 'feat: clean 15s YouTube video engine with TTS and reusable cache'
           git push origin HEAD:chore/remove-replit
