@@ -180,7 +180,7 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
   const subtitleJson = `${voiceRaw}.json`;
 
   try {
-    const urls = Array.from(new Set(((product?.images as unknown[]) ?? []).map(clean).filter(Boolean)));
+    const urls = Array.from(new Set(((product?.images as unknown[]) ?? []).map(clean).filter(Boolean))).slice(0, 1);
     const localImages: string[] = [];
     for (let i = 0; i < urls.length; i++) {
       const dest = join(work, `image-${i}.jpg`);
