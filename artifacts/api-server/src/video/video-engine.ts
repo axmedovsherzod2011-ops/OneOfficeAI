@@ -327,7 +327,7 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
     if (finalPriceCue) {
       const start = Math.max(0, Math.min(14.80, finalPriceCue.start));
       const end = Math.max(start + 0.20, Math.min(14.99, finalPriceCue.end));
-      captionFilters.push(`drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(finalPriceCue.text)}':fontcolor=0x16a34a:fontsize=${isShort ? 92 : 68}:box=1:boxcolor=white@0.98:boxborderw=${isShort ? 28 : 20}:x=(w-text_w)/2:y=h*0.67:enable='between(t,${start.toFixed(3)},${end.toFixed(3)}'`);
+      captionFilters.push(`drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(finalPriceCue.text)}':fontcolor=0x16a34a:fontsize=${isShort ? 92 : 68}:box=1:boxcolor=white@0.98:boxborderw=${isShort ? 28 : 20}:x=(w-text_w)/2:y=h*0.67:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'`);
     }
     filters.push(`[${last}]${captionFilters.length ? captionFilters.join(",") : "null"}[vout]`);
 
