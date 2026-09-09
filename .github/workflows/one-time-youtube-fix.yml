@@ -1,0 +1,38 @@
+name: One-time YouTube fix
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch App.tsx
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('artifacts/oneoffice-ai/src/App.tsx')
+          s = p.read_text(encoding='utf-8')
+          replacements = [
+            ('function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, onError }: any) {', 'function YtPublishing({ product, accountId, ytMetadata, onDone, onError }: any) {'),
+            ('        // Send the user-selected image URLs so the backend builds the\n        // slideshow from exactly those images (falls back to product.images\n        // when the array is empty).\n        const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);\n\n', '        // The backend reads product images from the database; do not send browser image/base64 payloads.\n\n'),
+            ('            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,\n', ''),
+            ('                selectedImages={selectedImages}\n', ''),
+          ]
+          for old, new in replacements:
+              if old not in s:
+                  raise SystemExit('Expected target text not found; refusing to modify App.tsx')
+              s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/oneoffice-ai/src/App.tsx
+          git diff --cached --check
+          git commit -m 'fix: stop sending browser images to YouTube publish'
+          git push origin HEAD:main
