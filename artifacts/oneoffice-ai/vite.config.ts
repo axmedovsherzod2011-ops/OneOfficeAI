@@ -43,36 +43,58 @@ async function oneOfficeFetchWithDiagnostics(input: RequestInfo | URL, init?: Re
     if (!response.ok) {
       const text = await response.clone().text().catch(() => "");
       let serverMessage = "";
-      try { serverMessage = JSON.parse(text)?.error || ""; } catch {}
-      if (serverMessage) {
-        throw new Error(`HTTP ${response.status} ${response.statusText} — ${serverMessage} [${url}]`);
-      }
-      throw new Error(`HTTP ${response.status} ${response.statusText} — server returned an error [${url}]`);
+      try {
+        const parsed = JSON.parse(text);
+        serverMessage = parsed?.error || parsed?.message || parsed?.detail || "";
+      } catch {}
+      const bodyPreview = text ? text.slice(0, 1200) : "<empty response>";
+      throw new Error(
+        `YouTube API HTTP ${response.status} ${response.statusText} — ${serverMessage || bodyPreview} — URL=${url}`,
+      );
     }
     return response;
   } catch (error: any) {
-    if (error?.message?.startsWith("HTTP ")) throw error;
-    const browserMessage = error?.message || String(error);
+    const message = error?.message || String(error);
+    if (message.startsWith("YouTube API HTTP ")) throw error;
     const origin = typeof window !== "undefined" ? window.location.origin : "unknown-origin";
-    const likely = browserMessage === "Failed to fetch"
-      ? "Browser network/CORS/preflight failure: the request did not produce a readable HTTP response. Check the Render OPTIONS response and browser Network tab."
-      : "Browser fetch failed before a readable HTTP response was received.";
-    throw new Error(`YouTube publish request failed: ${browserMessage} — ${likely} URL=${url} ORIGIN=${origin}`);
+    throw new Error(
+      `YouTube publish network error: ${message} | URL=${url} | FRONTEND_ORIGIN=${origin} | This means the browser did not receive a readable HTTP response from Render.`,
+    );
   }
 }
 `;
 
-      // Put the diagnostic fetch wrapper before the app code.
-      s = s.replace('const queryClient = new QueryClient();', `${diagnosticHelper}\nconst queryClient = new QueryClient();`);
+      s = s.replace(
+        'const queryClient = new QueryClient();',
+        `${diagnosticHelper}\nconst queryClient = new QueryClient();`,
+      );
 
-      // The production frontend is hosted on Cloudflare Pages while the API
-      // is hosted on Render. Ensure scoped fetches use the configured API origin.
-      s = s.replace('const res = await fetch(path, {', 'const res = await fetch(apiUrl(path), {');
-      s = s.replace('const res = await fetch("/api/connectors/youtube/publish", {', 'const res = await oneOfficeFetchWithDiagnostics(apiUrl("/api/connectors/youtube/publish"), {');
-      s = s.replace('const res = await fetch("/api/connectors/youtube/metadata", {', 'const res = await oneOfficeFetchWithDiagnostics(apiUrl("/api/connectors/youtube/metadata"), {');
+      s = s.replace(
+        'const res = await fetch(path, {',
+        'const res = await fetch(apiUrl(path), {',
+      );
 
-      // Video rendering uses product DB images on the backend; don't serialize
-      // browser-side base64 image payloads into the YouTube publish request.
+      // Cover both source forms used by the production branches: direct
+      // relative fetches and the already-routed apiUrl(...) form.
+      s = s.replace(
+        'const res = await fetch("/api/connectors/youtube/publish", {',
+        'const res = await oneOfficeFetchWithDiagnostics(apiUrl("/api/connectors/youtube/publish"), {',
+      );
+      s = s.replace(
+        'const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {',
+        'const res = await oneOfficeFetchWithDiagnostics(apiUrl("/api/connectors/youtube/publish"), {',
+      );
+      s = s.replace(
+        'const res = await fetch("/api/connectors/youtube/metadata", {',
+        'const res = await oneOfficeFetchWithDiagnostics(apiUrl("/api/connectors/youtube/metadata"), {',
+      );
+      s = s.replace(
+        'const res = await fetch(apiUrl("/api/connectors/youtube/metadata"), {',
+        'const res = await oneOfficeFetchWithDiagnostics(apiUrl("/api/connectors/youtube/metadata"), {',
+      );
+
+      // Video rendering uses product DB images on the backend; do not send
+      // large browser-side base64 image payloads with the publish request.
       s = s.replace(
         '        const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);',
         '        const imageUrls: string[] = [];',
