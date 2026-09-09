@@ -57,7 +57,10 @@ async function freshYouTubeToken(account: typeof youtubeAccountsTable.$inferSele
 }
 
 async function googleJson(url: string, token: string) {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(30_000),
+  });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error?.message ?? `Google API ${response.status}`);
   return data;
@@ -74,6 +77,17 @@ function num(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function mapAnalyticsRows(analytics: any) {
+  const headers = analytics.columnHeaders?.map((h: any) => h.name) ?? [];
+  return (analytics.rows ?? []).map((row: any[]) => {
+    const out: Record<string, any> = {};
+    headers.forEach((name: string, index: number) => {
+      out[name] = name === "day" ? row[index] : num(row[index]);
+    });
+    return out;
+  });
+}
+
 async function getYouTubeStats(userId: number) {
   const accounts = await db.select().from(youtubeAccountsTable).where(eq(youtubeAccountsTable.userId, userId));
   const channels = [];
@@ -81,7 +95,10 @@ async function getYouTubeStats(userId: number) {
   for (const account of accounts) {
     try {
       const token = await freshYouTubeToken(account);
-      const channelData = await googleJson("https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics,status,brandingSettings&mine=true", token);
+      const channelData = await googleJson(
+        "https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics,status,brandingSettings&mine=true",
+        token,
+      );
       const channel = channelData.items?.[0];
       if (!channel) {
         channels.push({ id: account.id, channelId: account.channelId, title: account.title, error: "YouTube kanali topilmadi." });
@@ -94,7 +111,10 @@ async function getYouTubeStats(userId: number) {
       analyticsUrl.searchParams.set("ids", "channel==MINE");
       analyticsUrl.searchParams.set("startDate", startDate);
       analyticsUrl.searchParams.set("endDate", endDate);
-      analyticsUrl.searchParams.set("metrics", "views,estimatedMinutesWatched,averageViewDuration,likes,comments,shares,subscribersGained,subscribersLost,engagedViews");
+      analyticsUrl.searchParams.set(
+        "metrics",
+        "views,estimatedMinutesWatched,averageViewDuration,likes,comments,shares,subscribersGained,subscribersLost,engagedViews",
+      );
       analyticsUrl.searchParams.set("dimensions", "day");
       analyticsUrl.searchParams.set("sort", "day");
 
@@ -105,21 +125,90 @@ async function getYouTubeStats(userId: number) {
         analytics = { rows: [], error: err instanceof Error ? err.message : "Analytics API xatosi" };
       }
 
-      const headers = analytics.columnHeaders?.map((h: any) => h.name) ?? [];
-      const daily = (analytics.rows ?? []).map((row: any[]) => {
-        const out: Record<string, any> = {};
-        headers.forEach((name: string, index: number) => {
-          out[name] = name === "day" ? row[index] : num(row[index]);
-        });
-        return out;
-      });
-
+      const daily = mapAnalyticsRows(analytics);
       const totals = daily.reduce((acc: any, row: any) => {
-        for (const key of ["views", "estimatedMinutesWatched", "likes", "comments", "shares", "subscribersGained", "subscribersLost", "engagedViews"]) acc[key] += num(row[key]);
+        for (const key of ["views", "estimatedMinutesWatched", "likes", "comments", "shares", "subscribersGained", "subscribersLost", "engagedViews"]) {
+          acc[key] += num(row[key]);
+        }
         acc.averageViewDurationWeighted += num(row.averageViewDuration) * Math.max(1, num(row.views));
         acc.averageViewDurationWeight += Math.max(1, num(row.views));
         return acc;
-      }, { views: 0, estimatedMinutesWatched: 0, likes: 0, comments: 0, shares: 0, subscribersGained: 0, subscribersLost: 0, engagedViews: 0, averageViewDurationWeighted: 0, averageViewDurationWeight: 0 });
+      }, {
+        views: 0,
+        estimatedMinutesWatched: 0,
+        likes: 0,
+        comments: 0,
+        shares: 0,
+        subscribersGained: 0,
+        subscribersLost: 0,
+        engagedViews: 0,
+        averageViewDurationWeighted: 0,
+        averageViewDurationWeight: 0,
+      });
+
+      let revenue: any = null;
+      try {
+        const revenueUrl = new URL("https://youtubeanalytics.googleapis.com/v2/reports");
+        revenueUrl.searchParams.set("ids", "channel==MINE");
+        revenueUrl.searchParams.set("startDate", startDate);
+        revenueUrl.searchParams.set("endDate", endDate);
+        revenueUrl.searchParams.set("metrics", "estimatedRevenue,estimatedAdRevenue,monetizedPlaybacks");
+        revenue = await googleJson(revenueUrl.toString(), token);
+      } catch {
+        // Revenue is optional and may be unavailable for non-monetized channels.
+      }
+
+      const revenueHeaders = revenue?.columnHeaders?.map((h: any) => h.name) ?? [];
+      const revenueTotals = (revenue?.rows ?? []).reduce((acc: any, row: any[]) => {
+        revenueHeaders.forEach((name: string, index: number) => {
+          if (name !== "day") acc[name] = num(acc[name]) + num(row[index]);
+        });
+        return acc;
+      }, { estimatedRevenue: 0, estimatedAdRevenue: 0, monetizedPlaybacks: 0 });
+
+      let recentVideos: any[] = [];
+      if (channel.contentDetails?.relatedPlaylists?.uploads) {
+        try {
+          const playlistUrl = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
+          playlistUrl.searchParams.set("part", "snippet,contentDetails,status");
+          playlistUrl.searchParams.set("playlistId", channel.contentDetails.relatedPlaylists.uploads);
+          playlistUrl.searchParams.set("maxResults", "25");
+          const playlist = await googleJson(playlistUrl.toString(), token);
+          const ids = (playlist.items ?? [])
+            .map((item: any) => item.contentDetails?.videoId)
+            .filter(Boolean)
+            .join(",");
+
+          if (ids) {
+            const videos = await googleJson(
+              `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics,status,topicDetails&id=${encodeURIComponent(ids)}`,
+              token,
+            );
+            recentVideos = (videos.items ?? [])
+              .map((video: any) => ({
+                id: video.id,
+                title: video.snippet?.title ?? "",
+                description: video.snippet?.description ?? "",
+                publishedAt: video.snippet?.publishedAt ?? null,
+                channelTitle: video.snippet?.channelTitle ?? channel.snippet?.title ?? "",
+                thumbnails: video.snippet?.thumbnails ?? {},
+                duration: video.contentDetails?.duration ?? null,
+                definition: video.contentDetails?.definition ?? null,
+                caption: video.contentDetails?.caption ?? null,
+                privacyStatus: video.status?.privacyStatus ?? null,
+                madeForKids: video.status?.madeForKids ?? null,
+                viewCount: num(video.statistics?.viewCount),
+                likeCount: num(video.statistics?.likeCount),
+                commentCount: num(video.statistics?.commentCount),
+                favoriteCount: num(video.statistics?.favoriteCount),
+                topics: video.topicDetails?.topicCategories ?? [],
+              }))
+              .sort((a: any, b: any) => b.viewCount - a.viewCount);
+          }
+        } catch (err) {
+          console.warn("[connector statistics] YouTube videos unavailable", err);
+        }
+      }
 
       channels.push({
         id: account.id,
@@ -137,6 +226,7 @@ async function getYouTubeStats(userId: number) {
         hiddenSubscriberCount: Boolean(channel.statistics?.hiddenSubscriberCount),
         commentCount: num(channel.statistics?.commentCount),
         uploadsPlaylistId: channel.contentDetails?.relatedPlaylists?.uploads ?? null,
+        recentVideos,
         analytics: {
           startDate,
           endDate,
@@ -150,8 +240,11 @@ async function getYouTubeStats(userId: number) {
             subscribersGained: totals.subscribersGained,
             subscribersLost: totals.subscribersLost,
             engagedViews: totals.engagedViews,
-            averageViewDuration: totals.averageViewDurationWeight ? totals.averageViewDurationWeighted / totals.averageViewDurationWeight : 0,
+            averageViewDuration: totals.averageViewDurationWeight
+              ? totals.averageViewDurationWeighted / totals.averageViewDurationWeight
+              : 0,
           },
+          revenue: revenueTotals,
           error: analytics.error ?? null,
         },
         branding: {
@@ -166,7 +259,13 @@ async function getYouTubeStats(userId: number) {
         },
       });
     } catch (err) {
-      channels.push({ id: account.id, channelId: account.channelId, title: account.title, thumbnailUrl: account.thumbnailUrl, error: err instanceof Error ? err.message : "YouTube statistikasi olinmadi." });
+      channels.push({
+        id: account.id,
+        channelId: account.channelId,
+        title: account.title,
+        thumbnailUrl: account.thumbnailUrl,
+        error: err instanceof Error ? err.message : "YouTube statistikasi olinmadi.",
+      });
     }
   }
 
@@ -181,8 +280,23 @@ async function getYouTubeStats(userId: number) {
     acc.watchMinutes30d += num(channel.analytics?.totals?.estimatedMinutesWatched);
     acc.subscribersGained30d += num(channel.analytics?.totals?.subscribersGained);
     acc.subscribersLost30d += num(channel.analytics?.totals?.subscribersLost);
+    acc.estimatedRevenue30d += num(channel.analytics?.revenue?.estimatedRevenue);
+    acc.estimatedAdRevenue30d += num(channel.analytics?.revenue?.estimatedAdRevenue);
     return acc;
-  }, { viewCount: 0, subscriberCount: 0, videoCount: 0, views30d: 0, watchMinutes30d: 0, likes30d: 0, comments30d: 0, shares30d: 0, subscribersGained30d: 0, subscribersLost30d: 0 });
+  }, {
+    viewCount: 0,
+    subscriberCount: 0,
+    videoCount: 0,
+    views30d: 0,
+    watchMinutes30d: 0,
+    likes30d: 0,
+    comments30d: 0,
+    shares30d: 0,
+    subscribersGained30d: 0,
+    subscribersLost30d: 0,
+    estimatedRevenue30d: 0,
+    estimatedAdRevenue30d: 0,
+  });
 
   return { connector: "youtube", updatedAt: new Date().toISOString(), rangeDays: 30, accounts: channels, totals };
 }
@@ -198,12 +312,22 @@ router.get("/api/connectors/statistics/:connector", handle(async (req, res) => {
   }
 
   if (connector === "telegram") {
-    res.json({ connector: "telegram", delegatedEndpoint: "/api/telegram-mtproto/stats/live", message: "Telegram statistikasi uchun live MTProto endpoint ishlatiladi." });
+    res.json({
+      connector: "telegram",
+      delegatedEndpoint: "/api/telegram-mtproto/stats/live",
+      message: "Telegram statistikasi uchun live MTProto endpoint ishlatiladi.",
+    });
     return;
   }
 
   if (connector === "instagram" || connector === "vk") {
-    res.json({ connector, accounts: [], totals: {}, available: false, message: `${connector === "instagram" ? "Instagram" : "VK"} uchun ulangan akkaunt ma'lumotlari mavjud, ammo hozirgi connector scope real analytics endpointini bermaydi.` });
+    res.json({
+      connector,
+      accounts: [],
+      totals: {},
+      available: false,
+      message: `${connector === "instagram" ? "Instagram" : "VK"} uchun hozirgi connector scope real analytics endpointini bermaydi. UI bu holatni fake raqamlar bilan to'ldirmaydi.`,
+    });
     return;
   }
 
