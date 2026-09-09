@@ -2,7 +2,7 @@ import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, youtubeAccountsTable } from "@workspace/db/schema";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const router = Router();
 
@@ -23,11 +23,7 @@ async function getUserId(req: any, res: any) {
     res.status(401).json({ error: "Tizimga kirilmagan." });
     return null;
   }
-  const [user] = await db
-    .select({ id: usersTable.id })
-    .from(usersTable)
-    .where(eq(usersTable.firebaseUid, firebaseUid))
-    .limit(1);
+  const [user] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.firebaseUid, firebaseUid)).limit(1);
   if (!user) {
     res.status(404).json({ error: "Profil hali sozlanmagan." });
     return null;
@@ -36,7 +32,7 @@ async function getUserId(req: any, res: any) {
 }
 
 function googleClientId() {
-  return (process.env.GOOGLE_CLIENT_ID ?? "").replace(/^https?:\\/\\//, "").trim();
+  return (process.env.GOOGLE_CLIENT_ID ?? "").replace(/^https?:\/\//, "").trim();
 }
 
 async function freshYouTubeToken(account: typeof youtubeAccountsTable.$inferSelect) {
@@ -54,26 +50,16 @@ async function freshYouTubeToken(account: typeof youtubeAccountsTable.$inferSele
     }),
   });
   const data = await response.json() as { access_token?: string; expires_in?: number; error?: string; error_description?: string };
-  if (!response.ok || !data.access_token) {
-    throw new Error(data.error_description ?? data.error ?? `Google token refresh failed (${response.status})`);
-  }
+  if (!response.ok || !data.access_token) throw new Error(data.error_description ?? data.error ?? `Google token refresh failed (${response.status})`);
   const tokenExpiresAt = new Date(Date.now() + (data.expires_in ?? 3600) * 1000);
-  await db
-    .update(youtubeAccountsTable)
-    .set({ accessToken: data.access_token, tokenExpiresAt })
-    .where(eq(youtubeAccountsTable.id, account.id));
+  await db.update(youtubeAccountsTable).set({ accessToken: data.access_token, tokenExpiresAt }).where(eq(youtubeAccountsTable.id, account.id));
   return data.access_token;
 }
 
 async function googleJson(url: string, token: string) {
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(30_000),
-  });
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data?.error?.message ?? `Google API ${response.status}`);
-  }
+  if (!response.ok) throw new Error(data?.error?.message ?? `Google API ${response.status}`);
   return data;
 }
 
@@ -89,19 +75,13 @@ function num(value: unknown) {
 }
 
 async function getYouTubeStats(userId: number) {
-  const accounts = await db
-    .select()
-    .from(youtubeAccountsTable)
-    .where(eq(youtubeAccountsTable.userId, userId));
-
+  const accounts = await db.select().from(youtubeAccountsTable).where(eq(youtubeAccountsTable.userId, userId));
   const channels = [];
+
   for (const account of accounts) {
     try {
       const token = await freshYouTubeToken(account);
-      const channelData = await googleJson(
-        "https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics,status,brandingSettings&mine=true",
-        token,
-      );
+      const channelData = await googleJson("https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics,status,brandingSettings&mine=true", token);
       const channel = channelData.items?.[0];
       if (!channel) {
         channels.push({ id: account.id, channelId: account.channelId, title: account.title, error: "YouTube kanali topilmadi." });
@@ -110,22 +90,11 @@ async function getYouTubeStats(userId: number) {
 
       const endDate = new Date().toISOString().slice(0, 10);
       const startDate = dateDaysAgo(30);
-      const metrics = [
-        "views",
-        "estimatedMinutesWatched",
-        "averageViewDuration",
-        "likes",
-        "comments",
-        "shares",
-        "subscribersGained",
-        "subscribersLost",
-        "engagedViews",
-      ].join(",");
       const analyticsUrl = new URL("https://youtubeanalytics.googleapis.com/v2/reports");
       analyticsUrl.searchParams.set("ids", "channel==MINE");
       analyticsUrl.searchParams.set("startDate", startDate);
       analyticsUrl.searchParams.set("endDate", endDate);
-      analyticsUrl.searchParams.set("metrics", metrics);
+      analyticsUrl.searchParams.set("metrics", "views,estimatedMinutesWatched,averageViewDuration,likes,comments,shares,subscribersGained,subscribersLost,engagedViews");
       analyticsUrl.searchParams.set("dimensions", "day");
       analyticsUrl.searchParams.set("sort", "day");
 
@@ -133,9 +102,6 @@ async function getYouTubeStats(userId: number) {
       try {
         analytics = await googleJson(analyticsUrl.toString(), token);
       } catch (err) {
-        // Channel statistics are still useful if Analytics API access is not
-        // available for this account; expose the error without hiding the
-        // rest of the channel data.
         analytics = { rows: [], error: err instanceof Error ? err.message : "Analytics API xatosi" };
       }
 
@@ -148,28 +114,12 @@ async function getYouTubeStats(userId: number) {
         return out;
       });
 
-      const totals = daily.reduce(
-        (acc: any, row: any) => {
-          for (const key of ["views", "estimatedMinutesWatched", "likes", "comments", "shares", "subscribersGained", "subscribersLost", "engagedViews"]) {
-            acc[key] += num(row[key]);
-          }
-          acc.averageViewDurationWeighted += num(row.averageViewDuration) * Math.max(1, num(row.views));
-          acc.averageViewDurationWeight += Math.max(1, num(row.views));
-          return acc;
-        },
-        {
-          views: 0,
-          estimatedMinutesWatched: 0,
-          likes: 0,
-          comments: 0,
-          shares: 0,
-          subscribersGained: 0,
-          subscribersLost: 0,
-          engagedViews: 0,
-          averageViewDurationWeighted: 0,
-          averageViewDurationWeight: 0,
-        },
-      );
+      const totals = daily.reduce((acc: any, row: any) => {
+        for (const key of ["views", "estimatedMinutesWatched", "likes", "comments", "shares", "subscribersGained", "subscribersLost", "engagedViews"]) acc[key] += num(row[key]);
+        acc.averageViewDurationWeighted += num(row.averageViewDuration) * Math.max(1, num(row.views));
+        acc.averageViewDurationWeight += Math.max(1, num(row.views));
+        return acc;
+      }, { views: 0, estimatedMinutesWatched: 0, likes: 0, comments: 0, shares: 0, subscribersGained: 0, subscribersLost: 0, engagedViews: 0, averageViewDurationWeighted: 0, averageViewDurationWeight: 0 });
 
       channels.push({
         id: account.id,
@@ -180,7 +130,7 @@ async function getYouTubeStats(userId: number) {
         thumbnailUrl: channel.snippet?.thumbnails?.high?.url ?? channel.snippet?.thumbnails?.default?.url ?? account.thumbnailUrl ?? "",
         publishedAt: channel.snippet?.publishedAt ?? null,
         country: channel.snippet?.country ?? null,
-        defaultLanguage: channel.snippet?.defaultLanguage ?? channel.snippet?.localized?.title ? null : null,
+        defaultLanguage: channel.snippet?.defaultLanguage ?? null,
         viewCount: num(channel.statistics?.viewCount),
         subscriberCount: num(channel.statistics?.subscriberCount),
         videoCount: num(channel.statistics?.videoCount),
@@ -192,10 +142,15 @@ async function getYouTubeStats(userId: number) {
           endDate,
           daily,
           totals: {
-            ...totals,
-            averageViewDuration: totals.averageViewDurationWeight
-              ? totals.averageViewDurationWeighted / totals.averageViewDurationWeight
-              : 0,
+            views: totals.views,
+            estimatedMinutesWatched: totals.estimatedMinutesWatched,
+            likes: totals.likes,
+            comments: totals.comments,
+            shares: totals.shares,
+            subscribersGained: totals.subscribersGained,
+            subscribersLost: totals.subscribersLost,
+            engagedViews: totals.engagedViews,
+            averageViewDuration: totals.averageViewDurationWeight ? totals.averageViewDurationWeighted / totals.averageViewDurationWeight : 0,
           },
           error: analytics.error ?? null,
         },
@@ -211,32 +166,23 @@ async function getYouTubeStats(userId: number) {
         },
       });
     } catch (err) {
-      channels.push({
-        id: account.id,
-        channelId: account.channelId,
-        title: account.title,
-        thumbnailUrl: account.thumbnailUrl,
-        error: err instanceof Error ? err.message : "YouTube statistikasi olinmadi.",
-      });
+      channels.push({ id: account.id, channelId: account.channelId, title: account.title, thumbnailUrl: account.thumbnailUrl, error: err instanceof Error ? err.message : "YouTube statistikasi olinmadi." });
     }
   }
 
-  const totals = channels.reduce(
-    (acc: any, channel: any) => {
-      acc.viewCount += num(channel.viewCount);
-      acc.subscriberCount += num(channel.subscriberCount);
-      acc.videoCount += num(channel.videoCount);
-      acc.comments30d += num(channel.analytics?.totals?.comments);
-      acc.likes30d += num(channel.analytics?.totals?.likes);
-      acc.shares30d += num(channel.analytics?.totals?.shares);
-      acc.views30d += num(channel.analytics?.totals?.views);
-      acc.watchMinutes30d += num(channel.analytics?.totals?.estimatedMinutesWatched);
-      acc.subscribersGained30d += num(channel.analytics?.totals?.subscribersGained);
-      acc.subscribersLost30d += num(channel.analytics?.totals?.subscribersLost);
-      return acc;
-    },
-    { viewCount: 0, subscriberCount: 0, videoCount: 0, views30d: 0, watchMinutes30d: 0, likes30d: 0, comments30d: 0, shares30d: 0, subscribersGained30d: 0, subscribersLost30d: 0 },
-  );
+  const totals = channels.reduce((acc: any, channel: any) => {
+    acc.viewCount += num(channel.viewCount);
+    acc.subscriberCount += num(channel.subscriberCount);
+    acc.videoCount += num(channel.videoCount);
+    acc.comments30d += num(channel.analytics?.totals?.comments);
+    acc.likes30d += num(channel.analytics?.totals?.likes);
+    acc.shares30d += num(channel.analytics?.totals?.shares);
+    acc.views30d += num(channel.analytics?.totals?.views);
+    acc.watchMinutes30d += num(channel.analytics?.totals?.estimatedMinutesWatched);
+    acc.subscribersGained30d += num(channel.analytics?.totals?.subscribersGained);
+    acc.subscribersLost30d += num(channel.analytics?.totals?.subscribersLost);
+    return acc;
+  }, { viewCount: 0, subscriberCount: 0, videoCount: 0, views30d: 0, watchMinutes30d: 0, likes30d: 0, comments30d: 0, shares30d: 0, subscribersGained30d: 0, subscribersLost30d: 0 });
 
   return { connector: "youtube", updatedAt: new Date().toISOString(), rangeDays: 30, accounts: channels, totals };
 }
@@ -252,9 +198,6 @@ router.get("/api/connectors/statistics/:connector", handle(async (req, res) => {
   }
 
   if (connector === "telegram") {
-    // The dedicated Telegram MTProto endpoint remains the source of truth;
-    // the statistics page calls it directly so its live/permission logic is
-    // not duplicated here.
     res.json({ connector: "telegram", delegatedEndpoint: "/api/telegram-mtproto/stats/live", message: "Telegram statistikasi uchun live MTProto endpoint ishlatiladi." });
     return;
   }
