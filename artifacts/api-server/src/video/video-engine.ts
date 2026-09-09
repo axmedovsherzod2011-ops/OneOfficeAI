@@ -3,6 +3,7 @@ import { promisify } from "util";
 import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { randomInt } from "crypto";
 import { EdgeTTS } from "node-edge-tts";
 
 const execFileAsync = promisify(execFile);
@@ -51,10 +52,16 @@ function drawEscape(value: string) {
 }
 
 type Cue = { text: string; start: number; end: number };
-function twoWordCues(raw: Array<{ part?: string; start?: number; end?: number }>): Cue[] {
-  const words = raw
+type RawWord = { part?: string; start?: number; end?: number };
+
+function normalizedWords(raw: RawWord[]) {
+  return raw
     .map(x => ({ text: clean(x.part), start: Number(x.start), end: Number(x.end) }))
     .filter(x => x.text && Number.isFinite(x.start) && Number.isFinite(x.end) && x.end >= x.start);
+}
+
+function twoWordCues(raw: RawWord[]): Cue[] {
+  const words = normalizedWords(raw);
   const cues: Cue[] = [];
   for (let i = 0; i < words.length; i += 2) {
     const a = words[i];
@@ -62,6 +69,25 @@ function twoWordCues(raw: Array<{ part?: string; start?: number; end?: number }>
     cues.push({ text: [a.text, b?.text].filter(Boolean).join(" ").slice(0, 70), start: a.start / 1000, end: (b?.end ?? a.end) / 1000 });
   }
   return cues.filter(x => x.start < 15 && x.end > 0);
+}
+
+function priceCue(raw: RawWord[], product: any): Cue | null {
+  const price = clean(product?.sellPrice ?? product?.price);
+  const digits = price.replace(/\D/g, "");
+  if (!digits) return null;
+
+  const words = normalizedWords(raw);
+  const index = words.findIndex(word => word.text.replace(/\D/g, "").includes(digits));
+  if (index < 0) return null;
+
+  const startWord = words[index];
+  const endIndex = Math.min(words.length - 1, index + 2);
+  const endWord = words[endIndex];
+  return {
+    text: money(product),
+    start: startWord.start / 1000,
+    end: Math.max(startWord.end, endWord.end) / 1000,
+  };
 }
 
 async function makeMusicWav(outputPath: string) {
@@ -76,13 +102,37 @@ async function makeMusicWav(outputPath: string) {
   buffer.writeUInt32LE(sampleRate * channels * 2, 28); buffer.writeUInt16LE(channels * 2, 32); buffer.writeUInt16LE(16, 34);
   buffer.write("data", 36); buffer.writeUInt32LE(dataSize, 40);
 
-  const roots = [220, 233, 247, 262, 277, 294, 311, 330];
+  // Every generation gets a cryptographically random musical seed so the
+  // accompaniment changes even when the same product is rendered again.
+  const seed = randomInt(0, 0x7fffffff);
+  let state = seed;
+  const next = () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    return state / 0x100000000;
+  };
+  const pick = <T,>(items: T[]) => items[Math.floor(next() * items.length)];
+
+  const roots = [196, 208, 220, 233, 247, 262, 277, 294, 311, 330, 349];
   const scale = [0, 2, 4, 7, 9, 12, 14];
-  const root = roots[Math.floor(Math.random() * roots.length)];
-  const bpm = 112 + Math.floor(Math.random() * 24);
+  const progressions = [
+    [0, 5, 3, 4],
+    [0, 3, 5, 4],
+    [0, 4, 5, 3],
+    [0, 5, 4, 3],
+    [0, 3, 4, 5],
+    [0, 4, 3, 5],
+  ];
+  const root = pick(roots);
+  const bpm = 104 + Math.floor(next() * 31);
   const beat = 60 / bpm;
-  const progression = [0, 5, 3, 4];
-  const melody = Array.from({ length: 96 }, () => scale[Math.floor(Math.random() * scale.length)]);
+  const progression = pick(progressions);
+  const melody = Array.from({ length: 96 }, () => pick(scale));
+  const style = Math.floor(next() * 4);
+  const harmonicMix = 0.22 + next() * 0.18;
+  const melodyLevel = 0.065 + next() * 0.05;
   const freq = (n: number) => root * Math.pow(2, n / 12);
   const env = (t: number, d: number) => {
     const a = Math.min(0.025, d * 0.2), r = Math.min(0.09, d * 0.35);
@@ -101,28 +151,31 @@ async function makeMusicWav(outputPath: string) {
     let l = 0, r = 0;
     for (const n of [chord, chord + 4, chord + 7]) {
       const f = freq(n);
-      const x = 0.055 * (Math.sin(2 * Math.PI * f * t) + 0.35 * Math.sin(4 * Math.PI * f * t));
-      l += x; r += x * 0.96;
+      const harmonic = style === 0 ? Math.sin(4 * Math.PI * f * t) : style === 1 ? Math.sin(6 * Math.PI * f * t) : Math.sin(3 * Math.PI * f * t);
+      const x = 0.052 * (Math.sin(2 * Math.PI * f * t) + harmonicMix * harmonic);
+      l += x; r += x * (0.92 + next() * 0.06);
     }
-    const bassD = beat * 0.72;
+    const bassD = beat * (0.62 + style * 0.05);
     if (bt < bassD) {
-      const x = 0.18 * env(bt, bassD) * Math.sin(2 * Math.PI * freq(chord - 12) * bt);
+      const x = (0.16 + style * 0.015) * env(bt, bassD) * Math.sin(2 * Math.PI * freq(chord - 12) * bt);
       l += x; r += x;
     }
-    const nt = t % (beat / 2);
+    const nt = t % (beat / (style === 3 ? 1 : 2));
     const note = melody[Math.floor(t / (beat / 2)) % melody.length];
-    if (nt < beat * 0.42) {
-      const x = 0.09 * env(nt, beat * 0.42) * Math.sin(2 * Math.PI * freq(note + 12) * nt);
+    if (nt < beat * (0.34 + style * 0.035)) {
+      const wave = style === 2 ? Math.sin(2 * Math.PI * freq(note + 12) * nt) + 0.22 * Math.sin(2 * Math.PI * freq(note + 19) * nt) : Math.sin(2 * Math.PI * freq(note + 12) * nt);
+      const x = melodyLevel * env(nt, beat * 0.42) * wave;
+      l += x; r += x * 0.97;
+    }
+    if (bt < 0.14) {
+      const x = (0.14 + style * 0.015) * Math.exp(-bt * (22 + style * 4)) * Math.sin(2 * Math.PI * (92 + style * 17 - 45 * Math.min(1, bt / 0.14)) * bt);
       l += x; r += x;
     }
-    if (bt < 0.16) {
-      const x = 0.18 * Math.exp(-bt * 24) * Math.sin(2 * Math.PI * (105 - 55 * Math.min(1, bt / 0.16)) * bt);
-      l += x; r += x;
-    }
-    const ht = t % (beat / 2);
-    if (ht < 0.045) {
-      const x = (Math.random() * 2 - 1) * 0.028 * Math.exp(-ht * 90);
-      l += x; r += x * 0.9;
+    const hatStep = style === 1 ? beat / 3 : beat / 2;
+    const ht = t % hatStep;
+    if (ht < 0.04) {
+      const x = (next() * 2 - 1) * (0.022 + style * 0.004) * Math.exp(-ht * 95);
+      l += x; r += x * 0.88;
     }
     const fade = Math.max(0, Math.min(1, t / 0.08, (VIDEO_DURATION_SECONDS - t) / 0.12));
     samples[i * 2] = l * fade; samples[i * 2 + 1] = r * fade;
@@ -131,6 +184,44 @@ async function makeMusicWav(outputPath: string) {
   const gain = peak ? Math.min(0.82 / peak, 1.8) : 1;
   for (let i = 0; i < samples.length; i++) {
     buffer.writeInt16LE(Math.round(Math.max(-1, Math.min(1, samples[i] * gain)) * 32767), 44 + i * 2);
+  }
+  await writeFile(outputPath, buffer);
+}
+
+async function makeCashSoundWav(outputPath: string) {
+  const sampleRate = 44100;
+  const duration = 0.85;
+  const frames = Math.round(sampleRate * duration);
+  const channels = 2;
+  const dataSize = frames * channels * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0); buffer.writeUInt32LE(36 + dataSize, 4); buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12); buffer.writeUInt32LE(16, 16); buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22); buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * channels * 2, 28); buffer.writeUInt16LE(channels * 2, 32); buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36); buffer.writeUInt32LE(dataSize, 40);
+
+  const notes = [
+    { start: 0.00, freq: 880, length: 0.24, level: 0.28 },
+    { start: 0.09, freq: 1320, length: 0.34, level: 0.25 },
+    { start: 0.18, freq: 1760, length: 0.52, level: 0.20 },
+  ];
+  for (let i = 0; i < frames; i++) {
+    const t = i / sampleRate;
+    let sample = 0;
+    for (const note of notes) {
+      const local = t - note.start;
+      if (local >= 0 && local < note.length) {
+        const decay = Math.exp(-local * 8.5);
+        sample += note.level * decay * (Math.sin(2 * Math.PI * note.freq * local) + 0.22 * Math.sin(2 * Math.PI * note.freq * 2.01 * local));
+      }
+    }
+    const sparkle = t > 0.02 ? 0.035 * Math.exp(-(t - 0.02) * 10) * Math.sin(2 * Math.PI * 2800 * (t - 0.02)) : 0;
+    sample += sparkle;
+    const fade = Math.min(1, t / 0.004) * Math.min(1, (duration - t) / 0.08);
+    const value = Math.max(-1, Math.min(1, (sample * fade) * 0.8));
+    buffer.writeInt16LE(Math.round(value * 32767), 44 + i * 4);
+    buffer.writeInt16LE(Math.round(value * 0.92 * 32767), 46 + i * 4);
   }
   await writeFile(outputPath, buffer);
 }
@@ -175,6 +266,7 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
   const work = join(tmpdir(), `oneoffice-video-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   await mkdir(work, { recursive: true });
   const music = join(work, "music.wav");
+  const cash = join(work, "cash.wav");
   const voiceRaw = join(work, "voice-raw.mp3");
   const voice = join(work, "voice.mp3");
   const subtitleJson = `${voiceRaw}.json`;
@@ -192,15 +284,18 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
     }
 
     await makeMusicWav(music);
+    await makeCashSoundWav(cash);
     const tts = new EdgeTTS({ voice: Math.random() < 0.5 ? "uz-UZ-MadinaNeural" : "uz-UZ-SardorNeural", lang: "uz-UZ", outputFormat: "audio-24khz-96kbitrate-mono-mp3", saveSubtitles: true, rate: "default", timeout: 20_000 });
     await tts.ttsPromise(narration(product), voiceRaw);
 
     const sourceDuration = await probeDuration(voiceRaw);
     const targetVoiceDuration = 14.85;
     await execFileAsync("ffmpeg", ["-i", voiceRaw, "-filter:a", atempoChain(sourceDuration / targetVoiceDuration), "-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "96k", "-y", voice], { timeout: 60_000 });
-    const rawCues = JSON.parse(await readFile(subtitleJson, "utf8")) as Array<{ part?: string; start?: number; end?: number }>;
+    const rawCues = JSON.parse(await readFile(subtitleJson, "utf8")) as RawWord[];
     const cueScale = targetVoiceDuration / sourceDuration;
     const cues = twoWordCues(rawCues).map(c => ({ ...c, start: c.start * cueScale, end: c.end * cueScale }));
+    const rawPriceCue = priceCue(rawCues, product);
+    const finalPriceCue = rawPriceCue ? { ...rawPriceCue, start: rawPriceCue.start * cueScale, end: rawPriceCue.end * cueScale } : null;
 
     const n = localImages.length;
     const transition = n <= 2 ? 0.65 : n <= 5 ? 0.5 : 0.35;
@@ -229,13 +324,31 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
       const end = Math.max(start + 0.02, Math.min(14.99, c.end));
       return `drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(c.text)}':fontcolor=black:fontsize=${isShort ? 78 : 58}:box=1:boxcolor=white@0.97:boxborderw=${isShort ? 24 : 18}:x=(w-text_w)/2:y=h*0.78:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'`;
     });
+    if (finalPriceCue) {
+      const start = Math.max(0, Math.min(14.80, finalPriceCue.start));
+      const end = Math.max(start + 0.20, Math.min(14.99, finalPriceCue.end));
+      captionFilters.push(`drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(finalPriceCue.text)}':fontcolor=0x16a34a:fontsize=${isShort ? 92 : 68}:box=1:boxcolor=white@0.98:boxborderw=${isShort ? 28 : 20}:x=(w-text_w)/2:y=h*0.67:enable='between(t,${start.toFixed(3)},${end.toFixed(3)}'`);
+    }
     filters.push(`[${last}]${captionFilters.length ? captionFilters.join(",") : "null"}[vout]`);
+
+    const audioFilters = [
+      `[${n}:a]volume=0.14[m]`,
+      `[${n + 1}:a]volume=1.0[v]`,
+    ];
+    if (finalPriceCue) {
+      const delayMs = Math.max(0, Math.round(finalPriceCue.start * 1000));
+      audioFilters.push(`[${n + 2}:a]adelay=${delayMs}|${delayMs},volume=0.72[cashdelayed]`);
+      audioFilters.push(`[m][v][cashdelayed]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[a]`);
+    } else {
+      audioFilters.push(`[m][v]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]`);
+    }
 
     const args = [
       ...inputs,
       "-i", music,
       "-i", voice,
-      "-filter_complex", `${filters.join(";")};[${n}:a]volume=0.14[m];[${n + 1}:a]volume=1.0[v];[m][v]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]`,
+      "-i", cash,
+      "-filter_complex", `${filters.join(";")};${audioFilters.join(";")}`,
       "-map", "[vout]", "-map", "[a]", "-t", String(VIDEO_DURATION_SECONDS), "-r", "30",
       "-c:v", "libx264", "-preset", "ultrafast", "-crf", "27", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-y", outputPath,
     ];
