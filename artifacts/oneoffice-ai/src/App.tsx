@@ -5886,7 +5886,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
 }
 
 // Step 3 — upload video, show progress
-function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, onError }: any) {
+function YtPublishing({ product, accountId, ytMetadata, onDone, onError }: any) {
   const { user: firebaseUser } = useAuth();
   const called = useRef(false);
   const mounted = useRef(true);
@@ -5901,10 +5901,9 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
         const token = await firebaseUser?.getIdToken();
         if (mounted.current) setStage("uploading");
 
-        // Send the user-selected image URLs so the backend builds the
-        // slideshow from exactly those images (falls back to product.images
-        // when the array is empty).
-        const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
+        // The backend owns video rendering and reads the product images
+        // from the database. Do not send browser-side image/base64
+        // payloads here.
 
         const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {
           method: "POST",
@@ -5920,7 +5919,6 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
             tags: ytMetadata?.tags,
             hashtags: ytMetadata?.hashtags,
             isShort: ytMetadata?.isShort,
-            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
           }),
         });
         const body = await res.json().catch(() => null);
@@ -8060,7 +8058,6 @@ function AppShell() {
                 product={selectedProduct}
                 accountId={ytAccountId}
                 ytMetadata={ytMetadata}
-                selectedImages={selectedImages}
                 onDone={handleYtDone}
                 onError={handleYtPublishError}
               />
