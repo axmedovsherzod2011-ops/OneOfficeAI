@@ -4,11 +4,80 @@
   const STATISTICS_URL = "/statistics.html";
   const YOUTUBE_REDIRECT_URI = "https://oneofficeai-1.onrender.com/";
   const MARKER = "data-oneoffice-legal-links";
+  const MODAL_MARKER = "data-oneoffice-statistics-modal";
 
   try {
     sessionStorage.setItem("yt_oauth_redirect_uri", YOUTUBE_REDIRECT_URI);
   } catch {
-    // Ignore storage restrictions; the YouTube connector will surface its normal error.
+    // Ignore storage restrictions; the YouTube connector surfaces its normal error.
+  }
+
+  function closeStatistics() {
+    document.querySelector(`[${MODAL_MARKER}]`)?.remove();
+    document.body.style.overflow = "";
+  }
+
+  function openStatistics() {
+    if (document.querySelector(`[${MODAL_MARKER}]`)) return;
+
+    const overlay = document.createElement("div");
+    overlay.setAttribute(MODAL_MARKER, "true");
+    overlay.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:9999",
+      "background:#020617",
+      "display:flex",
+      "flex-direction:column",
+    ].join(";");
+
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText = [
+      "height:48px",
+      "min-height:48px",
+      "display:flex",
+      "align-items:center",
+      "justify-content:space-between",
+      "padding:0 16px",
+      "background:rgba(15,23,42,.96)",
+      "border-bottom:1px solid rgba(255,255,255,.08)",
+      "backdrop-filter:blur(18px)",
+      "font-family:Inter,ui-sans-serif,system-ui,sans-serif",
+    ].join(";");
+
+    const title = document.createElement("div");
+    title.style.cssText = "display:flex;align-items:center;gap:9px;color:#fff;font-size:13px;font-weight:600;";
+    title.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:#a78bfa;box-shadow:0 0 14px rgba(167,139,250,.7)"></span><span>Statistics</span>';
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Close statistics");
+    close.style.cssText = "width:32px;height:32px;border:1px solid rgba(255,255,255,.1);border-radius:10px;background:rgba(255,255,255,.05);color:#94a3b8;font-size:22px;line-height:1;cursor:pointer;";
+    close.addEventListener("mouseenter", () => { close.style.color = "#fff"; close.style.background = "rgba(255,255,255,.1)"; });
+    close.addEventListener("mouseleave", () => { close.style.color = "#94a3b8"; close.style.background = "rgba(255,255,255,.05)"; });
+    close.addEventListener("click", closeStatistics);
+
+    toolbar.appendChild(title);
+    toolbar.appendChild(close);
+
+    const frame = document.createElement("iframe");
+    frame.src = STATISTICS_URL;
+    frame.title = "OneOffice AI detailed statistics";
+    frame.style.cssText = "display:block;width:100%;height:calc(100% - 48px);border:0;background:#020617;flex:1;";
+
+    overlay.appendChild(toolbar);
+    overlay.appendChild(frame);
+    document.body.appendChild(overlay);
+    document.body.style.overflow = "hidden";
+
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        closeStatistics();
+        document.removeEventListener("keydown", onKey);
+      }
+    };
+    document.addEventListener("keydown", onKey);
   }
 
   function addLegalLinks() {
@@ -31,7 +100,7 @@
       statistics.style.borderColor = "rgba(167,139,250,.28)";
       statistics.style.background = "linear-gradient(90deg,rgba(124,58,237,.16),rgba(37,99,235,.16))";
     });
-    statistics.addEventListener("click", () => { window.location.href = STATISTICS_URL; });
+    statistics.addEventListener("click", openStatistics);
 
     const links = document.createElement("div");
     links.style.cssText = "display:flex;justify-content:center;align-items:center;gap:18px;";
