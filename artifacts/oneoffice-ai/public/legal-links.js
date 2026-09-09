@@ -17,33 +17,19 @@
     document.body.style.overflow = "";
   }
 
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "ONEOFFICE_CLOSE_STATISTICS") closeStatistics();
+  });
+
   function openStatistics() {
     if (document.querySelector(`[${MODAL_MARKER}]`)) return;
 
     const overlay = document.createElement("div");
     overlay.setAttribute(MODAL_MARKER, "true");
-    overlay.style.cssText = [
-      "position:fixed",
-      "inset:0",
-      "z-index:9999",
-      "background:#020617",
-      "display:flex",
-      "flex-direction:column",
-    ].join(";");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:#020617;display:flex;flex-direction:column;";
 
     const toolbar = document.createElement("div");
-    toolbar.style.cssText = [
-      "height:48px",
-      "min-height:48px",
-      "display:flex",
-      "align-items:center",
-      "justify-content:space-between",
-      "padding:0 16px",
-      "background:rgba(15,23,42,.96)",
-      "border-bottom:1px solid rgba(255,255,255,.08)",
-      "backdrop-filter:blur(18px)",
-      "font-family:Inter,ui-sans-serif,system-ui,sans-serif",
-    ].join(";");
+    toolbar.style.cssText = "height:48px;min-height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(15,23,42,.96);border-bottom:1px solid rgba(255,255,255,.08);backdrop-filter:blur(18px);font-family:Inter,ui-sans-serif,system-ui,sans-serif;";
 
     const title = document.createElement("div");
     title.style.cssText = "display:flex;align-items:center;gap:9px;color:#fff;font-size:13px;font-weight:600;";
