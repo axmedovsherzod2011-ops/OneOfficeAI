@@ -18,6 +18,7 @@ import ordersRouter from "./orders";
 import onehelpRouter from "./onehelp";
 import externalAgentRouter from "./externalAgent";
 import captionRouter from "./caption";
+import { telegramCodeRateLimit } from "../middlewares/telegramCodeRateLimit";
 
 const router: IRouter = Router();
 
@@ -39,6 +40,7 @@ router.use(productsRouter);
 router.use(productResearchRouter);
 router.use(youtubeRouter);
 router.use(youtubeStatisticsRouter);
+router.use(telegramCodeRateLimit);
 router.use(telegramMtprotoRouter);
 router.use(statsDashboardRouter);
 router.use(ordersRouter);
