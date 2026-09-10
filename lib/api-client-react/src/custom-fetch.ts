@@ -40,14 +40,21 @@ function renderTelegramResendCooldown(): void {
   const buttons = telegramResendButtons();
 
   for (const button of buttons) {
+    const desiredText =
+      remainingSeconds > 0
+        ? `Qayta yuborish (${remainingSeconds} soniya)`
+        : TELEGRAM_RESEND_LABEL;
+
+    if ((button.textContent || "").trim() !== desiredText) {
+      button.textContent = desiredText;
+    }
+
     if (remainingSeconds > 0) {
-      button.disabled = true;
+      if (!button.disabled) button.disabled = true;
       button.setAttribute("aria-disabled", "true");
-      button.textContent = `Qayta yuborish (${remainingSeconds} soniya)`;
     } else {
-      button.disabled = false;
+      if (button.disabled) button.disabled = false;
       button.removeAttribute("aria-disabled");
-      button.textContent = TELEGRAM_RESEND_LABEL;
     }
   }
 
@@ -76,15 +83,19 @@ function isTelegramResendRequest(url: string, method: string): boolean {
 }
 
 // Keep React re-renders from restoring the clickable text while the timer is
-// active. The observer only runs while the page is open and the cooldown is
-// active, and stops automatically at zero.
+// active. The observer only writes when the displayed text is actually
+// different, preventing a mutation-observer feedback loop.
 if (typeof window !== "undefined" && typeof MutationObserver !== "undefined") {
   const observer = new MutationObserver(() => {
     if (telegramResendCooldownUntil.value > Date.now()) {
       renderTelegramResendCooldown();
     }
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
