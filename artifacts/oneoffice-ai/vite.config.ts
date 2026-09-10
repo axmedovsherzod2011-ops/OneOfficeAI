@@ -129,13 +129,8 @@ function newPostDestinationTransform() {
         '                  setFlow("product");\n                }}\n              />\n            )}\n            {flow === "yt-publishing"',
       );
 
-      // Production frontend is on Cloudflare Pages and API is on Render.
-      // Route the metadata account request through the shared API base URL.
       s = s.replace('const res = await fetch(path, {', 'const res = await fetch(apiUrl(path), {');
 
-      // YouTube video rendering now uses the product's DB images directly on the backend.
-      // Do not send selected base64 image payloads from the browser; large requests can fail
-      // before reaching Render with the generic browser "Failed to fetch" error.
       s = s.replace(
         '        const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);',
         '        const imageUrls: string[] = [];',
@@ -147,10 +142,144 @@ function newPostDestinationTransform() {
   };
 }
 
+function dashboardStatsTransform() {
+  return {
+    name: 'oneoffice-dashboard-stats',
+    enforce: 'pre' as const,
+    transform(code: string, id: string) {
+      if (!id.endsWith('/src/App.tsx')) return null;
+      const marker = '// ---------------------------------------------------------------------------\n// CREATE POST FLOW';
+      const start = code.indexOf('function Dashboard({ goCreate, user }: any) {');
+      const end = code.indexOf(marker, start);
+      if (start < 0 || end < 0) return null;
+
+      const replacement = `function DashboardRevenueChart({ period, onPeriodChange, onDetails }: { period: PeriodKey; onPeriodChange: (period: PeriodKey) => void; onDetails: () => void }) {
+  const { user: firebaseUser } = useAuth();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["dashboard-revenue", period],
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl('/api/stats/dashboard/revenue?granularity=' + PERIOD_TO_GRANULARITY[period]), { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+      if (!res.ok) throw new Error('Revenue statistikasi yuklanmadi');
+      return res.json();
+    },
+  });
+  const currencies = Array.from(new Set((data?.buckets ?? []).flatMap((b: any) => Object.keys(b.totals ?? {}))));
+  const primaryCurrency = currencies.includes('UZS') ? 'UZS' : (currencies[0] ?? 'UZS');
+  const chartData = (data?.buckets ?? []).map((b: any) => ({ label: labelForBucket(b.periodStart, period), amount: Number(b.totals?.[primaryCurrency] ?? 0) }));
+  const total = Number(data?.allTime?.[primaryCurrency] ?? 0);
+  const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || '';
+  return (
+    <Glass className="p-6">
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <div><h3 className="text-white font-semibold">Buyurtmalar</h3><p className="text-xs text-slate-500 mt-0.5">Umumiy ishlangan pul</p></div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={onDetails} className="text-xs text-violet-300 hover:text-white border border-violet-400/20 bg-violet-500/10 rounded-lg px-3 py-1.5 transition">Details</button>
+          <div className="relative">
+            <button onClick={() => setPickerOpen((v) => !v)} className="flex items-center gap-1.5 text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 hover:border-white/20 transition">{currentLabel}<ChevronDown className="h-3 w-3" /></button>
+            {pickerOpen && <div className="absolute right-0 mt-1.5 w-44 bg-slate-900 border border-white/10 rounded-xl shadow-2xl p-1 z-20">{PERIOD_OPTIONS.map((o) => <button key={o.key} onClick={() => { onPeriodChange(o.key); setPickerOpen(false); }} className="w-full flex items-center justify-between text-xs text-slate-300 hover:bg-white/5 rounded-lg px-3 py-2 transition">{o.label}{period === o.key && <Check className="h-3 w-3 text-violet-400" />}</button>)}</div>}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-baseline gap-2 mb-4"><span className="text-2xl font-bold text-white">{total.toLocaleString()}</span><span className="text-xs text-slate-500">{primaryCurrency}</span></div>
+      {currencies.length > 1 && <p className="text-[11px] text-slate-500 mb-3">Valyutalar alohida hisoblanadi. Grafikda {primaryCurrency} ko'rsatilgan.</p>}
+      <div className="h-56 -ml-2">
+        {isLoading ? <div className="h-full flex items-center justify-center"><Loader2 className="h-6 w-6 text-slate-500 animate-spin" /></div> : chartData.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-2"><BarChart3 className="h-8 w-8 opacity-40" /><p className="text-xs">Hozircha buyurtma daromadi yo'q.</p></div> : <ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}><defs><linearGradient id="dashboardRevenueGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#34d399" stopOpacity={0.45} /><stop offset="95%" stopColor="#34d399" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" /><XAxis dataKey="label" stroke="rgba(255,255,255,0.3)" tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }} axisLine={{ stroke: "rgba(255,255,255,0.1)" }} tickLine={false} /><YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }} axisLine={false} tickLine={false} width={52} /><RechartsTooltip content={({ active, payload, label }: any) => active && payload?.length ? <div className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 shadow-xl"><p className="text-xs text-slate-400 mb-1">{label}</p><p className="text-xs font-medium text-emerald-400">{payload[0].value.toLocaleString()} {primaryCurrency}</p></div> : null} /><Area type="monotone" dataKey="amount" stroke="#34d399" strokeWidth={2.5} fill="url(#dashboardRevenueGradient)" dot={false} activeDot={{ r: 4 }} /></AreaChart></ResponsiveContainer>}
+      </div>
+    </Glass>
+  );
+}
+
+function DashboardViewsChart({ period, onPeriodChange, onDetails }: { period: PeriodKey; onPeriodChange: (period: PeriodKey) => void; onDetails: () => void }) {
+  const { data, isLoading } = useCombinedStatsDashboard(period);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || '';
+  const chartData = (data?.buckets ?? []).map((b: CombinedBucket) => ({ label: labelForBucket(b.periodStart, period), value: b.views }));
+  const total = Number(data?.allTime?.views ?? 0);
+  const connected = Boolean(data?.viewsConnected);
+  return (
+    <Glass className="p-6">
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <div><h3 className="text-white font-semibold">Views</h3><p className="text-xs text-slate-500 mt-0.5">Barcha mavjud connectorlar bo'yicha umumiy ko'rishlar</p></div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={onDetails} className="text-xs text-violet-300 hover:text-white border border-violet-400/20 bg-violet-500/10 rounded-lg px-3 py-1.5 transition">Details</button>
+          <div className="relative">
+            <button onClick={() => setPickerOpen((v) => !v)} className="flex items-center gap-1.5 text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 hover:border-white/20 transition">{currentLabel}<ChevronDown className="h-3 w-3" /></button>
+            {pickerOpen && <div className="absolute right-0 mt-1.5 w-44 bg-slate-900 border border-white/10 rounded-xl shadow-2xl p-1 z-20">{PERIOD_OPTIONS.map((o) => <button key={o.key} onClick={() => { onPeriodChange(o.key); setPickerOpen(false); }} className="w-full flex items-center justify-between text-xs text-slate-300 hover:bg-white/5 rounded-lg px-3 py-2 transition">{o.label}{period === o.key && <Check className="h-3 w-3 text-violet-400" />}</button>)}</div>}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-baseline gap-2 mb-4"><span className="text-2xl font-bold text-white">{connected ? total.toLocaleString() : '—'}</span><span className="text-xs text-slate-500">views</span></div>
+      <div className="h-56 -ml-2">
+        {isLoading ? <div className="h-full flex items-center justify-center"><Loader2 className="h-6 w-6 text-slate-500 animate-spin" /></div> : !connected || chartData.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-500"><BarChart3 className="h-8 w-8 opacity-40" /><p className="text-xs max-w-[260px]">Real views uchun ulangan connector statistikasi kerak. Telegram MTProto ulangan bo'lsa, shu yerda real views chiqadi.</p></div> : <ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}><defs><linearGradient id="dashboardViewsGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#a78bfa" stopOpacity={0.5} /><stop offset="95%" stopColor="#a78bfa" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" /><XAxis dataKey="label" stroke="rgba(255,255,255,0.3)" tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }} axisLine={{ stroke: "rgba(255,255,255,0.1)" }} tickLine={false} /><YAxis stroke="rgba(255,255,255,0.3)" tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }} axisLine={false} tickLine={false} width={52} allowDecimals={false} /><RechartsTooltip content={({ active, payload, label }: any) => active && payload?.length ? <div className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 shadow-xl"><p className="text-xs text-slate-400 mb-1">{label}</p><p className="text-xs font-medium text-violet-300">{payload[0].value.toLocaleString()} views</p></div> : null} /><Area type="monotone" dataKey="value" stroke="#a78bfa" strokeWidth={2.5} fill="url(#dashboardViewsGradient)" dot={false} activeDot={{ r: 4 }} /></AreaChart></ResponsiveContainer>}
+      </div>
+    </Glass>
+  );
+}
+
+function DashboardStatisticsView({ onBack }: { onBack: () => void }) {
+  const [connector, setConnector] = useState('youtube');
+  const { data: combined, isLoading } = useCombinedStatsDashboard('daily');
+  const { data: revenue } = useQuery<any>({
+    queryKey: ['statistics-revenue-daily'],
+    refetchInterval: 60000,
+    queryFn: async () => { const token = await useAuthTokenForStats(); const res = await fetch(apiUrl('/api/stats/dashboard/revenue?granularity=day'), { headers: token ? { Authorization: 'Bearer ' + token } : {} }); if (!res.ok) throw new Error(''); return res.json(); },
+  });
+  const { user: firebaseUser } = useAuth();
+  async function useAuthTokenForStats() { return firebaseUser?.getIdToken(); }
+  const connectors = [
+    { key: 'youtube', label: 'YouTube', icon: Youtube },
+    { key: 'telegram', label: 'Telegram', icon: Send },
+    { key: 'instagram', label: 'Instagram', icon: Instagram },
+    { key: 'vk', label: 'VK', icon: Globe },
+  ];
+  return (
+    <div className="p-6 md:p-10 space-y-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap"><div><button onClick={onBack} className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white mb-2"><ArrowLeft className="h-4 w-4" /> Dashboard</button><h2 className="text-2xl font-semibold text-white">Statistics</h2><p className="text-sm text-slate-500 mt-1">Ulangan connectorlardan mavjud bo'lgan real statistikalar.</p></div><select value={connector} onChange={(e) => setConnector(e.target.value)} className="bg-slate-900 border border-white/10 text-white rounded-xl px-3 py-2.5 text-sm outline-none"><option value="youtube">YouTube</option><option value="telegram">Telegram</option><option value="instagram">Instagram</option><option value="vk">VK</option></select></div>
+      {connector === 'youtube' && <Glass className="p-6"><div className="grid grid-cols-2 md:grid-cols-4 gap-3"><div className="rounded-2xl bg-white/5 border border-white/5 p-4"><p className="text-xs text-slate-500">Views</p><p className="text-xl font-bold text-white mt-1">{combined?.allTime?.views?.toLocaleString?.() ?? '—'}</p></div><div className="rounded-2xl bg-white/5 border border-white/5 p-4"><p className="text-xs text-slate-500">Orders</p><p className="text-xl font-bold text-white mt-1">{combined?.allTime?.orders?.toLocaleString?.() ?? '—'}</p></div><div className="rounded-2xl bg-white/5 border border-white/5 p-4"><p className="text-xs text-slate-500">Revenue</p><p className="text-xl font-bold text-white mt-1">{revenue?.allTime ? Object.entries(revenue.allTime).map(([k,v]: any) => Number(v).toLocaleString() + ' ' + k).join(' · ') : '—'}</p></div><div className="rounded-2xl bg-white/5 border border-white/5 p-4"><p className="text-xs text-slate-500">Status</p><p className="text-xl font-bold text-white mt-1">{combined?.viewsConnected ? 'Connected' : 'Not connected'}</p></div></div><div className="mt-6 h-64 flex items-center justify-center text-slate-500 text-sm">YouTube Analytics API ulanmagan bo'lsa, YouTube uchun bu oynada faqat OneOffice ichida mavjud bo'lgan real statistikalar ko'rsatiladi.</div></Glass>}
+      {connector !== 'youtube' && <Glass className="p-10 text-center"><BarChart3 className="h-9 w-9 text-slate-600 mx-auto mb-3" /><p className="text-white font-medium">{connectors.find((c) => c.key === connector)?.label} statistikasi</p><p className="text-slate-500 text-sm mt-1">Bu connector uchun API orqali olinadigan real statistikalar ulanmagan bo'lsa, taxminiy yoki demo ma'lumot ko'rsatilmaydi.</p></Glass>}
+    </div>
+  );
+}
+
+function Dashboard({ goCreate, user }: any) {
+  void goCreate;
+  void user;
+  const [ordersPeriod, setOrdersPeriod] = useState<PeriodKey>('daily');
+  const [viewsPeriod, setViewsPeriod] = useState<PeriodKey>('daily');
+  const [showStatistics, setShowStatistics] = useState(false);
+  useEffect(() => {
+    const sync = () => setShowStatistics(new URLSearchParams(window.location.search).get('statistics') === '1');
+    sync();
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+  const openStatistics = () => { window.history.pushState({}, '', window.location.pathname + '?statistics=1'); setShowStatistics(true); };
+  const closeStatistics = () => { window.history.pushState({}, '', window.location.pathname); setShowStatistics(false); };
+  if (showStatistics) return <DashboardStatisticsView onBack={closeStatistics} />;
+  return (
+    <div className="p-6 md:p-10 space-y-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <DashboardRevenueChart period={ordersPeriod} onPeriodChange={setOrdersPeriod} onDetails={openStatistics} />
+        <DashboardViewsChart period={viewsPeriod} onPeriodChange={setViewsPeriod} onDetails={openStatistics} />
+      </div>
+    </div>
+  );
+}
+
+`;
+      return { code: code.slice(0, start) + replacement + code.slice(end), map: null };
+    },
+  };
+}
+
 export default defineConfig({
   base: basePath,
   plugins: [
     newPostDestinationTransform(),
+    dashboardStatsTransform(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
