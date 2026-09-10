@@ -11,6 +11,7 @@ import enrichRouter from "./enrich";
 import productsRouter from "./products";
 import productResearchRouter from "./productResearch";
 import youtubeRouter from "./youtube";
+import youtubeStatisticsRouter from "./youtubeStatistics";
 import telegramMtprotoRouter from "./telegramMtproto";
 import statsDashboardRouter from "./statsDashboard";
 import ordersRouter from "./orders";
@@ -20,9 +21,6 @@ import captionRouter from "./caption";
 
 const router: IRouter = Router();
 
-// Google OAuth uses the backend as the registered redirect URI.
-// After Google grants access, forward the OAuth query parameters to the
-// frontend so the existing client-side callback can exchange the code.
 router.get("/", (req, res) => {
   const frontendUrl = process.env.FRONTEND_PUBLIC_URL ?? "https://oneofficeai.pages.dev";
   res.redirect(302, `${frontendUrl.replace(/\/$/, "")}${req.originalUrl}`);
@@ -40,6 +38,7 @@ router.use(enrichRouter);
 router.use(productsRouter);
 router.use(productResearchRouter);
 router.use(youtubeRouter);
+router.use(youtubeStatisticsRouter);
 router.use(telegramMtprotoRouter);
 router.use(statsDashboardRouter);
 router.use(ordersRouter);
