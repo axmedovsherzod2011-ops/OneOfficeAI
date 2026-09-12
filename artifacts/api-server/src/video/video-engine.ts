@@ -19,12 +19,11 @@ function clean(value: unknown) {
 function money(product: any) {
   const price = product?.sellPrice ?? product?.price;
   const currency = clean(product?.currency) || "UZS";
-  return price !== undefined && price !== null && String(price).trim() ? `${price} ${currency}` : "";
+  return price !== undefined && price !== null && String(price).trim()
+    ? `${price} ${currency}`
+    : "";
 }
 
-// Splits an AI-written "extras"/"usageGuide"/"lifehacks" block (one bullet
-// per line, each starting with an emoji — see productCard.ts) into plain
-// sentences, stripping the leading emoji/bullet punctuation.
 function bulletLines(raw: unknown): string[] {
   return String(raw ?? "")
     .split(/\n+/)
@@ -36,10 +35,6 @@ function firstSentence(raw: unknown): string {
   return clean(raw).split(/[.!?]/).map(clean).filter(Boolean)[0] ?? "";
 }
 
-// Case-insensitive lookup into the product's free-form characteristics
-// table (e.g. {label:"Hajm", value:"500 ml"}) — sellers type these labels
-// themselves, so this matches on a few likely spellings per field rather
-// than one exact string.
 function findCharacteristic(characteristics: unknown, ...labels: string[]): string {
   if (!Array.isArray(characteristics)) return "";
   const wanted = labels.map((l) => l.toLowerCase());
@@ -53,20 +48,6 @@ function findCharacteristic(characteristics: unknown, ...labels: string[]): stri
   return "";
 }
 
-// ---------------------------------------------------------------------------
-// The 20-second script — every beat comes straight from real product data
-// (products.name/category/characteristics/sellPrice + the one-time AI
-// research card's extras/usageGuide/lifehacks, see product_research). A
-// beat is skipped entirely rather than padded with invented filler when
-// its underlying data is missing — this function never makes up a fact
-// that isn't already sitting in the database.
-//
-//   0–4s   hook       "[name] bilan tanishing!"
-//   4–8s   explain    "Bu [Hajm] hajmli [Turi]. ... afzalligi — [extras/description]."
-//   8–14s  how-to-use "Ishlatish uchun: [usageGuide, 1-2 steps]."
-//   14–19s lifehack   "Lifehack: [lifehacks, 1 tip]."
-//   19–20s price      "Narxi: [sellPrice] [currency]." (also drawn on screen, green)
-// ---------------------------------------------------------------------------
 function narration(product: any): string {
   const name = clean(product?.name);
   const characteristics = product?.characteristics;
@@ -78,7 +59,6 @@ function narration(product: any): string {
   const price = money(product);
 
   const beats: string[] = [];
-
   beats.push(name ? `${name} bilan tanishing!` : "");
 
   if (hajm || turi || advantage) {
@@ -97,24 +77,13 @@ function narration(product: any): string {
   return beats.filter(Boolean).join(" ").slice(0, 900);
 }
 
-function drawEscape(value: string) {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\\'")
-    .replace(/:/g, "\\:")
-    .replace(/%/g, "\\%")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;")
-    .replace(/\n/g, " ");
-}
-
 type Cue = { text: string; start: number; end: number };
 type RawWord = { part?: string; start?: number; end?: number };
 
 function normalizedWords(raw: RawWord[]) {
   return raw
-    .map(x => ({ text: clean(x.part), start: Number(x.start), end: Number(x.end) }))
-    .filter(x => x.text && Number.isFinite(x.start) && Number.isFinite(x.end) && x.end >= x.start);
+    .map((x) => ({ text: clean(x.part), start: Number(x.start), end: Number(x.end) }))
+    .filter((x) => x.text && Number.isFinite(x.start) && Number.isFinite(x.end) && x.end >= x.start);
 }
 
 function twoWordCues(raw: RawWord[]): Cue[] {
@@ -123,9 +92,13 @@ function twoWordCues(raw: RawWord[]): Cue[] {
   for (let i = 0; i < words.length; i += 2) {
     const a = words[i];
     const b = words[i + 1];
-    cues.push({ text: [a.text, b?.text].filter(Boolean).join(" ").slice(0, 70), start: a.start / 1000, end: (b?.end ?? a.end) / 1000 });
+    cues.push({
+      text: [a.text, b?.text].filter(Boolean).join(" ").slice(0, 70),
+      start: a.start / 1000,
+      end: (b?.end ?? a.end) / 1000,
+    });
   }
-  return cues.filter(x => x.start < VIDEO_DURATION_SECONDS && x.end > 0);
+  return cues.filter((x) => x.start < VIDEO_DURATION_SECONDS && x.end > 0);
 }
 
 function priceCue(raw: RawWord[], product: any): Cue | null {
@@ -134,12 +107,11 @@ function priceCue(raw: RawWord[], product: any): Cue | null {
   if (!digits) return null;
 
   const words = normalizedWords(raw);
-  const index = words.findIndex(word => word.text.replace(/\D/g, "").includes(digits));
+  const index = words.findIndex((word) => word.text.replace(/\D/g, "").includes(digits));
   if (index < 0) return null;
 
   const startWord = words[index];
-  const endIndex = Math.min(words.length - 1, index + 2);
-  const endWord = words[endIndex];
+  const endWord = words[Math.min(words.length - 1, index + 2)];
   return {
     text: money(product),
     start: startWord.start / 1000,
@@ -159,8 +131,6 @@ async function makeMusicWav(outputPath: string) {
   buffer.writeUInt32LE(sampleRate * channels * 2, 28); buffer.writeUInt16LE(channels * 2, 32); buffer.writeUInt16LE(16, 34);
   buffer.write("data", 36); buffer.writeUInt32LE(dataSize, 40);
 
-  // Every generation gets a cryptographically random musical seed so the
-  // accompaniment changes even when the same product is rendered again.
   const seed = randomInt(0, 0x7fffffff);
   let state = seed;
   const next = () => {
@@ -171,17 +141,9 @@ async function makeMusicWav(outputPath: string) {
     return state / 0x100000000;
   };
   const pick = <T,>(items: T[]) => items[Math.floor(next() * items.length)];
-
   const roots = [196, 208, 220, 233, 247, 262, 277, 294, 311, 330, 349];
   const scale = [0, 2, 4, 7, 9, 12, 14];
-  const progressions = [
-    [0, 5, 3, 4],
-    [0, 3, 5, 4],
-    [0, 4, 5, 3],
-    [0, 5, 4, 3],
-    [0, 3, 4, 5],
-    [0, 4, 3, 5],
-  ];
+  const progressions = [[0, 5, 3, 4], [0, 3, 5, 4], [0, 4, 5, 3], [0, 5, 4, 3], [0, 3, 4, 5], [0, 4, 3, 5]];
   const root = pick(roots);
   const bpm = 104 + Math.floor(next() * 31);
   const beat = 60 / bpm;
@@ -257,7 +219,6 @@ async function makeCashSoundWav(outputPath: string) {
   buffer.writeUInt16LE(channels, 22); buffer.writeUInt32LE(sampleRate, 24);
   buffer.writeUInt32LE(sampleRate * channels * 2, 28); buffer.writeUInt16LE(channels * 2, 32); buffer.writeUInt16LE(16, 34);
   buffer.write("data", 36); buffer.writeUInt32LE(dataSize, 40);
-
   const notes = [
     { start: 0.00, freq: 880, length: 0.24, level: 0.28 },
     { start: 0.09, freq: 1320, length: 0.34, level: 0.25 },
@@ -276,7 +237,7 @@ async function makeCashSoundWav(outputPath: string) {
     const sparkle = t > 0.02 ? 0.035 * Math.exp(-(t - 0.02) * 10) * Math.sin(2 * Math.PI * 2800 * (t - 0.02)) : 0;
     sample += sparkle;
     const fade = Math.min(1, t / 0.004) * Math.min(1, (duration - t) / 0.08);
-    const value = Math.max(-1, Math.min(1, (sample * fade) * 0.8));
+    const value = Math.max(-1, Math.min(1, sample * fade * 0.8));
     buffer.writeInt16LE(Math.round(value * 32767), 44 + i * 4);
     buffer.writeInt16LE(Math.round(value * 0.92 * 32767), 46 + i * 4);
   }
@@ -291,7 +252,10 @@ async function downloadAsset(url: string, dest: string) {
       await writeFile(dest, Buffer.from(match[1], "base64"));
       return true;
     }
-    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*" }, signal: AbortSignal.timeout(20_000) });
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*" },
+      signal: AbortSignal.timeout(20_000),
+    });
     if (!res.ok || !res.body) return false;
     const contentType = res.headers.get("content-type") ?? "";
     if (!contentType.startsWith("image/")) return false;
@@ -303,7 +267,10 @@ async function downloadAsset(url: string, dest: string) {
 }
 
 async function probeDuration(file: string) {
-  const { stdout } = await execFileAsync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file]);
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v", "error", "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1", file,
+  ]);
   const duration = Number.parseFloat(stdout.trim());
   if (!Number.isFinite(duration) || duration <= 0) throw new Error("TTS audio davomiyligini aniqlab bo‘lmadi.");
   return duration;
@@ -316,6 +283,31 @@ function atempoChain(factor: number) {
   while (f > 2) { filters.push("atempo=2.0"); f /= 2; }
   filters.push(`atempo=${f.toFixed(6)}`);
   return filters.join(",");
+}
+
+// FFmpeg filtergraph syntax is NOT a shell syntax. Arguments are passed via
+// execFile, so there is no shell escaping to do. For drawtext we deliberately
+// use textfile instead of embedding user/AI text inside `text='...'`. This
+// prevents apostrophes (Cho'tkaga), quotes, commas, colons, backslashes,
+// percent signs and other Unicode punctuation from corrupting the filtergraph.
+function escapeFilterPath(value: string) {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function enableBetween(start: number, end: number) {
+  // Commas inside FFmpeg expressions must be escaped when the expression is
+  // supplied as a filter option. Do not wrap this expression in single quotes.
+  return `between(t\\,${start.toFixed(3)}\\,${end.toFixed(3)})`;
+}
+
+async function makeTextFile(work: string, prefix: string, text: string) {
+  const path = join(work, `${prefix}-${randomInt(0, 0x7fffffff)}.txt`);
+  await writeFile(path, text.replace(/\r?\n/g, " "), "utf8");
+  return escapeFilterPath(path);
 }
 
 export async function buildMarketingVideo(_imagePath: string, outputPath: string, product: any, isShort: boolean) {
@@ -342,17 +334,32 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
 
     await makeMusicWav(music);
     await makeCashSoundWav(cash);
-    const tts = new EdgeTTS({ voice: Math.random() < 0.5 ? "uz-UZ-MadinaNeural" : "uz-UZ-SardorNeural", lang: "uz-UZ", outputFormat: "audio-24khz-96kbitrate-mono-mp3", saveSubtitles: true, rate: "default", timeout: 20_000 });
+    const tts = new EdgeTTS({
+      voice: Math.random() < 0.5 ? "uz-UZ-MadinaNeural" : "uz-UZ-SardorNeural",
+      lang: "uz-UZ",
+      outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+      saveSubtitles: true,
+      rate: "default",
+      timeout: 20_000,
+    });
     await tts.ttsPromise(narration(product), voiceRaw);
 
     const sourceDuration = await probeDuration(voiceRaw);
     const targetVoiceDuration = VIDEO_DURATION_SECONDS - 0.15;
-    await execFileAsync("ffmpeg", ["-i", voiceRaw, "-filter:a", atempoChain(sourceDuration / targetVoiceDuration), "-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "96k", "-y", voice], { timeout: 60_000 });
+    await execFileAsync("ffmpeg", [
+      "-i", voiceRaw, "-filter:a", atempoChain(sourceDuration / targetVoiceDuration),
+      "-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "96k", "-y", voice,
+    ], { timeout: 60_000 });
+
     const rawCues = JSON.parse(await readFile(subtitleJson, "utf8")) as RawWord[];
     const cueScale = targetVoiceDuration / sourceDuration;
-    const cues = twoWordCues(rawCues).map(c => ({ ...c, start: c.start * cueScale, end: c.end * cueScale }));
+    const cues = twoWordCues(rawCues).map((c) => ({
+      ...c, start: c.start * cueScale, end: c.end * cueScale,
+    }));
     const rawPriceCue = priceCue(rawCues, product);
-    const finalPriceCue = rawPriceCue ? { ...rawPriceCue, start: rawPriceCue.start * cueScale, end: rawPriceCue.end * cueScale } : null;
+    const finalPriceCue = rawPriceCue
+      ? { ...rawPriceCue, start: rawPriceCue.start * cueScale, end: rawPriceCue.end * cueScale }
+      : null;
 
     const n = localImages.length;
     const transition = n <= 2 ? 0.65 : n <= 5 ? 0.5 : 0.35;
@@ -361,13 +368,6 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
     const inputs: string[] = [];
     const filters: string[] = [];
 
-    // Product photos are never cropped: each frame scales the photo down
-    // to fit ENTIRELY inside the canvas (force_original_aspect_ratio=
-    // decrease, no crop), then centers it over a blurred, filled copy of
-    // the same photo so there's no dead black space around it — canvas
-    // orientation is still just shorts (9:16) vs video (16:9), the photo
-    // itself keeps its own aspect ratio. The same gentle zoom/pan then
-    // runs on that composited frame, same as before.
     const bigW = Math.round(width * 1.12);
     const bigH = Math.round(height * 1.12);
     for (let i = 0; i < n; i++) {
@@ -391,20 +391,26 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
     }
 
     const captionEnd = VIDEO_DURATION_SECONDS - 0.01;
-    const captionFilters = cues.map(c => {
+    const captionFilters: string[] = [];
+    for (let i = 0; i < cues.length; i++) {
+      const c = cues[i];
       const start = Math.max(0, Math.min(captionEnd - 0.01, c.start));
       const end = Math.max(start + 0.02, Math.min(captionEnd, c.end));
-      return `drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(c.text)}':fontcolor=black:fontsize=${isShort ? 78 : 58}:box=1:boxcolor=white@0.97:boxborderw=${isShort ? 24 : 18}:x=(w-text_w)/2:y=h*0.78:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'`;
-    });
-    // Price gets its own green on-screen callout timed to exactly when
-    // it's spoken (priceCue found where in the TTS audio the digits are
-    // said), plus a synced cash-register sound in the audio mix below —
-    // more precise than a fixed "last N seconds" guess.
+      const textFile = await makeTextFile(work, `caption-${i}`, c.text);
+      captionFilters.push(
+        `drawtext=fontfile=${BOLD_FONT}:textfile=${textFile}:fontcolor=black:fontsize=${isShort ? 78 : 58}:box=1:boxcolor=white@0.97:boxborderw=${isShort ? 24 : 18}:x=(w-text_w)/2:y=h*0.78:enable=${enableBetween(start, end)}`,
+      );
+    }
+
     if (finalPriceCue) {
       const start = Math.max(0, Math.min(VIDEO_DURATION_SECONDS - 0.2, finalPriceCue.start));
       const end = Math.max(start + 0.20, Math.min(captionEnd, finalPriceCue.end));
-      captionFilters.push(`drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(finalPriceCue.text)}':fontcolor=0x16a34a:fontsize=${isShort ? 92 : 68}:box=1:boxcolor=white@0.98:boxborderw=${isShort ? 28 : 20}:x=(w-text_w)/2:y=h*0.67:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'`);
+      const priceTextFile = await makeTextFile(work, "price", finalPriceCue.text);
+      captionFilters.push(
+        `drawtext=fontfile=${BOLD_FONT}:textfile=${priceTextFile}:fontcolor=0x16a34a:fontsize=${isShort ? 92 : 68}:box=1:boxcolor=white@0.98:boxborderw=${isShort ? 28 : 20}:x=(w-text_w)/2:y=h*0.67:enable=${enableBetween(start, end)}`,
+      );
     }
+
     filters.push(`[${last}]${captionFilters.length ? captionFilters.join(",") : "null"}[vout]`);
 
     const audioFilters = [
@@ -426,8 +432,11 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
       "-i", cash,
       "-filter_complex", `${filters.join(";")};${audioFilters.join(";")}`,
       "-map", "[vout]", "-map", "[a]", "-t", String(VIDEO_DURATION_SECONDS), "-r", "30",
-      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "27", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", "-y", outputPath,
+      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "27",
+      "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+      "-movflags", "+faststart", "-y", outputPath,
     ];
+
     await execFileAsync("ffmpeg", args, { timeout: 180_000 });
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => undefined);
