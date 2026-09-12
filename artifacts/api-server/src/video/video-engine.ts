@@ -6,7 +6,7 @@ import { join } from "path";
 import { EdgeTTS } from "node-edge-tts";
 
 const execFileAsync = promisify(execFile);
-export const VIDEO_DURATION_SECONDS = 15;
+export const VIDEO_DURATION_SECONDS = 20;
 
 const TRANSITIONS = ["fade", "wipeleft", "slideright", "circleopen", "slideup", "slidedown"];
 const BOLD_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
@@ -21,22 +21,79 @@ function money(product: any) {
   return price !== undefined && price !== null && String(price).trim() ? `${price} ${currency}` : "";
 }
 
-function narration(product: any) {
+// Splits an AI-written "extras"/"usageGuide"/"lifehacks" block (one bullet
+// per line, each starting with an emoji — see productCard.ts) into plain
+// sentences, stripping the leading emoji/bullet punctuation.
+function bulletLines(raw: unknown): string[] {
+  return String(raw ?? "")
+    .split(/\n+/)
+    .map((line) => line.replace(/^[^\p{L}\p{N}]+/u, "").trim())
+    .filter(Boolean);
+}
+
+function firstSentence(raw: unknown): string {
+  return clean(raw).split(/[.!?]/).map(clean).filter(Boolean)[0] ?? "";
+}
+
+// Case-insensitive lookup into the product's free-form characteristics
+// table (e.g. {label:"Hajm", value:"500 ml"}) — sellers type these labels
+// themselves, so this matches on a few likely spellings per field rather
+// than one exact string.
+function findCharacteristic(characteristics: unknown, ...labels: string[]): string {
+  if (!Array.isArray(characteristics)) return "";
+  const wanted = labels.map((l) => l.toLowerCase());
+  for (const c of characteristics) {
+    const label = clean((c as any)?.label).toLowerCase();
+    if (!label) continue;
+    if (wanted.some((w) => label === w || label.includes(w))) {
+      return clean((c as any)?.value);
+    }
+  }
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// The 20-second script — every beat comes straight from real product data
+// (products.name/category/characteristics/sellPrice + the one-time AI
+// research card's extras/usageGuide/lifehacks, see product_research). A
+// beat is skipped entirely rather than padded with invented filler when
+// its underlying data is missing — this function never makes up a fact
+// that isn't already sitting in the database.
+//
+//   0–4s   hook       "[name] bilan tanishing!"
+//   4–8s   explain    "Bu [Hajm] hajmli [Turi]. ... afzalligi — [extras/description]."
+//   8–14s  how-to-use "Ishlatish uchun: [usageGuide, 1-2 steps]."
+//   14–19s lifehack   "Lifehack: [lifehacks, 1 tip]."
+//   19–20s price      "Narxi: [sellPrice] [currency]." (also drawn on screen, green)
+// ---------------------------------------------------------------------------
+function narration(product: any): string {
   const name = clean(product?.name);
-  const category = clean(product?.category);
-  const description = clean(product?.description);
+  const characteristics = product?.characteristics;
+  const hajm = findCharacteristic(characteristics, "hajm", "hajmi", "o'lcham", "olcham");
+  const turi = findCharacteristic(characteristics, "turi", "tur") || clean(product?.category);
+  const advantage = bulletLines(product?.extras)[0] || firstSentence(product?.description);
+  const usageSteps = bulletLines(product?.usageGuide).slice(0, 2);
+  const lifehack = bulletLines(product?.lifehacks)[0] ?? "";
   const price = money(product);
-  const desc = description.split(/[.!?]/).map(clean).filter(Boolean).slice(0, 2).join(". ");
-  const parts = [
-    name ? `${name} bilan tanishing.` : "Mahsulot bilan tanishing.",
-    category ? `Bu ${category} toifasidagi amaliy va qulay mahsulot.` : "Bu amaliy va qulay mahsulot.",
-    desc,
-    "Mahsulotning ko‘rinishi, asosiy xususiyatlari va afzalliklarini ko‘rib chiqing.",
-    "Kundalik foydalanish uchun qulay tanlov.",
-    "Buyurtma berish uchun mahsulotni tanlang.",
-    price ? `Mahsulot narxi ${price}.` : "Narx mahsulot sahifasida ko‘rsatilgan.",
-  ].filter(Boolean).join(" ");
-  return parts.slice(0, 620);
+
+  const beats: string[] = [];
+
+  beats.push(name ? `${name} bilan tanishing!` : "");
+
+  if (hajm || turi || advantage) {
+    let explain = "Bu";
+    if (hajm) explain += ` ${hajm} hajmli`;
+    if (turi) explain += ` ${turi}`;
+    explain = explain === "Bu" ? "" : `${explain}.`;
+    if (advantage) explain += `${explain ? " " : ""}Uning asosiy afzalligi — ${advantage}.`;
+    beats.push(explain);
+  }
+
+  if (usageSteps.length) beats.push(`Ishlatish uchun: ${usageSteps.join(". ")}.`);
+  if (lifehack) beats.push(`Lifehack: ${lifehack}.`);
+  if (price) beats.push(`Narxi: ${price}.`);
+
+  return beats.filter(Boolean).join(" ").slice(0, 900);
 }
 
 function drawEscape(value: string) {
@@ -61,7 +118,7 @@ function twoWordCues(raw: Array<{ part?: string; start?: number; end?: number }>
     const b = words[i + 1];
     cues.push({ text: [a.text, b?.text].filter(Boolean).join(" ").slice(0, 70), start: a.start / 1000, end: (b?.end ?? a.end) / 1000 });
   }
-  return cues.filter(x => x.start < 15 && x.end > 0);
+  return cues.filter(x => x.start < VIDEO_DURATION_SECONDS && x.end > 0);
 }
 
 async function makeMusicWav(outputPath: string) {
@@ -196,7 +253,7 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
     await tts.ttsPromise(narration(product), voiceRaw);
 
     const sourceDuration = await probeDuration(voiceRaw);
-    const targetVoiceDuration = 14.85;
+    const targetVoiceDuration = VIDEO_DURATION_SECONDS - 0.15;
     await execFileAsync("ffmpeg", ["-i", voiceRaw, "-filter:a", atempoChain(sourceDuration / targetVoiceDuration), "-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "96k", "-y", voice], { timeout: 60_000 });
     const rawCues = JSON.parse(await readFile(subtitleJson, "utf8")) as Array<{ part?: string; start?: number; end?: number }>;
     const cueScale = targetVoiceDuration / sourceDuration;
@@ -209,10 +266,24 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
     const inputs: string[] = [];
     const filters: string[] = [];
 
+    // Product photos are never cropped: each frame scales the photo down
+    // to fit ENTIRELY inside the canvas (force_original_aspect_ratio=
+    // decrease, no crop), then centers it over a blurred, filled copy of
+    // the same photo so there's no dead black space around it — canvas
+    // orientation is still just shorts (9:16) vs video (16:9), the photo
+    // itself keeps its own aspect ratio. The same gentle zoom/pan then
+    // runs on that composited frame, same as before.
+    const bigW = Math.round(width * 1.12);
+    const bigH = Math.round(height * 1.12);
     for (let i = 0; i < n; i++) {
       inputs.push("-loop", "1", "-t", slideDuration.toFixed(3), "-i", localImages[i]);
       const zoom = i % 2 === 0 ? `1+0.055*on/${frames - 1}` : `1.055-0.055*on/${frames - 1}`;
-      filters.push(`[${i}:v]scale=${width * 1.12}:${height * 1.12}:force_original_aspect_ratio=increase,crop=${width * 1.12}:${height * 1.12},zoompan=z='${zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${width}x${height}:fps=30,setsar=1[v${i}]`);
+      filters.push(
+        `[${i}:v]scale=${bigW}:${bigH}:force_original_aspect_ratio=increase,crop=${bigW}:${bigH},gblur=sigma=25,eq=brightness=-0.08[bg${i}]`,
+        `[${i}:v]scale=${bigW}:${bigH}:force_original_aspect_ratio=decrease[fg${i}]`,
+        `[bg${i}][fg${i}]overlay=(W-w)/2:(H-h)/2[comp${i}]`,
+        `[comp${i}]zoompan=z='${zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${width}x${height}:fps=30,setsar=1[v${i}]`,
+      );
     }
 
     let last = "v0";
@@ -224,12 +295,21 @@ export async function buildMarketingVideo(_imagePath: string, outputPath: string
       accumulated += slideDuration - transition;
     }
 
+    const captionEnd = VIDEO_DURATION_SECONDS - 0.01;
     const captionFilters = cues.map(c => {
-      const start = Math.max(0, Math.min(14.98, c.start));
-      const end = Math.max(start + 0.02, Math.min(14.99, c.end));
+      const start = Math.max(0, Math.min(captionEnd - 0.01, c.start));
+      const end = Math.max(start + 0.02, Math.min(captionEnd, c.end));
       return `drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(c.text)}':fontcolor=black:fontsize=${isShort ? 78 : 58}:box=1:boxcolor=white@0.97:boxborderw=${isShort ? 24 : 18}:x=(w-text_w)/2:y=h*0.78:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'`;
     });
-    filters.push(`[${last}]${captionFilters.length ? captionFilters.join(",") : "null"}[vout]`);
+
+    // Price gets its own green on-screen callout for the last ~2.4s (it's
+    // also the last thing spoken) instead of blending into the white
+    // word-by-word captions above.
+    const priceText = money(product);
+    const priceOverlay = priceText
+      ? `,drawtext=fontfile=${BOLD_FONT}:text='${drawEscape(priceText)}':fontcolor=#22c55e:fontsize=${isShort ? 92 : 70}:box=1:boxcolor=black@0.55:boxborderw=${isShort ? 28 : 20}:x=(w-text_w)/2:y=h*0.5-text_h/2:enable='between(t,${(VIDEO_DURATION_SECONDS - 2.4).toFixed(3)},${(VIDEO_DURATION_SECONDS - 0.05).toFixed(3)})'`
+      : "";
+    filters.push(`[${last}]${captionFilters.length ? captionFilters.join(",") : "null"}${priceOverlay}[vout]`);
 
     const args = [
       ...inputs,
