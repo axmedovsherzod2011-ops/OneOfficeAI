@@ -2,22 +2,20 @@
   const PRIVACY_URL = "/privacy/";
   const TERMS_URL = "/terms-of-use/";
   const YOUTUBE_REDIRECT_URI = "https://oneofficeai-1.onrender.com/";
-  const MARKER = "data-oneoffice-legal-links";
 
-  // Keep the OAuth callback URI stable across Cloudflare Pages and local/browser origins.
   try {
     sessionStorage.setItem("yt_oauth_redirect_uri", YOUTUBE_REDIRECT_URI);
   } catch {
-    // Ignore storage restrictions; the YouTube connector will surface its normal error.
+    // Ignore storage restrictions; the YouTube connector surfaces its normal error.
   }
 
   function addLegalLinks() {
     const signOut = document.querySelector('[data-testid="button-profile-signout"]');
-    if (!signOut || document.querySelector(`[${MARKER}]`)) return;
+    if (!signOut || document.querySelector("[data-oneoffice-legal-links]")) return;
 
-    const wrapper = document.createElement("div");
-    wrapper.setAttribute(MARKER, "true");
-    wrapper.style.cssText = "display:flex;justify-content:center;align-items:center;gap:18px;margin-top:-8px;padding:4px 0 8px;";
+    const links = document.createElement("div");
+    links.setAttribute("data-oneoffice-legal-links", "true");
+    links.style.cssText = "display:flex;justify-content:center;align-items:center;gap:18px;margin-top:2px;padding:4px 0 8px;";
 
     const makeLink = (label, href) => {
       const a = document.createElement("a");
@@ -29,9 +27,9 @@
       return a;
     };
 
-    wrapper.appendChild(makeLink("Privacy Policy", PRIVACY_URL));
-    wrapper.appendChild(makeLink("Terms of Use", TERMS_URL));
-    signOut.parentNode?.insertBefore(wrapper, signOut.nextSibling);
+    links.appendChild(makeLink("Privacy Policy", PRIVACY_URL));
+    links.appendChild(makeLink("Terms of Use", TERMS_URL));
+    signOut.parentNode?.insertBefore(links, signOut.nextSibling);
   }
 
   addLegalLinks();

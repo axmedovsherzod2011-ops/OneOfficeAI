@@ -12,6 +12,93 @@ const NO_BODY_STATUS = new Set([204, 205, 304]);
 const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 // ---------------------------------------------------------------------------
+// Telegram resend-code UI cooldown
+// ---------------------------------------------------------------------------
+// The API middleware already protects Telegram's endpoint server-side. This
+// client-side layer mirrors that protection in the UI: after a successful
+// resend (or a server-provided 429 retryAfterSeconds), the resend button shows
+// a real-time countdown and stays disabled until the countdown reaches 0.
+// It deliberately uses the existing button text so no Telegram component
+// rewrite/codegen change is needed here.
+const TELEGRAM_RESEND_LABEL = "Kod kelmadimi? Boshqa usul bilan yuborish";
+const telegramResendCooldownUntil = { value: 0 };
+let telegramResendTimer: ReturnType<typeof setInterval> | null = null;
+
+function telegramResendButtons(): HTMLButtonElement[] {
+  if (typeof document === "undefined") return [];
+  return Array.from(document.querySelectorAll("button")).filter((button) => {
+    const text = (button.textContent || "").trim();
+    return text.includes("Kod kelmadimi?") || text.includes("Boshqa usul bilan yuborish");
+  }) as HTMLButtonElement[];
+}
+
+function renderTelegramResendCooldown(): void {
+  if (typeof document === "undefined") return;
+
+  const remainingMs = Math.max(0, telegramResendCooldownUntil.value - Date.now());
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  const buttons = telegramResendButtons();
+
+  for (const button of buttons) {
+    const desiredText =
+      remainingSeconds > 0
+        ? `Qayta yuborish (${remainingSeconds} soniya)`
+        : TELEGRAM_RESEND_LABEL;
+
+    if ((button.textContent || "").trim() !== desiredText) {
+      button.textContent = desiredText;
+    }
+
+    if (remainingSeconds > 0) {
+      if (!button.disabled) button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
+    } else {
+      if (button.disabled) button.disabled = false;
+      button.removeAttribute("aria-disabled");
+    }
+  }
+
+  if (remainingSeconds <= 0 && telegramResendTimer) {
+    clearInterval(telegramResendTimer);
+    telegramResendTimer = null;
+  }
+}
+
+function startTelegramResendCooldown(seconds: number): void {
+  if (typeof window === "undefined" || !Number.isFinite(seconds) || seconds <= 0) return;
+
+  telegramResendCooldownUntil.value = Math.max(
+    telegramResendCooldownUntil.value,
+    Date.now() + Math.ceil(seconds) * 1000,
+  );
+
+  renderTelegramResendCooldown();
+  if (!telegramResendTimer) {
+    telegramResendTimer = setInterval(renderTelegramResendCooldown, 1000);
+  }
+}
+
+function isTelegramResendRequest(url: string, method: string): boolean {
+  return method === "POST" && url.includes("/telegram-mtproto/resend-code");
+}
+
+// Keep React re-renders from restoring the clickable text while the timer is
+// active. The observer only writes when the displayed text is actually
+// different, preventing a mutation-observer feedback loop.
+if (typeof window !== "undefined" && typeof MutationObserver !== "undefined") {
+  const observer = new MutationObserver(() => {
+    if (telegramResendCooldownUntil.value > Date.now()) {
+      renderTelegramResendCooldown();
+    }
+  });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Module-level configuration
 // ---------------------------------------------------------------------------
 
@@ -111,12 +198,6 @@ function isTextMediaType(mediaType: string | null): boolean {
   );
 }
 
-// Use strict equality: in browsers, `response.body` is `null` when the
-// response genuinely has no content.  In React Native, `response.body` is
-// always `undefined` because the ReadableStream API is not implemented —
-// even when the response carries a full payload readable via `.text()` or
-// `.json()`.  Loose equality (`== null`) matches both `null` and `undefined`,
-// which causes every React Native response to be treated as empty.
 function hasNoBody(response: Response, method: string): boolean {
   if (method === "HEAD") return true;
   if (NO_BODY_STATUS.has(response.status)) return true;
@@ -258,7 +339,6 @@ async function parseErrorBody(response: Response, method: string): Promise<unkno
 
   const mediaType = getMediaType(response.headers);
 
-  // Fall back to text when blob() is unavailable (e.g. some React Native builds).
   if (mediaType && !isJsonMediaType(mediaType) && !isTextMediaType(mediaType)) {
     return typeof response.blob === "function" ? response.blob() : response.text();
   }
@@ -330,6 +410,8 @@ export async function customFetch<T = unknown>(
   const { responseType = "auto", headers: headersInit, ...init } = options;
 
   const method = resolveMethod(input, init.method);
+  const requestUrl = resolveUrl(input);
+  const telegramResendRequest = isTelegramResendRequest(requestUrl, method);
 
   if (init.body != null && (method === "GET" || method === "HEAD")) {
     throw new TypeError(`customFetch: ${method} requests cannot have a body.`);
@@ -349,8 +431,6 @@ export async function customFetch<T = unknown>(
     headers.set("accept", DEFAULT_JSON_ACCEPT);
   }
 
-  // Attach bearer token when an auth getter is configured and no
-  // Authorization header has been explicitly provided.
   if (_authTokenGetter && !headers.has("authorization")) {
     const token = await _authTokenGetter();
     if (token) {
@@ -358,13 +438,32 @@ export async function customFetch<T = unknown>(
     }
   }
 
-  const requestInfo = { method, url: resolveUrl(input) };
+  const requestInfo = { method, url: requestUrl };
 
   const response = await fetch(input, { ...init, method, headers });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
+
+    // The backend sends the exact remaining cooldown in 429 responses. Keep
+    // the UI synchronized with that server value instead of guessing.
+    if (telegramResendRequest && response.status === 429) {
+      const retryAfter =
+        typeof errorData === "object" && errorData !== null
+          ? Number((errorData as Record<string, unknown>).retryAfterSeconds)
+          : NaN;
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        startTelegramResendCooldown(retryAfter);
+      }
+    }
+
     throw new ApiError(response, errorData, requestInfo);
+  }
+
+  if (telegramResendRequest) {
+    // Successful resend starts the same 60-second cooldown enforced by the
+    // backend middleware. The button unlocks automatically at exactly zero.
+    startTelegramResendCooldown(60);
   }
 
   return (await parseSuccessBody(response, responseType, requestInfo)) as T;
