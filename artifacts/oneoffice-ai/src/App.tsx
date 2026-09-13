@@ -7275,8 +7275,23 @@ function OneHelpBubble({
   );
 }
 
-function AppShell() {
+// Every internal "page" AppShell can show — this list is the single source
+// of truth for which URL paths are valid app sections (see AppRoutes'
+// "/:section?" route and the initialSection validation just below).
+const APP_SHELL_SECTIONS = [
+  "dashboard",
+  "inventory",
+  "create",
+  "connectors",
+  "shopfront",
+  "orders",
+  "settings",
+  "profile",
+] as const;
+
+function AppShell({ initialSection }: { initialSection?: string }) {
   const { user: firebaseUser, signOut } = useAuth();
+  const [, setLocation] = useLocation();
 
   const {
     data: profile,
@@ -7353,7 +7368,37 @@ function AppShell() {
   const createProduct = useCreateProduct();
   const updateProduct = useUpdateProduct();
 
-  const [navView, setNavView] = useState("dashboard");
+  const [navView, setNavViewRaw] = useState(
+    initialSection && (APP_SHELL_SECTIONS as readonly string[]).includes(initialSection)
+      ? initialSection
+      : "dashboard",
+  );
+  // Every internal navigation call in this component still just calls
+  // setNavView(view) exactly as before (15 call sites, unchanged) — this
+  // wrapper is the ONLY thing that changed: it now also pushes a real URL
+  // for that section, so the address bar reflects where you actually are,
+  // and reloading/opening a new tab on that URL restores the same section
+  // instead of always bouncing back to Dashboard. history.pushState (the
+  // default for setLocation) means back/forward navigate between sections
+  // too, for free.
+  function setNavView(view: string) {
+    setNavViewRaw(view);
+    setLocation(`/${view}`);
+  }
+
+  // Normalizes the address bar once on mount — covers landing on bare "/"
+  // (no section in the URL at all) or an unrecognized path, both of which
+  // resolved navView to "dashboard" above but wouldn't otherwise update the
+  // URL to match. `replace: true` so this never adds an extra back-button
+  // stop.
+  useEffect(() => {
+    if (initialSection !== navView) {
+      setLocation(`/${navView}`, { replace: true });
+    }
+    // Intentionally only on mount — subsequent changes go through
+    // setNavView above, not this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [flow, setFlow] = useState("product");
   const [productFormOpen, setProductFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(
@@ -8956,28 +9001,30 @@ function AppRoutes() {
       <Route path="/store/:slug">
         {(params) => <StorefrontPage slug={params.slug || ""} />}
       </Route>
-      <Route path="/">
-        {!isLoaded ? (
-          <FullscreenLoader />
-        ) : user ? (
-          <AppShell />
-        ) : accountOnDevice || pastWelcome ? (
-          <Landing
-            onStart={() => setLocation("/sign-up")}
-            onSignIn={() => setLocation("/sign-in")}
-          />
-        ) : (
-          <WelcomeOnboarding
-            onDone={() => {
-              setPastWelcome(true);
-              setLocation("/sign-up");
-            }}
-            onSignIn={() => {
-              setPastWelcome(true);
-              setLocation("/sign-in");
-            }}
-          />
-        )}
+      <Route path="/:section?">
+        {(params) =>
+          !isLoaded ? (
+            <FullscreenLoader />
+          ) : user ? (
+            <AppShell initialSection={params.section} />
+          ) : accountOnDevice || pastWelcome ? (
+            <Landing
+              onStart={() => setLocation("/sign-up")}
+              onSignIn={() => setLocation("/sign-in")}
+            />
+          ) : (
+            <WelcomeOnboarding
+              onDone={() => {
+                setPastWelcome(true);
+                setLocation("/sign-up");
+              }}
+              onSignIn={() => {
+                setPastWelcome(true);
+                setLocation("/sign-in");
+              }}
+            />
+          )
+        }
       </Route>
     </Switch>
   );
