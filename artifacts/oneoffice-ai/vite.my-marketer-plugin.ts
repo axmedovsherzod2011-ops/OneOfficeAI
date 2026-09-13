@@ -15,45 +15,83 @@ export default function myMarketerTransform(): Plugin {
 
       let s = code;
 
+      const replaceOnce = (from: string, to: string, label: string) => {
+        if (!s.includes(from)) {
+          throw new Error(`[oneoffice-my-marketer] App.tsx marker not found: ${label}`);
+        }
+        s = s.replace(from, to);
+      };
+
       if (!s.includes('import MyMarketerPage from "./pages/MyMarketerPage";')) {
-        s = s.replace(
+        replaceOnce(
           'import React, { useState, useEffect, useRef } from "react";',
           'import React, { useState, useEffect, useRef } from "react";\nimport MyMarketerPage from "./pages/MyMarketerPage";',
+          "React import",
         );
       }
 
-      s = s.replace(
-        '    profile: "Profile",\n  };',
-        '    profile: "Profile",\n    "my-marketer": "My Marketer",\n  };',
-      );
+      if (!s.includes('"my-marketer": "My Marketer"')) {
+        replaceOnce(
+          '    profile: "Profile",\n  };',
+          '    profile: "Profile",\n    "my-marketer": "My Marketer",\n  };',
+          "title map",
+        );
+      }
 
-      s = s.replace(
-        '  "profile",\n] as const;',
-        '  "profile",\n  "my-marketer",\n] as const;',
-      );
+      if (!s.includes('  "my-marketer",')) {
+        replaceOnce(
+          '  "profile",\n] as const;',
+          '  "profile",\n  "my-marketer",\n] as const;',
+          "app shell sections",
+        );
+      }
 
-      s = s.replace(
-        'function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {',
-        'function ProfilePage({ user, channels, onLogout, onOpenConnectors, onOpenMarketer }: any) {',
-      );
+      if (!s.includes("onOpenMarketer")) {
+        replaceOnce(
+          'function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {',
+          'function ProfilePage({ user, channels, onLogout, onOpenConnectors, onOpenMarketer }: any) {',
+          "ProfilePage signature",
+        );
+      }
 
       if (!s.includes('data-testid="button-profile-my-marketer"')) {
         const marker = '      <ExternalAgentButton user={user} />';
-        const marketerButton = `      <button\n        data-testid="button-profile-my-marketer"\n        onClick={onOpenMarketer}\n        className="w-full"\n      >\n        <Glass className="p-6 flex items-center justify-between gap-3 hover:border-white/20 transition">\n          <div className="flex items-center gap-3 min-w-0">\n            <div className="h-10 w-10 rounded-xl bg-violet-500/10 flex items-center justify-center shrink-0">\n              <Sparkles className="h-4 w-4 text-violet-400" />\n            </div>\n            <div className="min-w-0 text-left">\n              <p className="text-white text-sm font-medium truncate">My Marketer</p>\n              <p className="text-slate-500 text-xs mt-0.5 truncate">AI marketing workspace</p>\n            </div>\n          </div>\n          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />\n        </Glass>\n      </button>\n\n`;
-        if (s.includes(marker)) s = s.replace(marker, marketerButton + marker);
+        const marketerButton = `      <button
+        data-testid="button-profile-my-marketer"
+        onClick={onOpenMarketer}
+        className="w-full"
+      >
+        <Glass className="p-6 flex items-center justify-between gap-3 hover:border-white/20 transition">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-10 w-10 rounded-xl bg-violet-500/10 flex items-center justify-center shrink-0">
+              <Sparkles className="h-4 w-4 text-violet-400" />
+            </div>
+            <div className="min-w-0 text-left">
+              <p className="text-white text-sm font-medium truncate">My Marketer</p>
+              <p className="text-slate-500 text-xs mt-0.5 truncate">AI marketing workspace</p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
+        </Glass>
+      </button>
+
+`;
+        replaceOnce(marker, marketerButton + marker, "Profile marketer button");
       }
 
       if (!s.includes('onOpenMarketer={() => setNavView("my-marketer")}')) {
-        s = s.replace(
+        replaceOnce(
           '            onOpenConnectors={goToConnectors}\n          />',
           '            onOpenConnectors={goToConnectors}\n            onOpenMarketer={() => setNavView("my-marketer")}\n          />',
+          "ProfilePage marketer handler",
         );
       }
 
       if (!s.includes('{navView === "my-marketer" && <MyMarketerPage />}')) {
-        s = s.replace(
+        replaceOnce(
           '        {navView === "profile" && (',
           '        {navView === "my-marketer" && <MyMarketerPage />}\n        {navView === "profile" && (',
+          "My Marketer render",
         );
       }
 
