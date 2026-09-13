@@ -105,7 +105,7 @@ export default function MyMarketerPage() {
   );
 
   return (
-    <div className="relative min-h-full overflow-hidden p-6 md:p-10">
+    <div className="relative h-full min-h-0 overflow-y-auto overflow-x-hidden p-6 md:p-10">
       <div className="pointer-events-none absolute -top-32 -right-24 h-96 w-96 rounded-full bg-violet-600/10 blur-3xl" />
       <div className="pointer-events-none absolute top-72 -left-40 h-80 w-80 rounded-full bg-blue-600/10 blur-3xl" />
 
