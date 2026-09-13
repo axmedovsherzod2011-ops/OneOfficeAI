@@ -22,6 +22,27 @@ export const usersTable = pgTable("users", {
   // This is how the bot's webhook knows which OneOffice account to attach
   // a newly-admin'd channel to — no token or chat id ever entered by hand.
   telegramUserId: text("telegram_user_id").unique(),
+  // AI-polished delivery text this seller has chosen to reuse across
+  // every future product, set from the "barcha mahsulotlarga saqlash"
+  // choice in the post-creation delivery-info modal. When present, a
+  // newly created product's own deliveryInfo is pre-filled from this —
+  // no modal shown, the seller just sees it already applied. Null until
+  // that choice is made at least once.
+  defaultDeliveryInfo: text("default_delivery_info"),
+  // Set once the person finishes (or explicitly skips) the first-time
+  // product+post walkthrough — null means "show it on next login".
+  onboardingCompletedAt: timestamp("onboarding_completed_at"),
+  // Chosen once on the mandatory pre-signup language screen (device-local
+  // until sign-up, then carried onto this row so it follows the account
+  // across devices). Changeable any time from Profile.
+  language: text("language", { enum: ["uz", "en", "ru"] })
+    .notNull()
+    .default("uz"),
+  // General business category, classified ONCE by AI from the free-text
+  // "nima sotasiz?" hint typed at sign-up (see categoryHint in
+  // CreateProfileInput) — not shown/asked again. Used as the default
+  // category for new products, which no longer require picking one.
+  category: text("category").notNull().default(""),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

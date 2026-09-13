@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "OneOffice AI — External Agent",
+  "version": "0.1.0",
+  "description": "OneOfficeAI tashqi agent widget: har qanday saytda floating tugma va AI chat orqali sayt boshqarish.",
+  "icons": {
+    "16": "icons/logo16.png",
+    "32": "icons/logo32.png",
+    "48": "icons/logo48.png",
+    "128": "icons/logo128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/logo16.png",
+      "32": "icons/logo32.png"
+    },
+    "default_title": "OneOffice AI External Agent"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

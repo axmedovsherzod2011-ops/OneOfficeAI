@@ -5,6 +5,7 @@
  */
 import type { ProductStatus } from './productStatus';
 import type { ProductCurrency } from './productCurrency';
+import type { ProductCharacteristic } from './productCharacteristic';
 
 export interface ProductItem {
   id: number;
@@ -17,4 +18,8 @@ export interface ProductItem {
   images: string[];
   status: ProductStatus;
   createdAt: string;
+  /** Spec table ("Xarakteristika") shown on the storefront product page. */
+  characteristics: ProductCharacteristic[];
+  /** Yetkazib berish haqida ma'lumot (dostavka muddati, hududlar, shartlar). */
+  deliveryInfo: string;
 }

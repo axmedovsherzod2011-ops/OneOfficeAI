@@ -28,6 +28,8 @@ export interface CreateProfileInput {
   firstName: string;
   lastName: string;
   company: string;
+  language?: 'uz' | 'en' | 'ru';
+  categoryHint?: string;
 }
 
 export interface Profile {
@@ -35,6 +37,8 @@ export interface Profile {
   firstName: string;
   lastName: string;
   company: string;
+  language: 'uz' | 'en' | 'ru';
+  category: string;
 }
 
 export interface TelegramChannel {
@@ -135,6 +139,14 @@ export type ProductStatus = 'draft' | 'active';
 
 export type ProductCurrency = 'USD' | 'UZS' | 'RUB';
 
+/**
+ * One spec row in the product's "Xarakteristika" table, e.g. {label:"Rang", value:"Qora"}.
+ */
+export interface ProductCharacteristic {
+  label: string;
+  value: string;
+}
+
 export interface ProductItem {
   id: number;
   name: string;
@@ -146,6 +158,10 @@ export interface ProductItem {
   images: string[];
   status: ProductStatus;
   createdAt: string;
+  /** Spec table ("Xarakteristika") shown on the storefront product page. */
+  characteristics: ProductCharacteristic[];
+  /** Yetkazib berish haqida ma'lumot (dostavka muddati, hududlar, shartlar). */
+  deliveryInfo: string;
 }
 
 export type ListProductsParams = {
@@ -161,6 +177,8 @@ export interface CreateProductInput {
   description?: string;
   images?: string[];
   status?: ProductStatus;
+  characteristics?: ProductCharacteristic[];
+  deliveryInfo?: string;
 }
 
 export interface UpdateProductInput {
@@ -172,6 +190,8 @@ export interface UpdateProductInput {
   description?: string;
   images?: string[];
   status?: ProductStatus;
+  characteristics?: ProductCharacteristic[];
+  deliveryInfo?: string;
 }
 
 export interface DeleteProductResult {

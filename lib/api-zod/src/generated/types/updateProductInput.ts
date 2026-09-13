@@ -5,6 +5,7 @@
  */
 import type { ProductStatus } from './productStatus';
 import type { ProductCurrency } from './productCurrency';
+import type { ProductCharacteristic } from './productCharacteristic';
 
 export interface UpdateProductInput {
   name?: string;
@@ -15,4 +16,6 @@ export interface UpdateProductInput {
   description?: string;
   images?: string[];
   status?: ProductStatus;
+  characteristics?: ProductCharacteristic[];
+  deliveryInfo?: string;
 }

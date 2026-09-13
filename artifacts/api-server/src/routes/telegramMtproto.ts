@@ -2,16 +2,18 @@ import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
 import { usersTable, telegramChannelsTable, postsTable } from "@workspace/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { isMtprotoConfigured } from "../telegram-mtproto/client";
 import {
   sendCode,
+  resendCode,
   verifyCode,
   verifyPassword,
   revoke,
+  resendStart,
   getStatus,
 } from "../telegram-mtproto/auth";
-import { listAdminChannels } from "../telegram-mtproto/discovery";
+import { listAdminChannels, createChannel } from "../telegram-mtproto/discovery";
 import {
   getPostViews,
   getChannelSubscriberCount,
@@ -133,7 +135,29 @@ router.post(
       res.status(400).json({ error: result.message });
       return;
     }
-    res.json({ pendingId: result.pendingId });
+    res.json({ pendingId: result.pendingId, deliveryMethod: result.deliveryMethod });
+  }),
+);
+
+router.post(
+  "/telegram-mtproto/resend-code",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const pendingId = Number(req.body?.pendingId);
+    const phone = String(req.body?.phoneNumber ?? "").trim();
+    if (!pendingId || !phone) {
+      res.status(400).json({ error: "Ma'lumotlar to'liq emas." });
+      return;
+    }
+
+    const result = await resendCode(userId, pendingId, phone);
+    if (result.status === "error") {
+      res.status(400).json({ error: result.message });
+      return;
+    }
+    res.json({ deliveryMethod: result.deliveryMethod });
   }),
 );
 
@@ -198,6 +222,111 @@ router.get(
       return;
     }
     res.json({ channels: result.channels });
+  }),
+);
+
+// Onboarding-only shortcut: creates a brand-new channel (named after the
+// business by default) and immediately links it, in one call, instead of
+// making a first-time user go create one in the Telegram app themselves
+// and come back to pick it. Reuses the exact same insert-into-
+// telegram_channels shape as the manual connect endpoint below.
+router.post(
+  "/telegram-mtproto/channels/create",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const title = String(req.body?.title ?? "").trim();
+    const result = await createChannel(userId, title || "Mening do'konim");
+    if (result.status === "not_connected") {
+      res.status(409).json({ error: "MTProto hisob ulanmagan." });
+      return;
+    }
+    if (result.status === "error") {
+      res.status(500).json({ error: result.message });
+      return;
+    }
+
+    const found = result.channel;
+    const botChannelId = `-100${found.id}`;
+    const [inserted] = await db
+      .insert(telegramChannelsTable)
+      .values({
+        userId,
+        channelId: botChannelId,
+        channelUsername: found.username,
+        channelTitle: found.title,
+        connectionType: "mtproto",
+        isActive: true,
+      })
+      .returning();
+    res.json({ channel: inserted });
+  }),
+);
+
+// Turns one discovered channel into a normal telegram_channels row
+// (connectionType: "mtproto") so it shows up in the existing publish
+// picker right alongside bot-connected channels — routes/publish.ts
+// checks that column to decide which credential to send through.
+// Re-resolves the channel server-side (rather than trusting whatever the
+// client posts) so title/username can't be spoofed.
+router.post(
+  "/telegram-mtproto/channels/:mtprotoChannelId/connect",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+
+    const mtprotoChannelId = String(req.params.mtprotoChannelId);
+    const result = await listAdminChannels(userId);
+    if (result.status === "not_connected") {
+      res.status(409).json({ error: "MTProto hisob ulanmagan." });
+      return;
+    }
+    if (result.status === "error") {
+      res.status(500).json({ error: result.message });
+      return;
+    }
+    const found = result.channels.find((c) => c.id === mtprotoChannelId);
+    if (!found) {
+      res.status(404).json({ error: "Kanal topilmadi yoki admin huquqi yo'q." });
+      return;
+    }
+
+    const botChannelId = `-100${found.id}`;
+    const [existing] = await db
+      .select()
+      .from(telegramChannelsTable)
+      .where(
+        and(eq(telegramChannelsTable.userId, userId), eq(telegramChannelsTable.channelId, botChannelId)),
+      )
+      .limit(1);
+
+    if (existing) {
+      await db
+        .update(telegramChannelsTable)
+        .set({
+          channelTitle: found.title,
+          channelUsername: found.username,
+          isActive: true,
+          connectionType: "mtproto",
+        })
+        .where(eq(telegramChannelsTable.id, existing.id));
+      res.json({ channel: { ...existing, channelTitle: found.title } });
+      return;
+    }
+
+    const [inserted] = await db
+      .insert(telegramChannelsTable)
+      .values({
+        userId,
+        channelId: botChannelId,
+        channelUsername: found.username,
+        channelTitle: found.title,
+        connectionType: "mtproto",
+        isActive: true,
+      })
+      .returning();
+    res.json({ channel: inserted });
   }),
 );
 
@@ -322,6 +451,20 @@ router.post(
     if (userId === null) return;
     await revoke(userId);
     res.json({ status: "revoked" });
+  }),
+);
+
+router.post(
+  "/telegram-mtproto/resend-start",
+  handle(async (req, res) => {
+    const userId = await requireUserId(req, res);
+    if (userId === null) return;
+    const result = await resendStart(userId);
+    if (!result.success) {
+      res.status(400).json({ error: result.reason });
+      return;
+    }
+    res.json({ status: "sent" });
   }),
 );
 

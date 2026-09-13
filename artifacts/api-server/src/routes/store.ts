@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { getAuth } from "../middlewares/firebaseAuthMiddleware";
 import { db } from "@workspace/db";
-import { usersTable, productsTable } from "@workspace/db/schema";
+import { usersTable, productsTable, productResearchTable } from "@workspace/db/schema";
 import { eq, and } from "drizzle-orm";
+import type { ProductCard } from "../ai/productCard";
 
 const router = Router();
 
@@ -126,8 +127,21 @@ router.get(
         currency: productsTable.currency,
         description: productsTable.description,
         images: productsTable.images,
+        createdAt: productsTable.createdAt,
+        characteristics: productsTable.characteristics,
+        deliveryInfo: productsTable.deliveryInfo,
+        // "Tarkib/Sostav" and "Foydalanish bo'yicha ko'rsatma" aren't
+        // product columns — they're researched once by the same
+        // AI+web-search pass that writes the post copy (see
+        // ai/productCard.ts) and cached in product_research.card. A plain
+        // LEFT JOIN here means a product that hasn't been researched yet
+        // (research is fire-and-forget, can lag a moment behind product
+        // creation) just shows those two sections as empty rather than
+        // 500ing or blocking the whole storefront page.
+        researchCard: productResearchTable.card,
       })
       .from(productsTable)
+      .leftJoin(productResearchTable, eq(productResearchTable.productId, productsTable.id))
       .where(
         and(
           eq(productsTable.userId, user.id),
@@ -135,10 +149,26 @@ router.get(
         ),
       );
 
+    const productsWithResearch = products.map(({ researchCard, ...p }) => {
+      const card = researchCard as unknown as Partial<ProductCard> | null;
+      return {
+        ...p,
+        composition: card?.composition ?? "",
+        instructions: card?.usageGuide ?? "",
+        // Same content that already goes into a Telegram post for this
+        // product (see buildPostText) — surfaced here too, as plain
+        // ready-to-read text, so a buyer sees the exact same "why buy
+        // this" info a channel post would show them, right on the
+        // product page, before they ever have to ask.
+        extras: card?.extras ?? "",
+        lifehacks: card?.lifehacks ?? "",
+      };
+    });
+
     res.json({
       company: user.company,
       ownerName: `${user.firstName} ${user.lastName}`.trim(),
-      products,
+      products: productsWithResearch,
     });
   }),
 );

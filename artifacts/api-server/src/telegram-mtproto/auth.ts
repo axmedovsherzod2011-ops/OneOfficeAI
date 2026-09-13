@@ -4,10 +4,12 @@ import { db } from "@workspace/db";
 import {
   telegramMtprotoAccountsTable,
   telegramMtprotoPendingAuthTable,
+  usersTable,
 } from "@workspace/db/schema";
 import { eq, lt } from "drizzle-orm";
 import { createMtprotoClient } from "./client";
 import { encryptSessionString, decryptSessionString, maskPhoneNumber } from "./sessionCrypto";
+import { createLinkToken, getBotIdentity } from "../telegram/bot";
 
 // ---------------------------------------------------------------------------
 // Raw MTProto login handshake (auth.sendCode -> auth.signIn -> optional
@@ -33,8 +35,32 @@ async function cleanupExpiredPending(): Promise<void> {
   }
 }
 
+// Which channel Telegram actually used to deliver the code — surfaced to
+// the UI so the person knows where to look (its own "Telegram" system chat
+// vs SMS vs a phone call) instead of guessing.
+export type CodeDeliveryMethod = "app" | "sms" | "call" | "flash_call" | "other";
+
+function deliveryMethodFromSentCode(sent: Api.auth.SentCode): CodeDeliveryMethod {
+  const type = sent.type;
+  if (type instanceof Api.auth.SentCodeTypeApp) return "app";
+  if (
+    type instanceof Api.auth.SentCodeTypeSms ||
+    type instanceof Api.auth.SentCodeTypeFragmentSms ||
+    type instanceof Api.auth.SentCodeTypeFirebaseSms ||
+    type instanceof Api.auth.SentCodeTypeSmsWord
+  )
+    return "sms";
+  if (type instanceof Api.auth.SentCodeTypeCall) return "call";
+  if (
+    type instanceof Api.auth.SentCodeTypeFlashCall ||
+    type instanceof Api.auth.SentCodeTypeMissedCall
+  )
+    return "flash_call";
+  return "other";
+}
+
 export type SendCodeResult =
-  | { status: "code_sent"; pendingId: number }
+  | { status: "code_sent"; pendingId: number; deliveryMethod: CodeDeliveryMethod }
   | { status: "error"; message: string };
 
 export async function sendCode(
@@ -58,6 +84,9 @@ export async function sendCode(
       return { status: "error", message: "Kod yuborilmadi. Qayta urinib ko'ring." };
     }
 
+    const deliveryMethod = deliveryMethodFromSentCode(sent);
+    console.log(`[mtproto] code sent via "${sent.type?.className}" (${deliveryMethod})`);
+
     // Session at this point is pre-auth (just DC/connection state) — still
     // encrypted at rest for consistency, even though it carries no login.
     const sessionEncrypted = encryptSessionString(client.session.save() as unknown as string);
@@ -74,7 +103,7 @@ export async function sendCode(
       })
       .returning({ id: telegramMtprotoPendingAuthTable.id });
 
-    return { status: "code_sent", pendingId: row.id };
+    return { status: "code_sent", pendingId: row.id, deliveryMethod };
   } catch (err: any) {
     console.error("[mtproto] sendCode failed", err?.errorMessage ?? err);
     return {
@@ -90,6 +119,65 @@ export type VerifyCodeResult =
   | { status: "authenticated" }
   | { status: "needs_password" }
   | { status: "error"; message: string };
+
+export type ResendCodeResult =
+  | { status: "code_sent"; deliveryMethod: CodeDeliveryMethod }
+  | { status: "error"; message: string };
+
+// Asks Telegram itself for a different delivery method — its own
+// auth.resendCode. Telegram decides the fallback (usually SMS or a call
+// after the in-app message), we don't control which; this is the only
+// legitimate way to change how the code arrives.
+export async function resendCode(
+  userId: number,
+  pendingId: number,
+  phoneNumber: string,
+): Promise<ResendCodeResult> {
+  const [pending] = await db
+    .select()
+    .from(telegramMtprotoPendingAuthTable)
+    .where(eq(telegramMtprotoPendingAuthTable.id, pendingId))
+    .limit(1);
+
+  if (!pending || pending.userId !== userId) {
+    return { status: "error", message: "Sessiya topilmadi. Qaytadan boshlang." };
+  }
+  if (pending.expiresAt < new Date()) {
+    return { status: "error", message: "Muddati tugagan. Qaytadan boshlang." };
+  }
+
+  const sessionString = decryptSessionString(pending.sessionEncrypted);
+  const client = await createMtprotoClient(sessionString);
+  try {
+    const sent = await client.invoke(
+      new Api.auth.ResendCode({
+        phoneNumber,
+        phoneCodeHash: pending.phoneCodeHash,
+      }),
+    );
+    if (!(sent instanceof Api.auth.SentCode)) {
+      return { status: "error", message: "Kod qayta yuborilmadi." };
+    }
+
+    const deliveryMethod = deliveryMethodFromSentCode(sent);
+    console.log(`[mtproto] code resent via "${sent.type?.className}" (${deliveryMethod})`);
+
+    // phoneCodeHash can change on resend — and the client's session state
+    // moved on too, so persist both.
+    const sessionEncrypted = encryptSessionString(client.session.save() as unknown as string);
+    await db
+      .update(telegramMtprotoPendingAuthTable)
+      .set({ phoneCodeHash: sent.phoneCodeHash, sessionEncrypted })
+      .where(eq(telegramMtprotoPendingAuthTable.id, pendingId));
+
+    return { status: "code_sent", deliveryMethod };
+  } catch (err: any) {
+    console.error("[mtproto] resendCode failed", err?.errorMessage ?? err);
+    return { status: "error", message: "Kod qayta yuborilmadi. Birozdan so'ng urinib ko'ring." };
+  } finally {
+    await client.disconnect().catch(() => {});
+  }
+}
 
 export async function verifyCode(
   userId: number,
@@ -191,6 +279,75 @@ export async function verifyPassword(
   }
 }
 
+// ---------------------------------------------------------------------------
+// The MTProto login flow above proves someone controls a phone number/
+// Telegram account — but on its own that's a DIFFERENT thing from the
+// Bot-API account link (users.telegramUserId) that lets OneOffice AI
+// message this person through @OneOfficeAIBot (order notifications, etc.)
+// and that the bot's own /start flow (telegramWebhook.ts) sets up.
+//
+// Manually asking someone to also go find the bot and type /start after
+// they've just finished a whole phone+code (+maybe 2FA) flow is exactly
+// the kind of extra step that makes someone confused enough to bounce, or
+// to block a bot they don't recognize sending them a random first
+// message. Since we already have this person's own authenticated MTProto
+// session right here, we can just send that /start ourselves, AS them —
+// Telegram then delivers it to the bot exactly like they'd typed it, and
+// the existing webhook handler links the account and replies, with zero
+// extra steps for the person.
+// ---------------------------------------------------------------------------
+
+async function autoStartBotIfNeeded(
+  userId: number,
+  client: Awaited<ReturnType<typeof createMtprotoClient>>,
+): Promise<void> {
+  try {
+    const [user] = await db
+      .select({ telegramUserId: usersTable.telegramUserId })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
+    // Already linked (this MTProto account, a previous session, or even a
+    // manual /start from before) — nothing to do, and definitely don't
+    // re-send /start on every login and spam them.
+    if (user?.telegramUserId) {
+      console.log(`[mtproto] auto /start skipped for user ${userId} — already linked (telegramUserId=${user.telegramUserId})`);
+      return;
+    }
+
+    const identity = await getBotIdentity();
+    if (!identity) {
+      console.log(`[mtproto] auto /start skipped for user ${userId} — bot not configured (no TELEGRAM_BOT_TOKEN)`);
+      return;
+    }
+
+    const token = await createLinkToken(userId);
+    console.log(`[mtproto] auto /start: resolving @${identity.username} for user ${userId}...`);
+
+    // A brand-new MTProto session has never "seen" @OneOfficeAIBot before
+    // — it isn't in this session's local entity cache the way an existing
+    // dialog/contact would be. Passing the bare username straight to
+    // sendMessage relies on it resolving that itself, which is exactly
+    // where this was silently failing (caught below, logged, never
+    // surfaced) instead of actually sending anything. Resolving the
+    // entity explicitly first — the same contacts.resolveUsername lookup
+    // opening the chat in the Telegram app would trigger — fixes that:
+    // once resolved, sendMessage has an actual entity to address, not
+    // just a string it has to guess how to look up.
+    const botEntity = await client.getEntity(identity.username);
+    console.log(`[mtproto] auto /start: entity resolved, sending for user ${userId}...`);
+    const sent = await client.sendMessage(botEntity, { message: `/start ${token}` });
+    console.log(`[mtproto] auto /start: sent for user ${userId}, message id=${(sent as any)?.id ?? "?"}`);
+  } catch (err: any) {
+    // Best-effort — the person can still link manually from Connectors,
+    // and this must never fail the MTProto login itself. Logged with the
+    // same errorMessage-first shape as every other catch in this file, so
+    // a real cause (rather than just "[object Object]") shows up in logs
+    // if this needs debugging again.
+    console.error(`[mtproto] auto /start failed for user ${userId} (non-fatal)`, err?.errorMessage ?? err);
+  }
+}
+
 async function finalizeAuth(
   userId: number,
   pendingId: number,
@@ -230,7 +387,69 @@ async function finalizeAuth(
     .delete(telegramMtprotoPendingAuthTable)
     .where(eq(telegramMtprotoPendingAuthTable.id, pendingId));
 
+  // Fire this while `client` is still connected (the caller disconnects
+  // it in their own `finally`, after finalizeAuth returns) — reusing the
+  // same authenticated connection instead of opening a second one.
+  await autoStartBotIfNeeded(userId, client);
+
   return { status: "authenticated" };
+}
+
+// ---------------------------------------------------------------------------
+// Manual "qayta yuborish" — for the rare case autoStartBotIfNeeded's
+// silent skip is wrong: the account link is real, but something else is
+// stopping messages from landing (most commonly: the person blocked
+// @OneOfficeAIBot at some point, then unblocked it later and now
+// legitimately wants to reconnect the notification flow). Unlike
+// autoStartBotIfNeeded, this ALWAYS attempts a send regardless of the
+// existing users.telegramUserId, and — importantly — surfaces the real
+// outcome to the caller instead of only logging it, so the Connectors
+// page can show something more useful than silence.
+// ---------------------------------------------------------------------------
+
+export async function resendStart(
+  userId: number,
+): Promise<{ success: true } | { success: false; reason: string }> {
+  const [account] = await db
+    .select()
+    .from(telegramMtprotoAccountsTable)
+    .where(eq(telegramMtprotoAccountsTable.userId, userId))
+    .limit(1);
+
+  if (!account || account.status !== "active" || !account.sessionEncrypted) {
+    return { success: false, reason: "Telegram ulanmagan. Avval Telegram'ni ulang." };
+  }
+
+  const identity = await getBotIdentity();
+  if (!identity) {
+    return { success: false, reason: "Bot sozlanmagan." };
+  }
+
+  let client: Awaited<ReturnType<typeof createMtprotoClient>> | null = null;
+  try {
+    const sessionString = decryptSessionString(account.sessionEncrypted);
+    client = await createMtprotoClient(sessionString);
+
+    const token = await createLinkToken(userId);
+    const botEntity = await client.getEntity(identity.username);
+    const sent = await client.sendMessage(botEntity, { message: `/start ${token}` });
+    console.log(`[mtproto] resendStart: sent for user ${userId}, message id=${(sent as any)?.id ?? "?"}`);
+    return { success: true };
+  } catch (err: any) {
+    const reason = err?.errorMessage ?? String(err);
+    console.error(`[mtproto] resendStart failed for user ${userId}`, reason);
+    // Telegram's own wording for the most likely real-world cause, made
+    // readable instead of surfacing the raw API error code.
+    if (String(reason).includes("USER_IS_BLOCKED") || String(reason).includes("blocked")) {
+      return {
+        success: false,
+        reason: "Siz botni bloklagan ko'rinasiz. Telegram'da @OneOfficeAIBot'ni blokdan chiqarib, qayta urinib ko'ring.",
+      };
+    }
+    return { success: false, reason: "Xabar yuborishda xatolik yuz berdi. Birozdan keyin qayta urinib ko'ring." };
+  } finally {
+    await client?.disconnect().catch(() => {});
+  }
 }
 
 export async function revoke(userId: number): Promise<void> {
@@ -273,6 +492,43 @@ export async function getStatus(
     .limit(1);
 
   if (!account) return { connected: false };
+
+  // Covers people who connected MTProto before this auto-/start existed,
+  // or whose very first attempt failed silently (network blip, bot
+  // briefly unconfigured) — checked here too, not just at the moment of
+  // login, since "ulagan bo'lsa" (already connected) was explicitly asked
+  // for, not just "ulashi bilanoq" (right as they connect). Fully
+  // fire-and-forget: never awaited, so a slow/failed attempt can't delay
+  // this status check, which the Connectors page likely polls/loads often.
+  //
+  // The telegramUserId check happens here too (cheap, DB-only) BEFORE
+  // even considering opening an MTProto connection — getStatus can be
+  // called often, and the overwhelmingly common case is "already linked,
+  // nothing to do", which should never cost a client connect/disconnect
+  // round-trip.
+  if (account.status === "active" && account.sessionEncrypted) {
+    void (async () => {
+      try {
+        const [user] = await db
+          .select({ telegramUserId: usersTable.telegramUserId })
+          .from(usersTable)
+          .where(eq(usersTable.id, userId))
+          .limit(1);
+        if (user?.telegramUserId) return;
+
+        const sessionString = decryptSessionString(account.sessionEncrypted!);
+        const client = await createMtprotoClient(sessionString);
+        try {
+          await autoStartBotIfNeeded(userId, client);
+        } finally {
+          await client.disconnect().catch(() => {});
+        }
+      } catch (err) {
+        console.error("[mtproto] getStatus auto /start failed (non-fatal)", err);
+      }
+    })();
+  }
+
   return {
     connected: account.status === "active",
     status: account.status,

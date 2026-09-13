@@ -3,10 +3,12 @@ import { db } from "@workspace/db";
 import {
   usersTable,
   telegramChannelsTable,
+  postsTable,
 } from "@workspace/db/schema";
 import { and, eq } from "drizzle-orm";
 import { getBotToken } from "../telegram/bot";
 import { trackPublishedPost } from "../telegram/postTracker";
+import { publishViaMtproto } from "../telegram-mtproto/publish";
 
 const router = Router();
 
@@ -41,6 +43,14 @@ type PublishBody = {
   text: string;
   imageUrl?: string;
   imageUrls?: string[];
+  // Optional — used only to populate posts.name / posts.price so this
+  // publish shows up in MTProto stats (views are looked up by joining on
+  // posts.telegramMessageId, see telegram-mtproto/stats.ts). Falls back to
+  // sensible defaults when the caller doesn't have a product on hand.
+  productId?: number;
+  name?: string;
+  price?: string;
+  category?: string;
 };
 
 function parsePublishBody(body: unknown): PublishBody | { error: string } {
@@ -81,12 +91,22 @@ function parsePublishBody(body: unknown): PublishBody | { error: string } {
     imageUrl = b.imageUrl;
   }
 
+  const productId = typeof b.productId === "number" ? b.productId : undefined;
+  const name = typeof b.name === "string" && b.name.trim() ? b.name : undefined;
+  const price = typeof b.price === "string" && b.price.trim() ? b.price : undefined;
+  const category =
+    typeof b.category === "string" && b.category.trim() ? b.category : undefined;
+
   return {
     userId: b.userId,
     channelId: b.channelId,
     text: b.text,
     imageUrl,
     imageUrls,
+    productId,
+    name,
+    price,
+    category,
   };
 }
 
@@ -116,14 +136,30 @@ async function resolveImage(url: string): Promise<ResolvedImage | null> {
       },
     });
     const contentType = imgRes.headers.get("content-type") || "";
-    if (imgRes.ok && contentType.startsWith("image/")) {
+
+console.log("[telegram] Image fetch:", {
+  url,
+  status: imgRes.status,
+  ok: imgRes.ok,
+  contentType,
+});
+
+if (imgRes.ok && contentType.startsWith("image/")) {
       const arrayBuffer = await imgRes.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
       return { buffer, contentType, ext: extFromContentType(contentType) };
     }
-  } catch {
-    // fall through to null below
+    } catch (error) {
+    console.error("[telegram] Failed to resolve image:", {
+      url,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
+
+  console.error("[telegram] Image could not be resolved:", {
+    url,
+  });
+
   return null;
 }
 
@@ -264,6 +300,70 @@ async function sendPhotoAlbum(
   return { ok: true, messageId: result?.[0]?.message_id };
 }
 
+// ---------------------------------------------------------------------------
+// The reusable core: given an already-resolved channel row + post text +
+// image URLs, actually sends it (mtproto or bot credential, whichever the
+// channel uses) and returns the outcome. Exported so callers that already
+// have a channel row in hand (the HTTP route below, and the OneHelp
+// background task scheduler in ai/autoPost.ts) don't have to go through
+// this process's own HTTP server to reuse this logic.
+// ---------------------------------------------------------------------------
+
+export async function sendPostToChannel(
+  userId: number,
+  channel: typeof telegramChannelsTable.$inferSelect,
+  text: string,
+  imageUrls: string[],
+): Promise<{ ok: true; messageId?: number } | { ok: false; error: string }> {
+  const requestedUrls = imageUrls.slice(0, 10);
+  const channelId = channel.channelId;
+
+  if (channel.connectionType === "mtproto") {
+    try {
+      const resolvedImages = (
+        await Promise.all(requestedUrls.map((url) => resolveImage(url)))
+      ).filter((img): img is ResolvedImage => img !== null);
+
+      const outcome = await publishViaMtproto(
+        userId,
+        channelId,
+        text,
+        resolvedImages.map((img) => ({ buffer: img.buffer, ext: img.ext })),
+      );
+
+      if (!outcome.ok) return { ok: false, error: outcome.error };
+      return { ok: true, messageId: outcome.messageId };
+    } catch {
+      return { ok: false, error: "MTProto orqali yuborishda xatolik. Ulanishni tekshiring." };
+    }
+  }
+
+  let botToken: string;
+  try {
+    botToken = getBotToken();
+  } catch {
+    return { ok: false, error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN)." };
+  }
+
+  try {
+    const resolvedImages = (
+      await Promise.all(requestedUrls.map((url) => resolveImage(url)))
+    ).filter((img): img is ResolvedImage => img !== null);
+
+    let outcome: { ok: true; messageId?: number } | { ok: false; error: string };
+    if (resolvedImages.length >= 2) {
+      outcome = await sendPhotoAlbum(botToken, channelId, text, resolvedImages);
+    } else if (resolvedImages.length === 1) {
+      outcome = await sendSinglePhoto(botToken, channelId, text, resolvedImages[0]);
+    } else {
+      outcome = await sendTextMessage(botToken, channelId, text);
+    }
+    return outcome;
+  } catch {
+    return { ok: false, error: "Failed to reach Telegram API. Check your internet connection." };
+  }
+}
+
 router.post("/publish", async (req, res) => {
   const parsed = parsePublishBody(req.body);
   if ("error" in parsed) {
@@ -277,6 +377,10 @@ router.post("/publish", async (req, res) => {
     text,
     imageUrl,
     imageUrls,
+    productId,
+    name,
+    price,
+    category,
   } = parsed;
 
   // imageUrls (multi-select) takes precedence when present; otherwise fall
@@ -321,57 +425,41 @@ router.post("/publish", async (req, res) => {
   }
 
   const channelId = channel.channelId;
-  let botToken: string;
-  try {
-    botToken = getBotToken();
-  } catch {
-    res.status(400).json({
-      error: "Telegram hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN).",
-    });
+
+  const outcome = await sendPostToChannel(userId, channel, text, requestedUrls);
+  if (!outcome.ok) {
+    res.status(400).json({ error: outcome.error });
     return;
   }
-
-  let telegramMessageId: number | undefined;
-
-  try {
-    const resolvedImages = (
-      await Promise.all(requestedUrls.map((url) => resolveImage(url)))
-    ).filter((img): img is ResolvedImage => img !== null);
-
-    let outcome:
-      | { ok: true; messageId?: number }
-      | { ok: false; error: string };
-
-    if (resolvedImages.length >= 2) {
-      outcome = await sendPhotoAlbum(botToken, channelId, text, resolvedImages);
-    } else if (resolvedImages.length === 1) {
-      outcome = await sendSinglePhoto(
-        botToken,
-        channelId,
-        text,
-        resolvedImages[0],
-      );
-    } else {
-      // No images resolved (either none were requested, or all failed to
-      // load) — fall back to a text-only post rather than failing outright.
-      outcome = await sendTextMessage(botToken, channelId, text);
-    }
-
-    if (!outcome.ok) {
-      res.status(400).json({ error: outcome.error });
-      return;
-    }
-    telegramMessageId = outcome.messageId;
-  } catch {
-    res.status(400).json({
-      error: "Failed to reach Telegram API. Check your internet connection.",
-    });
-    return;
-  }
+  const telegramMessageId = outcome.messageId;
 
   // In-memory only (never the database) — lets the live stats endpoint
   // read this post's current view count on demand. See telegram/postTracker.ts.
   trackPublishedPost(telegramChannelRowId, telegramMessageId);
+
+  // Persisted row — this is what telegram-mtproto/stats.ts joins on
+  // (postsTable.telegramChannelId + telegramMessageId) to fetch real view
+  // counts. Without this row the MTProto dashboard has nothing to look up
+  // and always reports 0 views, even once a session is connected. Written
+  // the same way regardless of which credential (bot or MTProto) actually
+  // sent the message — the join only cares about telegramMessageId.
+  try {
+    await db.insert(postsTable).values({
+      userId,
+      telegramChannelId: telegramChannelRowId,
+      productId,
+      name: name ?? text.slice(0, 80),
+      price: price ?? "0",
+      category: category ?? "",
+      status: "Published",
+      telegramMessageId: telegramMessageId ?? null,
+      platform: "telegram",
+    });
+  } catch (err) {
+    // Never fail the publish because of the analytics write — the message
+    // already went out to Telegram successfully.
+    console.error("[publish] Failed to record post row:", err);
+  }
 
   res.json({ success: true, messageId: telegramMessageId ?? 0 });
 });

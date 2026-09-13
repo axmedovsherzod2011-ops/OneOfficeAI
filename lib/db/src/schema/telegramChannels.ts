@@ -21,6 +21,12 @@ export const telegramChannelsTable = pgTable("telegram_channels", {
   channelUsername: text("channel_username"),
   channelTitle: text("channel_title").notNull().default(""),
   connectedAt: timestamp("connected_at").defaultNow().notNull(),
+  // "bot" (default — added by promoting the global bot to admin) or
+  // "mtproto" (added via the user's own MTProto-authenticated account,
+  // see telegram-mtproto/publish.ts). Determines which credential
+  // publish.ts sends through for this channel — everything else (this
+  // table, the picker UI, post history) treats both the same way.
+  connectionType: text("connection_type").notNull().default("bot"),
   // Flipped to false (not deleted) if the bot is ever demoted or removed
   // from the channel, so history/posts referencing this row still resolve.
   isActive: boolean("is_active").notNull().default(true),

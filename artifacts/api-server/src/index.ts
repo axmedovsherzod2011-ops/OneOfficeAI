@@ -1,6 +1,19 @@
+import dotenv from "dotenv";
+import path from "node:path";
+
+// Root .env faylini yuklash.
+// index.ts CWD: artifacts/api-server
+// Shuning uchun ../../.env -> OneOfficeAI/.env
+dotenv.config({
+  path: path.resolve(process.cwd(), "../../.env"),
+});
+
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureTelegramWebhook } from "./telegram/bot";
+import { ensureMtprotoSchema, ensureProductResearchSchema, ensureStatsSchema, ensureOrdersSchema, ensureProductProInfoSchema, ensureOnboardingSchema, ensureProfileSettingsSchema, ensureOneHelpSchema, ensureOneHelpTasksSchema } from "@workspace/db";
+import { startStatsScheduler } from "./scheduler/statsScheduler";
+import { startOneHelpTaskScheduler } from "./ai/taskScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -16,6 +29,79 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+// Creates the telegram_mtproto_* tables/columns if they don't exist yet.
+// See lib/db/src/ensureMtprotoSchema.ts for why this runs here instead of
+// `drizzle-kit push` (no shell access into this deployment to run it by
+// hand). Awaited before listen() so the very first request never races a
+// half-created schema; it's a fast no-op on every boot after the first.
+await ensureMtprotoSchema().catch((err) => {
+  logger.error({ err }, "ensureMtprotoSchema failed — mtproto routes will 500 until this is fixed");
+});
+
+// Creates the product_research table if it doesn't exist yet. Same
+// boot-time-DDL reasoning as ensureMtprotoSchema above.
+await ensureProductResearchSchema().catch((err) => {
+  logger.error(
+    { err },
+    "ensureProductResearchSchema failed — product research caching will 500 until this is fixed",
+  );
+});
+
+// Adds channel_stat_snapshots.captured_at / .hour_bucket if they don't
+// exist yet. Same boot-time-DDL reasoning as the two above.
+await ensureStatsSchema().catch((err) => {
+  logger.error(
+    { err },
+    "ensureStatsSchema failed — hour/day/week/month/year dashboard stats will be inaccurate until this is fixed",
+  );
+});
+
+// Creates the orders table if it doesn't exist yet. Same no-shell-access
+// reasoning as the ensure*Schema calls above.
+await ensureOrdersSchema().catch((err) => {
+  logger.error({ err }, "ensureOrdersSchema failed — storefront checkout and the Orders page will 500 until this is fixed");
+});
+
+// Adds products.characteristics / .composition / .instructions /
+// .delivery_info if they don't exist yet. Same no-shell-access reasoning
+// as the ensure*Schema calls above — this one ALTERs the existing
+// products table rather than creating a new one.
+await ensureProductProInfoSchema().catch((err) => {
+  logger.error(
+    { err },
+    "ensureProductProInfoSchema failed — product characteristics/composition/instructions/delivery info will 500 until this is fixed",
+  );
+});
+
+// Adds users.onboarding_completed_at if it doesn't exist yet.
+await ensureOnboardingSchema().catch((err) => {
+  logger.error({ err }, "ensureOnboardingSchema failed — the first-time walkthrough will re-show every login until this is fixed");
+});
+
+// Adds users.language / users.category if they don't exist yet.
+await ensureProfileSettingsSchema().catch((err) => {
+  logger.error(
+    { err },
+    "ensureProfileSettingsSchema failed — language selection and business category will 500 until this is fixed",
+  );
+});
+
+// Creates one_help_messages if it doesn't exist yet — OneHelp's chat
+// history (the draggable bottom-corner assistant bubble).
+await ensureOneHelpSchema().catch((err) => {
+  logger.error({ err }, "ensureOneHelpSchema failed — OneHelp chat will 500 until this is fixed");
+});
+
+// Creates one_help_tasks if it doesn't exist yet — OneHelp's background
+// task queue (scheduled/recurring actions like a daily auto-post).
+await ensureOneHelpTasksSchema().catch((err) => {
+  logger.error({ err }, "ensureOneHelpTasksSchema failed — OneHelp can't schedule background tasks until this is fixed");
+});
+
+// Polls one_help_tasks every 60s and runs whatever's due — independent of
+// any browser tab being open, this IS the "AI works in the background
+// while I do something else" mechanism.
+
 app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
@@ -29,4 +115,12 @@ app.listen(port, (err) => {
   // Without this call, promoting the bot to admin in a channel is
   // invisible to the server — Telegram has nowhere to send that event.
   void ensureTelegramWebhook();
+
+  // Captures an hourly subscribers/views snapshot for every user in the
+  // background, independent of anyone having the dashboard open — this is
+  // what makes a real "last 24 hours" chart possible instead of only ever
+  // having whatever irregular gaps a user's own visits happened to leave.
+  startStatsScheduler();
+
+  startOneHelpTaskScheduler();
 });

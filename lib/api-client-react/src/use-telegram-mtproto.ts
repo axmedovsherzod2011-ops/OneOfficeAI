@@ -6,6 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 import type { HistoryPeriod } from "./use-telegram-stats-history";
+import { getListTelegramChannelsQueryKey } from "./generated/api";
 
 // --- status --------------------------------------------------------------
 
@@ -28,10 +29,31 @@ export function useGetTelegramMtprotoStatus(options?: { refetchInterval?: number
 
 // --- auth flow -------------------------------------------------------------
 
+export type CodeDeliveryMethod = "app" | "sms" | "call" | "flash_call" | "other";
+
 export function useTelegramMtprotoSendCode() {
-  return useMutation<{ pendingId: number }, Error, { phoneNumber: string }>({
+  return useMutation<
+    { pendingId: number; deliveryMethod: CodeDeliveryMethod },
+    Error,
+    { phoneNumber: string }
+  >({
     mutationFn: (data) =>
       customFetch("/api/telegram-mtproto/send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+  });
+}
+
+export function useTelegramMtprotoResendCode() {
+  return useMutation<
+    { deliveryMethod: CodeDeliveryMethod },
+    Error,
+    { pendingId: number; phoneNumber: string }
+  >({
+    mutationFn: (data) =>
+      customFetch("/api/telegram-mtproto/resend-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -98,9 +120,28 @@ export function useListTelegramMtprotoChannels(options?: { enabled?: boolean }) 
   });
 }
 
+// Turns one discovered channel into a normal telegram_channels row
+// (connectionType: "mtproto") so it shows up in the existing publish
+// picker right alongside bot-connected channels.
+export function useConnectTelegramMtprotoChannel() {
+  const queryClient = useQueryClient();
+  return useMutation<{ channel: unknown }, Error, { mtprotoChannelId: string }>({
+    mutationFn: ({ mtprotoChannelId }) =>
+      customFetch(`/api/telegram-mtproto/channels/${mtprotoChannelId}/connect`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      // Refresh whatever list the publish picker reads from.
+      queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+    },
+  });
+}
+
 // --- live stats + history (the real "views" source, see stats.ts) --------
 
 export type MtprotoChannelLiveStats = {
+  // null for a channel the MTProto account administers but that isn't
+  // connected through the bot flow — see stats.ts for why.
   channelRowId: number;
   channelTitle: string;
   subscribers: number | null;

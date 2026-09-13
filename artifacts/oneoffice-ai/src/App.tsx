@@ -16,6 +16,9 @@ import {
 } from "@/lib/firebase";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { apiUrl } from "./lib/api-url";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { LanguageProvider, useLanguage, useSyncLanguageFromProfile, useT, LANGUAGES, LANGUAGE_NAMES, type Lang } from "./lib/i18n";
 
 import {
   Sparkles,
@@ -25,7 +28,10 @@ import {
   User,
   Bell,
   Check,
+  Plus,
   X,
+  ShoppingCart,
+  ShoppingBag,
   ChevronRight,
   Image as ImageIcon,
   Zap,
@@ -39,6 +45,7 @@ import {
   Play,
   Loader2,
   Send,
+  MessageCircle,
   Eye,
   ThumbsUp,
   ThumbsDown,
@@ -72,16 +79,14 @@ import {
   Users,
   TrendingDown,
   Layers,
+  Truck,
 } from "lucide-react";
 
 import {
   useCreateProfile,
   useListTelegramChannels,
-  useGetTelegramConfig,
-  useGetTelegramLink,
   useDisconnectTelegramChannel,
   useGetTelegramLiveStats,
-  useGetTelegramStatsHistory,
   getListTelegramChannelsQueryKey,
   useGetInstagramConfig,
   useListInstagramAccounts,
@@ -98,18 +103,24 @@ import {
   type ProductItem,
   useGetTelegramMtprotoStatus,
   useListTelegramMtprotoChannels,
+  useConnectTelegramMtprotoChannel,
+  useGetProductResearch,
+  useUpdateProductResearch,
   useTelegramMtprotoSendCode,
+  useTelegramMtprotoResendCode,
   useTelegramMtprotoVerifyCode,
   useTelegramMtprotoVerifyPassword,
   useTelegramMtprotoLogout,
   useGetTelegramMtprotoLiveStats,
-  useGetTelegramMtprotoStatsHistory,
 } from "@workspace/api-client-react";
 
 import {
   ResponsiveContainer,
   AreaChart,
   Area,
+  BarChart,
+  Bar,
+  Legend,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -257,12 +268,36 @@ function proxyImage(url: string): string {
   return `/api/images/proxy?url=${encodeURIComponent(url)}`;
 }
 
-// Reads an uploaded photo, downsizes it (long edge capped at 1600px) and
-// re-encodes as JPEG before turning it into a base64 data URL. Phone
-// camera photos are routinely 3-8MB — without this, selecting a handful of
-// them for a product would blow past the request body limit and take
-// forever to upload on a slow connection.
-function resizeImageFile(file: File, maxDim = 1600, quality = 0.82): Promise<string> {
+// Reads an uploaded photo and re-encodes it as a JPEG at a fixed
+// 1080x1440 (3:4 portrait) canvas — cropped-to-cover like a real
+// marketplace listing photo, so every product image is the exact same
+// size and aspect ratio everywhere it's shown (inventory grid, storefront
+// grid, product detail, order line items), regardless of what the seller
+// originally shot on their phone.
+const PRODUCT_IMAGE_WIDTH = 1080;
+const PRODUCT_IMAGE_HEIGHT = 1440;
+
+// Locks the page's own scroll while a full-screen modal is mounted — so
+// scrolling inside the modal never accidentally scrolls the app behind it
+// (which, on real phones, can shove the modal's own buttons out of the
+// visible viewport and make it look like the whole site "went into
+// scroll"). Restores whatever the body's overflow was before.
+function useLockBodyScroll() {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+}
+
+function resizeImageFile(
+  file: File,
+  targetWidth = PRODUCT_IMAGE_WIDTH,
+  targetHeight = PRODUCT_IMAGE_HEIGHT,
+  quality = 0.85,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = reject;
@@ -270,19 +305,9 @@ function resizeImageFile(file: File, maxDim = 1600, quality = 0.82): Promise<str
       const img = new Image();
       img.onerror = reject;
       img.onload = () => {
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
         const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext("2d");
         if (!ctx) {
           // Canvas unsupported for some reason — fall back to the
@@ -290,7 +315,22 @@ function resizeImageFile(file: File, maxDim = 1600, quality = 0.82): Promise<str
           resolve(reader.result as string);
           return;
         }
-        ctx.drawImage(img, 0, 0, width, height);
+
+        // "Cover" crop, same idea as CSS object-fit: cover — scale so the
+        // source fully covers the 1080x1440 frame, then crop whichever
+        // dimension overflows, centered, instead of stretching/distorting.
+        const sourceRatio = img.width / img.height;
+        const targetRatio = targetWidth / targetHeight;
+        let sx = 0, sy = 0, sw = img.width, sh = img.height;
+        if (sourceRatio > targetRatio) {
+          sw = img.height * targetRatio;
+          sx = (img.width - sw) / 2;
+        } else if (sourceRatio < targetRatio) {
+          sh = img.width / targetRatio;
+          sy = (img.height - sh) / 2;
+        }
+
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight);
         resolve(canvas.toDataURL("image/jpeg", quality));
       };
       img.src = reader.result as string;
@@ -347,7 +387,7 @@ function Glass({
 // ---------------------------------------------------------------------------
 
 type LiveMetric = "views" | "subscribers";
-type PeriodKey = "hourly" | "daily" | "weekly" | "monthly";
+type PeriodKey = "hourly" | "daily" | "weekly" | "monthly" | "yearly";
 
 const LIVE_METRIC_CONFIG: Record<
   LiveMetric,
@@ -366,11 +406,21 @@ const LIVE_METRIC_CONFIG: Record<
 };
 
 const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
-  { key: "hourly", label: "Soatlar bo'yicha" },
-  { key: "daily", label: "Kunlar bo'yicha" },
-  { key: "weekly", label: "Haftalar bo'yicha" },
-  { key: "monthly", label: "Oylar bo'yicha" },
+  { key: "hourly", label: "Oxirgi 24 soat" },
+  { key: "daily", label: "Oxirgi 7 kun" },
+  { key: "weekly", label: "Oxirgi 5 hafta" },
+  { key: "monthly", label: "Oxirgi 6 oy" },
+  { key: "yearly", label: "Oxirgi 5 yil" },
 ];
+
+// Frontend period key -> backend /api/stats/dashboard granularity value.
+const PERIOD_TO_GRANULARITY: Record<PeriodKey, string> = {
+  hourly: "hour",
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
+};
 
 function ChartTooltip({ active, payload, label, metricLabel }: any) {
   if (!active || !payload?.length) return null;
@@ -390,30 +440,323 @@ function ChartTooltip({ active, payload, label, metricLabel }: any) {
   );
 }
 
-// Real snapshot data only — no synthetic/demo fallback of any kind. When
-// there isn't yet enough real history, the chart renders an explicit empty
-// state (see ChannelStatsChart) instead of a fabricated curve.
-function chartDataFor(
-  snapshots?: { date: string; value: number }[],
-): { label: string; value: number }[] {
-  if (!snapshots || snapshots.length < 2) return [];
-  return snapshots.map((s) => ({ label: s.date.slice(5), value: s.value }));
+const UZ_MONTH_SHORT = [
+  "Yan", "Fev", "Mar", "Apr", "May", "Iyun",
+  "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek",
+];
+
+// One bucket from GET /api/stats/dashboard — value is ALREADY a delta (new
+// activity strictly within [periodStart, periodEnd)), never a raw
+// cumulative reading. See statsAggregation.ts on the backend for why that
+// distinction is the entire point of this endpoint.
+interface StatsBucket {
+  periodStart: string;
+  periodEnd: string;
+  value: number;
+  cumulativeAtEnd: number;
+  grounded: boolean;
 }
 
-// First-vs-last snapshot in the selected period, as a percent — the
-// "+3.2% shu hafta" badge next to a chart's headline. Real snapshots only,
-// same as chartDataFor; returns null when there isn't enough real history
-// yet rather than showing a misleading 0%.
-function growthFor(
-  snapshots?: { date: string; value: number }[],
+interface StatsDashboardResponse {
+  granularity: string;
+  metric: string;
+  source: string;
+  buckets: StatsBucket[];
+  todayValue: number;
+  yesterdayValue: number;
+  allTimeTotal: number;
+  hasGroundedHistory: boolean;
+  notConnected?: boolean;
+}
+
+// Fetches the period-correct bucket series + today/yesterday comparison for
+// one metric. A thin custom hook (not a generated api-client-react hook)
+// since this route doesn't go through openapi codegen.
+function useStatsDashboard(
+  metric: LiveMetric,
+  period: PeriodKey,
+  enabled: boolean,
+) {
+  const { user: firebaseUser } = useAuth();
+  const granularity = PERIOD_TO_GRANULARITY[period];
+  return useQuery<StatsDashboardResponse>({
+    queryKey: ["stats-dashboard", metric, granularity],
+    enabled,
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(
+        apiUrl(`/api/stats/dashboard?metric=${metric}&granularity=${granularity}`),
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) throw new Error("Statistikani yuklashda xatolik.");
+      return res.json();
+    },
+  });
+}
+
+function labelForBucket(periodStartIso: string, period: PeriodKey): string {
+  const d = new Date(periodStartIso);
+  if (period === "hourly") return `${String(d.getHours()).padStart(2, "0")}:00`;
+  if (period === "yearly") return String(d.getFullYear());
+  if (period === "monthly") return UZ_MONTH_SHORT[d.getMonth()] ?? "";
+  // daily / weekly — short date
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Real bucket data only — each point is that exact period's own new
+// activity (a delta), never a cumulative total. An empty/all-zero series
+// just means no snapshots have been captured yet for that window (a brand
+// new channel, or the scheduler hasn't completed its first hourly pass).
+function chartDataForBuckets(
+  buckets: StatsBucket[] | undefined,
+  period: PeriodKey,
+): { label: string; value: number }[] {
+  if (!buckets || buckets.length === 0) return [];
+  return buckets.map((b) => ({ label: labelForBucket(b.periodStart, period), value: b.value }));
+}
+
+// Most-recent-period vs previous-period, both already period-isolated
+// deltas — this is the correct "+3.2% shu hafta" comparison (today vs
+// yesterday, this week vs last week, etc.), never a cumulative-total
+// comparison.
+function growthForBuckets(
+  buckets?: StatsBucket[],
 ): { percent: number; direction: "up" | "down" | "flat" } | null {
-  if (!snapshots || snapshots.length < 2) return null;
-  const first = snapshots[0].value;
-  const last = snapshots[snapshots.length - 1].value;
-  if (first === 0) return last === 0 ? { percent: 0, direction: "flat" } : null;
-  const percent = ((last - first) / first) * 100;
-  const direction = percent > 0.05 ? "up" : percent < -0.05 ? "down" : "flat";
+  if (!buckets || buckets.length < 2) return null;
+  const prev = buckets[buckets.length - 2].value;
+  const last = buckets[buckets.length - 1].value;
+  if (prev === 0) return last === 0 ? { percent: 0, direction: "flat" } : null;
+  const percent = ((last - prev) / Math.abs(prev)) * 100;
+  const direction = percent > 0.5 ? "up" : percent < -0.5 ? "down" : "flat";
   return { percent, direction };
+}
+
+// ---------------------------------------------------------------------------
+// COMBINED DASHBOARD CHART — one professional multi-line chart: views,
+// subscribers, and orders together, all on the same time buckets, from
+// GET /api/stats/dashboard/combined. Replaces the old two-separate-charts
+// layout (one line each) with a single comparable view.
+// ---------------------------------------------------------------------------
+
+interface CombinedBucket {
+  periodStart: string;
+  periodEnd: string;
+  views: number;
+  subscribers: number;
+  orders: number;
+  viewsGrounded: boolean;
+  subscribersGrounded: boolean;
+}
+
+interface CombinedStatsResponse {
+  granularity: string;
+  buckets: CombinedBucket[];
+  viewsConnected: boolean;
+  today: { views: number; subscribers: number; orders: number };
+  yesterday: { views: number; subscribers: number; orders: number };
+  allTime: { views: number; subscribers: number; orders: number };
+}
+
+function useCombinedStatsDashboard(period: PeriodKey) {
+  const { user: firebaseUser } = useAuth();
+  const granularity = PERIOD_TO_GRANULARITY[period];
+  return useQuery<CombinedStatsResponse>({
+    queryKey: ["stats-dashboard-combined", granularity],
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(
+        apiUrl(`/api/stats/dashboard/combined?granularity=${granularity}`),
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) throw new Error("Statistikani yuklashda xatolik.");
+      return res.json();
+    },
+  });
+}
+
+const COMBINED_SERIES_META = {
+  views: { label: "Ko'rishlar", color: "#a78bfa" },
+  subscribers: { label: "Obunachilar", color: "#22d3ee" },
+  orders: { label: "Buyurtmalar", color: "#34d399" },
+} as const;
+
+function CombinedStatsChart({
+  period,
+  onPeriodChange,
+}: {
+  period: PeriodKey;
+  onPeriodChange: (period: PeriodKey) => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const { data, isLoading } = useCombinedStatsDashboard(period);
+  const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
+
+  const buckets = data?.buckets ?? [];
+  const hasRealHistory = buckets.some((b) => b.viewsGrounded || b.subscribersGrounded) || buckets.some((b) => b.orders > 0);
+  const chartData = buckets.map((b) => ({
+    label: labelForBucket(b.periodStart, period),
+    views: b.views,
+    subscribers: b.subscribers,
+    orders: b.orders,
+  }));
+
+  return (
+    <Glass className="p-6">
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <h3 className="text-white font-semibold">Umumiy statistika</h3>
+        <div className="relative">
+          <button
+            onClick={() => setPickerOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 hover:border-white/20 transition"
+          >
+            {currentLabel}
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          {pickerOpen && (
+            <div className="absolute right-0 mt-1.5 w-44 bg-slate-900 border border-white/10 rounded-xl shadow-2xl p-1 z-20">
+              {PERIOD_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  onClick={() => {
+                    onPeriodChange(o.key);
+                    setPickerOpen(false);
+                  }}
+                  className="w-full flex items-center justify-between text-xs text-slate-300 hover:bg-white/5 rounded-lg px-3 py-2 transition"
+                >
+                  {o.label}
+                  {period === o.key && <Check className="h-3 w-3 text-violet-400" />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-4 mb-5 flex-wrap">
+        {(Object.keys(COMBINED_SERIES_META) as Array<keyof typeof COMBINED_SERIES_META>).map((key) => {
+          const meta = COMBINED_SERIES_META[key];
+          const total = data?.allTime[key] ?? 0;
+          return (
+            <div key={key} className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: meta.color }} />
+              <div>
+                <p className="text-sm font-bold text-white leading-none">{total.toLocaleString()}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">{meta.label}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="h-72 -ml-2">
+        {isLoading && chartData.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="h-6 w-6 text-slate-500 animate-spin" />
+          </div>
+        ) : !hasRealHistory ? (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-500">
+            <BarChart3 className="h-8 w-8 opacity-40" />
+            <p className="text-xs max-w-[220px]">
+              Hozircha tarixiy ma'lumot yo'q — vaqt o'tishi bilan bu yerda
+              real grafik shakllanadi.
+            </p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="combinedViewsGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COMBINED_SERIES_META.views.color} stopOpacity={0.35} />
+                  <stop offset="95%" stopColor={COMBINED_SERIES_META.views.color} stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="combinedSubscribersGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COMBINED_SERIES_META.subscribers.color} stopOpacity={0.35} />
+                  <stop offset="95%" stopColor={COMBINED_SERIES_META.subscribers.color} stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="combinedOrdersGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COMBINED_SERIES_META.orders.color} stopOpacity={0.35} />
+                  <stop offset="95%" stopColor={COMBINED_SERIES_META.orders.color} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <XAxis
+                dataKey="label"
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 10 }}
+                axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+                tickLine={false}
+              />
+              <YAxis
+                stroke="rgba(255,255,255,0.3)"
+                tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                width={40}
+                allowDecimals={false}
+              />
+              <RechartsTooltip
+                content={({ active, payload, label }: any) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 shadow-xl">
+                      <p className="text-xs text-slate-400 mb-1">{label}</p>
+                      {payload.map((p: any) => (
+                        <p key={p.dataKey} className="text-xs font-medium" style={{ color: p.color }}>
+                          {COMBINED_SERIES_META[p.dataKey as keyof typeof COMBINED_SERIES_META].label}:{" "}
+                          {p.value.toLocaleString()}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                }}
+              />
+              <Legend
+                formatter={(value: string) =>
+                  COMBINED_SERIES_META[value as keyof typeof COMBINED_SERIES_META]?.label ?? value
+                }
+                wrapperStyle={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}
+              />
+              <Area
+                type="monotone"
+                dataKey="views"
+                stroke={COMBINED_SERIES_META.views.color}
+                strokeWidth={2.5}
+                fill="url(#combinedViewsGradient)"
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+              <Area
+                type="monotone"
+                dataKey="subscribers"
+                stroke={COMBINED_SERIES_META.subscribers.color}
+                strokeWidth={2.5}
+                fill="url(#combinedSubscribersGradient)"
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+              <Area
+                type="monotone"
+                dataKey="orders"
+                stroke={COMBINED_SERIES_META.orders.color}
+                strokeWidth={2.5}
+                fill="url(#combinedOrdersGradient)"
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {!data?.viewsConnected && (
+        <p className="text-[11px] text-slate-500 mt-3">
+          Ko'rishlar statistikasi uchun Telegram MTProto'ni ulang — Sozlamalar → Ulanishlar.
+        </p>
+      )}
+    </Glass>
+  );
 }
 
 function ChannelStatsChart({
@@ -421,7 +764,10 @@ function ChannelStatsChart({
   currentValue,
   isLive,
   isLoading,
-  snapshots,
+  buckets,
+  todayValue,
+  yesterdayValue,
+  hasGroundedHistory,
   period,
   onPeriodChange,
 }: {
@@ -429,19 +775,39 @@ function ChannelStatsChart({
   currentValue?: number;
   isLive: boolean;
   isLoading: boolean;
-  snapshots?: { date: string; value: number }[];
+  buckets?: StatsBucket[];
+  todayValue?: number;
+  yesterdayValue?: number;
+  hasGroundedHistory?: boolean;
   period: PeriodKey;
   onPeriodChange: (period: PeriodKey) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const cfg = LIVE_METRIC_CONFIG[metric];
   const currentLabel = PERIOD_OPTIONS.find((o) => o.key === period)?.label || "";
-  const chartData = chartDataFor(snapshots);
-  const hasRealHistory = chartData.length > 0;
+  const chartData = chartDataForBuckets(buckets, period);
+  // NOT "does some bucket have a nonzero value" — a run of real, grounded
+  // 0-value buckets (tracking is live, nothing simply changed in that
+  // window) is completely legitimate and must render as a normal chart.
+  // Only "we have no grounded bucket at all" means there's truly nothing
+  // to plot yet.
+  const hasRealHistory = Boolean(hasGroundedHistory);
   const gradientId = `mountain-${metric}`;
   const headline =
     currentValue === undefined ? (isLoading ? "…" : "—") : currentValue.toLocaleString();
-  const growth = growthFor(snapshots);
+  const growth = growthForBuckets(buckets);
+
+  // "bugun 2k emas, bugun alohida 1k" — today's and yesterday's own new
+  // activity, side by side, never the all-time cumulative total above.
+  const todayVsYesterday =
+    todayValue !== undefined && yesterdayValue !== undefined
+      ? (() => {
+          if (yesterdayValue === 0) {
+            return todayValue === 0 ? null : { percent: null as number | null };
+          }
+          return { percent: ((todayValue - yesterdayValue) / Math.abs(yesterdayValue)) * 100 };
+        })()
+      : null;
 
   return (
     <Glass className="p-6">
@@ -490,14 +856,14 @@ function ChannelStatsChart({
         </div>
       </div>
 
-      <div className="flex items-baseline gap-2 mb-4 flex-wrap">
+      <div className="flex items-baseline gap-2 mb-1 flex-wrap">
         <span className="text-2xl font-bold text-white">{headline}</span>
         <span className="flex items-center gap-1.5 text-xs text-slate-400">
           <span
             className="h-0.5 w-4 rounded-full inline-block"
             style={{ backgroundColor: cfg.color }}
           />
-          {cfg.label}
+          {cfg.label} (jami)
         </span>
         {growth && growth.direction !== "flat" && (
           <span
@@ -513,13 +879,40 @@ function ChannelStatsChart({
               <TrendingDown className="h-3 w-3" />
             )}
             {growth.percent > 0 ? "+" : ""}
-            {growth.percent.toFixed(1)}% ({currentLabel.toLowerCase()})
+            {growth.percent.toFixed(1)}%
           </span>
         )}
       </div>
 
+      {todayValue !== undefined && yesterdayValue !== undefined && (
+        <p className="text-xs text-slate-500 mb-4">
+          Bugun:{" "}
+          <span className="text-slate-300 font-medium">{todayValue.toLocaleString()}</span>
+          {" · "}Kecha:{" "}
+          <span className="text-slate-300 font-medium">{yesterdayValue.toLocaleString()}</span>
+          {todayVsYesterday?.percent != null && (
+            <span className={todayVsYesterday.percent >= 0 ? "text-emerald-400" : "text-rose-400"}>
+              {" "}
+              ({todayVsYesterday.percent > 0 ? "+" : ""}
+              {todayVsYesterday.percent.toFixed(1)}%)
+            </span>
+          )}
+        </p>
+      )}
+
       <div className="h-56 -ml-2">
-        {chartData.length === 0 ? (
+        {isLoading && chartData.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="h-6 w-6 text-slate-500 animate-spin" />
+          </div>
+        ) : !hasRealHistory ? (
+          // Every bucket is 0 — either no buckets came back at all, or
+          // tracking is so new that no window has two real snapshots to
+          // diff yet (e.g. right after this feature ships, every period
+          // — daily, weekly, even yearly — starts before our one and
+          // only snapshot). A flat 0-line chart across a 5-year axis
+          // reads as "broken", not "no data yet", so show the honest
+          // empty state instead of rendering a misleadingly flat line.
           <div className="h-full flex flex-col items-center justify-center text-center gap-2 text-slate-500">
             <BarChart3 className="h-8 w-8 opacity-40" />
             <p className="text-xs max-w-[220px]">
@@ -665,85 +1058,6 @@ function Landing({
       <div className="relative z-10 text-center text-xs text-slate-600 pb-6">
         OneOffice AI — MVP preview. All AI output shown is simulated for
         demonstration.
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// WELCOME SCREEN — the very first thing a person sees on a device that has
-// never had an account created on it. Once an account is created (or the
-// person signs in) on this device, ONBOARDING_KEY is persisted to
-// localStorage and this screen is skipped on every future visit — see
-// AppRoutes below. If the person navigates away without finishing sign-up
-// (e.g. refreshes), nothing is persisted, so Welcome shows again.
-// ---------------------------------------------------------------------------
-
-const WELCOME_FEATURES = [
-  { icon: Wand2, text: "Mahsulot nomi va narxini kiriting — AI qolganini bajaradi" },
-  { icon: ImageIcon, text: "Professional rasm va dizayn avtomatik tayyorlanadi" },
-  { icon: Send, text: "Bir tegining bilan Telegram kanal(lar)ingizga post qiling" },
-];
-
-function WelcomeScreen({
-  onGetStarted,
-  onSignIn,
-}: {
-  onGetStarted: () => void;
-  onSignIn: () => void;
-}) {
-  return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center px-6 py-10">
-      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
-      <GradientBlob className="h-96 w-96 bg-blue-600 top-1/3 -right-32" />
-      <GradientBlob className="h-72 w-72 bg-cyan-500 bottom-0 left-1/3" />
-
-      <div className="relative z-10 flex flex-col items-center text-center max-w-md w-full">
-        <img
-          src="/brand-logo.png"
-          alt="OneOffice AI"
-          className="h-16 w-16 rounded-2xl object-cover shrink-0 mb-6 shadow-lg shadow-violet-900/40"
-        />
-        <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">
-          OneOffice AI'ga xush kelibsiz
-        </h1>
-        <p className="text-slate-400 text-sm mb-8 leading-relaxed">
-          Telegram do'koningiz uchun sun'iy intellekt yordamida bir necha
-          soniyada professional postlar yarating.
-        </p>
-
-        <Glass className="w-full p-6 mb-8 text-left">
-          <div className="space-y-4">
-            {WELCOME_FEATURES.map((f, i) => {
-              const Icon = f.icon;
-              return (
-                <div key={i} className="flex items-start gap-3">
-                  <div className="h-9 w-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0">
-                    <Icon className="h-4 w-4 text-violet-300" />
-                  </div>
-                  <p className="text-sm text-slate-300 leading-relaxed mt-1.5">
-                    {f.text}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </Glass>
-
-        <button
-          data-testid="button-welcome-get-started"
-          onClick={onGetStarted}
-          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/40 hover:shadow-violet-700/40 transition mb-3"
-        >
-          Boshlash <ArrowRight className="h-4 w-4" />
-        </button>
-        <button
-          data-testid="button-welcome-signin"
-          onClick={onSignIn}
-          className="text-sm text-slate-400 hover:text-white transition"
-        >
-          Hisobingiz bormi? Kirish
-        </button>
       </div>
     </div>
   );
@@ -987,9 +1301,16 @@ function SignInPage() {
 
 function SignUpPage() {
   const [, setLocation] = useLocation();
+  const t = useT();
+  const { lang } = useLanguage();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [company, setCompany] = useState("");
+  // Free-text "what do you sell?" — AI classifies this into a fixed
+  // category ONCE, server-side, right when the profile is created (see
+  // classifyBusinessCategory on the backend). Never asked again; products
+  // no longer require picking their own category because of this.
+  const [categoryHint, setCategoryHint] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -1006,7 +1327,13 @@ function SignUpPage() {
     if (!fName && !lName && !biz) return;
     try {
       await createProfile.mutateAsync({
-        data: { firstName: fName, lastName: lName, company: biz },
+        data: {
+          firstName: fName,
+          lastName: lName,
+          company: biz,
+          language: lang,
+          categoryHint: categoryHint.trim() || undefined,
+        },
       });
     } catch {
       // Non-fatal — AppShell will show the fallback "finish setup" form.
@@ -1073,14 +1400,14 @@ function SignUpPage() {
 
         <AuthCard>
           <h1 className="text-white font-semibold text-xl mb-1">
-            Hisob yarating
+            {t("signup.title")}
           </h1>
           <p className="text-slate-400 text-sm mb-6">
-            Bir necha soniyada boshlang
+            {t("signup.subtitle")}
           </p>
 
           <div className="flex flex-col gap-1.5 mb-5">
-            <label className="text-slate-300 text-sm">Biznes nomi</label>
+            <label className="text-slate-300 text-sm">{t("signup.company_label")}</label>
             <input
               data-testid="input-signup-company"
               type="text"
@@ -1090,6 +1417,19 @@ function SignUpPage() {
               placeholder="OneStore LLC"
               className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
             />
+          </div>
+
+          <div className="flex flex-col gap-1.5 mb-5">
+            <label className="text-slate-300 text-sm">{t("signup.category_label")}</label>
+            <input
+              data-testid="input-signup-category-hint"
+              type="text"
+              value={categoryHint}
+              onChange={(e) => setCategoryHint(e.target.value)}
+              placeholder={t("signup.category_placeholder")}
+              className="bg-white/5 border border-white/10 text-white rounded-xl px-3 py-2.5 outline-none focus:border-violet-500"
+            />
+            <p className="text-slate-500 text-xs">{t("signup.category_hint")}</p>
           </div>
 
           <SocialButtons
@@ -1401,169 +1741,85 @@ function CopyField({ value }: { value: string }) {
 // entirely opt-in, whenever they're ready.
 // ---------------------------------------------------------------------------
 
-// Telegram runs through ONE shared OneOffice bot for every user — nobody
-// creates their own bot or types in a token/chat id. Connecting a channel
-// is two taps, both inside Telegram itself:
-//   1) Open the bot via a one-time deep link and press Start — this links
-//      the person's Telegram account to their OneOffice account.
-//   2) Add the bot as administrator to any channel they own — Telegram
-//      notifies the bot the moment that happens, and the backend attaches
-//      the channel automatically. No limit on how many.
-function TelegramConnectorCard() {
-  const queryClient = useQueryClient();
-  const { data: config } = useGetTelegramConfig();
-  const {
-    data: channels,
-    isLoading,
-  } = useListTelegramChannels({
-    // Connecting a channel happens asynchronously (the person does it
-    // inside the Telegram app, then comes back) — a light poll picks it up
-    // without needing a manual refresh.
-    query: { refetchInterval: 5000 },
-  });
-  const { refetch: fetchLink, isFetching: linking } = useGetTelegramLink();
-  const disconnectChannel = useDisconnectTelegramChannel();
-  const [removingId, setRemovingId] = useState<number | null>(null);
-  const [linkError, setLinkError] = useState("");
-
-  const list = channels || [];
-
-  async function handleConnect() {
-    setLinkError("");
-    const result = await fetchLink();
-    if (result.data?.deepLink) {
-      window.open(result.data.deepLink, "_blank", "noopener,noreferrer");
-    } else {
-      setLinkError(
-        (result.error as any)?.data?.error ||
-          "Telegram hozircha ulanmayapti. Birozdan so'ng qayta urinib ko'ring.",
-      );
-    }
-  }
-
-  async function handleDisconnect(id: number) {
-    setRemovingId(id);
-    try {
-      await disconnectChannel.mutateAsync({ id });
-      queryClient.invalidateQueries({
-        queryKey: getListTelegramChannelsQueryKey(),
-      });
-    } finally {
-      setRemovingId(null);
-    }
-  }
-
-  return (
-    <Glass className="p-6">
-      <div className="flex items-start justify-between gap-4 mb-1">
-        <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
-            <Send className="h-5 w-5 text-blue-400" />
-          </div>
-          <div>
-            <h3 className="text-white font-semibold">Telegram</h3>
-            <p className="text-slate-500 text-xs mt-0.5">
-              {list.length} ta kanal ulangan
-            </p>
-          </div>
-        </div>
-        <button
-          data-testid="button-connect-telegram"
-          onClick={handleConnect}
-          disabled={linking || !config?.configured}
-          title={!config?.configured ? "Telegram hali serverda sozlanmagan" : ""}
-          className="shrink-0 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
-        >
-          {linking ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Link2 className="h-3.5 w-3.5" />
-          )}
-          Ulash
-        </button>
-      </div>
-
-      {config && !config.configured && (
-        <p className="text-amber-300/80 text-xs mt-3">
-          Telegram ulanishi hali serverda sozlanmagan (TELEGRAM_BOT_TOKEN
-          kerak).
-        </p>
-      )}
-      {linkError && (
-        <p className="text-rose-300 text-xs mt-3">{linkError}</p>
-      )}
-
-      <p className="text-slate-500 text-xs mt-3 leading-relaxed">
-        "Ulash"ni bosib botni Telegram'da ishga tushiring (Start), so'ng
-        istalgan kanalingizga botni <strong className="text-slate-300">administrator</strong> sifatida
-        qo'shing — kanal shu yerda avtomatik paydo bo'ladi.
-      </p>
-
-      {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
-        </div>
-      ) : list.length === 0 ? (
-        <p className="text-slate-500 text-sm mt-5">
-          Hali Telegram kanal ulanmagan.
-        </p>
-      ) : (
-        <div className="mt-5 divide-y divide-white/5">
-          {list.map((c: any) => (
-            <div
-              key={c.id}
-              className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="h-9 w-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                  <Radio className="h-4 w-4 text-emerald-400" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-white text-sm font-medium truncate">
-                    {c.channelTitle || "Nomsiz kanal"}
-                  </p>
-                  <p className="text-slate-500 text-xs mt-0.5 truncate">
-                    {c.channelUsername ? `@${c.channelUsername}` : "Shaxsiy kanal"}
-                  </p>
-                </div>
-              </div>
-              <button
-                data-testid={`button-disconnect-${c.id}`}
-                onClick={() => handleDisconnect(c.id)}
-                disabled={removingId === c.id}
-                className="shrink-0 h-9 w-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition disabled:opacity-40"
-              >
-                {removingId === c.id ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </Glass>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// TELEGRAM MTPROTO CONNECTOR CARD
-// A separate, additive flow — connecting here does NOT replace or affect
-// the bot connector above. This is a real Telegram account login
-// (phone -> code -> optional 2FA password), used only to read real
-// statistics (subscribers + post views) that the Bot API can't provide.
+// TELEGRAM CARD — single entry point in Connectors. No more bot-token
+// ("custom") connect flow: everything goes through MTProto (the person's
+// own Telegram account). Clicking the card opens a modal that either walks
+// through the phone/code/(2FA) login, or — once logged in — lists every
+// channel the account administers, with connected ones pinned to the top
+// (green) and a connect/disconnect toggle per channel. Disconnecting just
+// removes the telegram_channels row, so the channel naturally falls back
+// into the "ulash mumkin" list below (see TelegramConnectModal).
 // ---------------------------------------------------------------------------
 
 type MtprotoStep = "idle" | "phone" | "code" | "password";
 
-function TelegramMtprotoConnectorCard() {
+function TelegramCard() {
+  const [modalOpen, setModalOpen] = useState(false);
+  const { data: connectedChannels } = useListTelegramChannels();
+  const list = connectedChannels || [];
+
+  return (
+    <>
+      <Glass className="p-0 overflow-hidden">
+        <button
+          data-testid="button-open-telegram"
+          onClick={() => setModalOpen(true)}
+          className="w-full flex items-center justify-between gap-4 p-6 text-left hover:bg-white/[0.02] transition"
+        >
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+              <Send className="h-5 w-5 text-blue-400" />
+            </div>
+            <div>
+              <h3 className="text-white font-semibold">Telegram</h3>
+              <p className="text-slate-500 text-xs mt-0.5">
+                {list.length > 0 ? `${list.length} ta kanal ulangan` : "Ulanmagan"}
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
+        </button>
+      </Glass>
+      {modalOpen && <TelegramConnectModal onClose={() => setModalOpen(false)} />}
+    </>
+  );
+}
+
+function TelegramConnectModal({
+  onClose,
+  autoCreateChannelTitle,
+  onDone,
+}: {
+  onClose: () => void;
+  // Onboarding-only: when set, skip the "pick one of your channels" list
+  // entirely and create a brand-new channel with this title the moment
+  // the account connects — so a first-time user never has to leave
+  // OneOffice or already own a Telegram channel to get one.
+  autoCreateChannelTitle?: string;
+  onDone?: () => void;
+}) {
+  const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
   const { data: status, isLoading: statusLoading } = useGetTelegramMtprotoStatus();
+  useLockBodyScroll();
+  const connected = Boolean(status?.connected);
+
   const { data: channelsData, isLoading: channelsLoading } = useListTelegramMtprotoChannels({
-    enabled: Boolean(status?.connected),
+    enabled: connected,
   });
+  const { data: connectedChannels } = useListTelegramChannels({
+    // Polls while the modal is open so a fresh connect/disconnect (or a
+    // channel added on the Telegram side) reflects here without a manual
+    // refresh.
+    query: { refetchInterval: 5000 },
+  });
+  const connectChannel = useConnectTelegramMtprotoChannel();
+  const disconnectChannel = useDisconnectTelegramChannel();
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<number | null>(null);
+
   const sendCode = useTelegramMtprotoSendCode();
+  const resendCode = useTelegramMtprotoResendCode();
   const verifyCode = useTelegramMtprotoVerifyCode();
   const verifyPassword = useTelegramMtprotoVerifyPassword();
   const logout = useTelegramMtprotoLogout();
@@ -1574,6 +1830,10 @@ function TelegramMtprotoConnectorCard() {
   const [password, setPassword] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [deliveryMethod, setDeliveryMethod] = useState<
+    "app" | "sms" | "call" | "flash_call" | "other" | null
+  >(null);
+  const [resendNotice, setResendNotice] = useState("");
 
   function resetFlow() {
     setStep("idle");
@@ -1581,6 +1841,8 @@ function TelegramMtprotoConnectorCard() {
     setPassword("");
     setPendingId(null);
     setError("");
+    setDeliveryMethod(null);
+    setResendNotice("");
   }
 
   async function handleSendCode() {
@@ -1588,9 +1850,23 @@ function TelegramMtprotoConnectorCard() {
     try {
       const result = await sendCode.mutateAsync({ phoneNumber: phone.trim() });
       setPendingId(result.pendingId);
+      setDeliveryMethod(result.deliveryMethod);
       setStep("code");
     } catch (err: any) {
       setError(err?.data?.error || "Kod yuborilmadi. Raqamni tekshirib qayta urining.");
+    }
+  }
+
+  async function handleResendCode() {
+    if (!pendingId) return;
+    setError("");
+    setResendNotice("");
+    try {
+      const result = await resendCode.mutateAsync({ pendingId, phoneNumber: phone.trim() });
+      setDeliveryMethod(result.deliveryMethod);
+      setResendNotice("Kod qayta yuborildi.");
+    } catch (err: any) {
+      setError(err?.data?.error || "Kod qayta yuborilmadi.");
     }
   }
 
@@ -1633,271 +1909,441 @@ function TelegramMtprotoConnectorCard() {
   async function handleLogout() {
     await logout.mutateAsync();
     setPhone("");
+    queryClient.invalidateQueries({ queryKey: ["/api/telegram-mtproto/status"] });
   }
 
-  const connected = Boolean(status?.connected);
+  // Plain fetch, not a generated hook — this is a small one-off action
+  // (see auth.ts's resendStart), not worth a codegen round-trip for.
+  // Always attempts a send regardless of the existing bot-link state —
+  // for the case someone blocked @OneOfficeAIBot and unblocked it later,
+  // where the normal auto-/start on login correctly stays silent (link
+  // already exists, so it never re-sends on its own).
+  const [resendStartPending, setResendStartPending] = useState(false);
+  const [resendStartMessage, setResendStartMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const resendStart = { isPending: resendStartPending };
+
+  async function handleResendStart() {
+    setResendStartPending(true);
+    setResendStartMessage(null);
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/telegram-mtproto/resend-start"), {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setResendStartMessage({ type: "error", text: data?.error || "Xatolik yuz berdi." });
+        return;
+      }
+      setResendStartMessage({
+        type: "success",
+        text: "Xabar yuborildi — Telegram'da @OneOfficeAIBot chatini tekshiring.",
+      });
+    } catch {
+      setResendStartMessage({ type: "error", text: "Xatolik yuz berdi. Qayta urinib ko'ring." });
+    } finally {
+      setResendStartPending(false);
+    }
+  }
+
+  async function handleConnectChannel(mtprotoChannelId: string) {
+    setConnectingId(mtprotoChannelId);
+    try {
+      await connectChannel.mutateAsync({ mtprotoChannelId });
+      queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+    } catch {
+      // Rare (channel resolution failing server-side) — button just
+      // reverts and the person can try again.
+    } finally {
+      setConnectingId(null);
+    }
+  }
+
+  async function handleDisconnectChannel(rowId: number) {
+    setDisconnectingId(rowId);
+    try {
+      await disconnectChannel.mutateAsync({ id: rowId });
+      queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+    } finally {
+      setDisconnectingId(null);
+    }
+  }
+
   const channels = channelsData?.channels || [];
+  // Bot-format id ("-100...") for each discovered channel, matched against
+  // telegram_channels rows regardless of connectionType — a channel
+  // connected before this UI existed (connectionType "bot") still counts
+  // as connected here.
+  const connectedRowByChannelId = new Map(
+    (connectedChannels || []).map((ch: any) => [ch.channelId, ch]),
+  );
   const busy = sendCode.isPending || verifyCode.isPending || verifyPassword.isPending;
 
-  return (
-    <Glass className="p-6">
-      <div className="flex items-start justify-between gap-4 mb-1">
-        <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
-            <KeyRound className="h-5 w-5 text-violet-400" />
+  const connectedRows = channels.filter((c) => connectedRowByChannelId.has(`-100${c.id}`));
+  const availableRows = channels.filter((c) => !connectedRowByChannelId.has(`-100${c.id}`));
+
+  const [autoCreating, setAutoCreating] = useState(false);
+  const [autoCreateDone, setAutoCreateDone] = useState(false);
+  const [autoCreateError, setAutoCreateError] = useState("");
+
+  useEffect(() => {
+    if (!autoCreateChannelTitle || !connected || channelsLoading) return;
+    if (autoCreating || autoCreateDone) return;
+    // An account that already has a OneOffice-connected channel shouldn't
+    // get a surprise extra one — just report done.
+    if (connectedRows.length > 0) {
+      setAutoCreateDone(true);
+      onDone?.();
+      return;
+    }
+    (async () => {
+      setAutoCreating(true);
+      setAutoCreateError("");
+      try {
+        const token = await firebaseUser?.getIdToken();
+        const res = await fetch(apiUrl("/api/telegram-mtproto/channels/create"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ title: autoCreateChannelTitle }),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(body?.error || "Kanal yaratilmadi.");
+        queryClient.invalidateQueries({ queryKey: getListTelegramChannelsQueryKey() });
+        setAutoCreateDone(true);
+        onDone?.();
+      } catch (err: any) {
+        setAutoCreateError(err?.message || "Kanal yaratilmadi.");
+      } finally {
+        setAutoCreating(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCreateChannelTitle, connected, channelsLoading, connectedRows.length, autoCreating, autoCreateDone]);
+
+  function ChannelRow({ c, isConnected }: { c: (typeof channels)[number]; isConnected: boolean }) {
+    const row = connectedRowByChannelId.get(`-100${c.id}`);
+    return (
+      <div
+        className={`flex items-center justify-between gap-3 rounded-xl border px-3.5 py-3 ${
+          isConnected
+            ? "border-emerald-500/30 bg-emerald-500/[0.08]"
+            : "border-white/5 bg-white/[0.03]"
+        }`}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 border ${
+              isConnected
+                ? "bg-emerald-500/10 border-emerald-500/30"
+                : "bg-violet-500/10 border-violet-500/30"
+            }`}
+          >
+            <Radio className={`h-4 w-4 ${isConnected ? "text-emerald-400" : "text-violet-400"}`} />
           </div>
-          <div>
-            <h3 className="text-white font-semibold">Telegram MTProto</h3>
-            <p className="text-slate-500 text-xs mt-0.5">
-              {statusLoading
-                ? "Tekshirilmoqda..."
-                : connected
-                  ? "Ulangan — real statistika uchun"
-                  : "Ulanmagan"}
+          <div className="min-w-0">
+            <p className="text-white text-sm font-medium truncate">{c.title}</p>
+            <p className="text-slate-500 text-xs mt-0.5 truncate">
+              {c.username ? `@${c.username}` : "Shaxsiy kanal"}
+              {c.membersCount != null ? ` · ${c.membersCount.toLocaleString()} a'zo` : ""}
             </p>
           </div>
         </div>
-        {connected && (
+        {isConnected ? (
           <button
-            onClick={handleLogout}
-            disabled={logout.isPending}
-            className="shrink-0 flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 px-4 py-2.5 rounded-xl text-sm font-medium hover:border-rose-500/30 hover:text-rose-300 transition"
+            onClick={() => row && handleDisconnectChannel(row.id)}
+            disabled={!row || disconnectingId === row?.id}
+            title="Uzish"
+            className="shrink-0 flex items-center justify-center h-8 w-8 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-rose-500/15 hover:border-rose-500/30 hover:text-rose-300 disabled:opacity-40 transition"
           >
-            {logout.isPending ? (
+            {row && disconnectingId === row.id ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <LogOut className="h-3.5 w-3.5" />
+              <Check className="h-3.5 w-3.5" />
             )}
-            Uzish
+          </button>
+        ) : (
+          <button
+            onClick={() => handleConnectChannel(c.id)}
+            disabled={connectingId === c.id}
+            title="Ulash"
+            className="shrink-0 flex items-center justify-center h-8 w-8 rounded-full bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 hover:border-violet-500/40 hover:text-violet-300 transition"
+          >
+            {connectingId === c.id ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
           </button>
         )}
       </div>
+    );
+  }
 
-      <p className="text-slate-500 text-xs mt-3 leading-relaxed">
-        Bu — botdan mustaqil, alohida ulanish: haqiqiy Telegram hisobingizga
-        kirasiz (bot emas). Faqat obunachilar va post views kabi{" "}
-        <strong className="text-slate-300">real statistikani</strong> o'qish
-        uchun ishlatiladi — kanal ulanishi va publish qilish hamon botga
-        bog'liq bo'lib qoladi.
-      </p>
-
-      {error && <p className="text-rose-300 text-xs mt-3">{error}</p>}
-
-      {connected ? (
-        channelsLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="w-full max-w-md my-4">
+        <Glass className="p-6 max-h-[85vh] flex flex-col">
+          <div className="flex items-start justify-between gap-4 mb-1 shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+                <Send className="h-5 w-5 text-blue-400" />
+              </div>
+              <div>
+                <h3 className="text-white font-semibold">Telegram</h3>
+                <p className="text-slate-500 text-xs mt-0.5">
+                  {statusLoading
+                    ? "Tekshirilmoqda..."
+                    : connected
+                      ? "Ulangan"
+                      : "Ulanmagan"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {connected && (
+                <button
+                  onClick={handleResendStart}
+                  disabled={resendStart.isPending}
+                  title="Bot bilan bog'lanishni yangilash (agar buyurtma xabarlari kelmasa)"
+                  className="flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 px-3 py-2 rounded-xl text-xs font-medium hover:border-violet-500/40 hover:text-violet-300 transition"
+                >
+                  {resendStart.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  Botni qayta ishga tushirish
+                </button>
+              )}
+              {connected && (
+                <button
+                  onClick={handleLogout}
+                  disabled={logout.isPending}
+                  title="Hisobni uzish"
+                  className="flex items-center gap-1.5 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-300 px-3 py-2 rounded-xl text-xs font-medium hover:border-rose-500/30 hover:text-rose-300 transition"
+                >
+                  {logout.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <LogOut className="h-3.5 w-3.5" />
+                  )}
+                  Uzish
+                </button>
+              )}
+              <button onClick={onClose} className="text-slate-400 hover:text-white p-1">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
           </div>
-        ) : channels.length === 0 ? (
-          <p className="text-slate-500 text-sm mt-5">
-            Bu hisob hech qanday kanalda admin emas.
-          </p>
-        ) : (
-          <div className="mt-5 divide-y divide-white/5">
-            {channels.map((c) => (
-              <div
-                key={c.id}
-                className="flex items-center justify-between gap-3 py-3.5 first:pt-0 last:pb-0"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-9 w-9 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-center justify-center shrink-0">
-                    <Radio className="h-4 w-4 text-violet-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-white text-sm font-medium truncate">{c.title}</p>
-                    <p className="text-slate-500 text-xs mt-0.5 truncate">
-                      {c.username ? `@${c.username}` : "Shaxsiy kanal"}
-                      {c.membersCount != null ? ` · ${c.membersCount.toLocaleString()} a'zo` : ""}
+
+          {resendStartMessage && (
+            <p
+              className={`text-xs mt-2 shrink-0 ${resendStartMessage.type === "success" ? "text-emerald-400" : "text-rose-400"}`}
+            >
+              {resendStartMessage.text}
+            </p>
+          )}
+
+          {!connected && (
+            <p className="text-slate-500 text-xs mt-3 leading-relaxed shrink-0">
+              Kanallaringizni ulash uchun haqiqiy Telegram hisobingizga
+              kiring — bot emas, o'zingizning hisobingiz.
+            </p>
+          )}
+
+          {error && <p className="text-rose-300 text-xs mt-3 shrink-0">{error}</p>}
+
+          {connected ? (
+            autoCreateChannelTitle ? (
+              <div className="mt-5 flex flex-col items-center text-center gap-3 py-6">
+                {autoCreateError ? (
+                  <>
+                    <div className="h-12 w-12 rounded-2xl bg-rose-500/10 flex items-center justify-center">
+                      <AlertCircle className="h-5 w-5 text-rose-400" />
+                    </div>
+                    <p className="text-rose-300 text-sm">{autoCreateError}</p>
+                    <button
+                      onClick={() => setAutoCreateError("")}
+                      className="text-xs bg-white/5 border border-white/10 text-white px-4 py-2 rounded-xl"
+                    >
+                      Qayta urinish
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Loader2 className="h-6 w-6 text-violet-400 animate-spin" />
+                    <p className="text-slate-300 text-sm">
+                      "{autoCreateChannelTitle}" kanali yaratilmoqda...
                     </p>
-                  </div>
-                </div>
-                {c.isCreator && (
-                  <span className="shrink-0 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">
-                    Egasi
-                  </span>
+                  </>
                 )}
               </div>
-            ))}
-          </div>
-        )
-      ) : step === "idle" ? (
-        <button
-          data-testid="button-connect-mtproto"
-          onClick={() => setStep("phone")}
-          className="mt-5 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition"
-        >
-          <Link2 className="h-3.5 w-3.5" />
-          Ulash
-        </button>
-      ) : (
-        <div className="mt-5 space-y-3 max-w-sm">
-          {step === "phone" && (
-            <>
-              <input
-                type="tel"
-                placeholder="+998901234567"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSendCode}
-                  disabled={busy || !phone.trim()}
-                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
-                >
-                  {sendCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Kod yuborish
-                </button>
-                <button
-                  onClick={resetFlow}
-                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
-                >
-                  Bekor qilish
-                </button>
-              </div>
-            </>
+            ) : (
+            <div className="mt-5 overflow-y-auto -mx-1 px-1 space-y-5 flex-1 min-h-0">
+              {channelsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-5 w-5 text-violet-400 animate-spin" />
+                </div>
+              ) : channels.length === 0 ? (
+                <p className="text-slate-500 text-sm">
+                  Bu hisob hech qanday kanalda admin emas.
+                </p>
+              ) : (
+                <>
+                  {connectedRows.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] uppercase tracking-wide text-emerald-400/80 font-medium">
+                        Ulangan
+                      </p>
+                      {connectedRows.map((c) => (
+                        <ChannelRow key={c.id} c={c} isConnected />
+                      ))}
+                    </div>
+                  )}
+                  {availableRows.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[11px] uppercase tracking-wide text-slate-500 font-medium">
+                        Ulash mumkin
+                      </p>
+                      {availableRows.map((c) => (
+                        <ChannelRow key={c.id} c={c} isConnected={false} />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            )
+          ) : step === "idle" ? (
+            <button
+              data-testid="button-connect-mtproto"
+              onClick={() => setStep("phone")}
+              className="mt-5 flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg shadow-violet-900/30 transition self-start"
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              Ulash
+            </button>
+          ) : (
+            <div className="mt-5 space-y-3">
+              {step === "phone" && (
+                <>
+                  <input
+                    type="tel"
+                    placeholder="+998901234567"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSendCode}
+                      disabled={busy || !phone.trim()}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                    >
+                      {sendCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Kod yuborish
+                    </button>
+                    <button
+                      onClick={resetFlow}
+                      className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                </>
+              )}
+              {step === "code" && (
+                <>
+                  <p className="text-slate-400 text-xs leading-relaxed">
+                    {deliveryMethod === "app" &&
+                      "Kod Telegram ilovasining o'zidagi \"Telegram\" nomli tizim chat'iga yuborildi — ilovani oching va o'sha yerdan qarang (SMS emas)."}
+                    {deliveryMethod === "sms" && "Kod SMS orqali yuborildi."}
+                    {(deliveryMethod === "call" || deliveryMethod === "flash_call") &&
+                      "Kod telefon qo'ng'irog'i orqali yuboriladi/yuborildi."}
+                    {(deliveryMethod === "other" || !deliveryMethod) &&
+                      "Telegram tanlagan usul bilan kod yuborildi."}
+                  </p>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="Telegramdan kelgan kod"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+                  />
+                  <div className="flex gap-2 items-center flex-wrap">
+                    <button
+                      onClick={handleVerifyCode}
+                      disabled={busy || !code.trim()}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                    >
+                      {verifyCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Tasdiqlash
+                    </button>
+                    <button
+                      onClick={resetFlow}
+                      className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleResendCode}
+                    disabled={resendCode.isPending}
+                    className="flex items-center gap-1.5 text-violet-300 text-xs hover:text-violet-200 disabled:opacity-40 transition"
+                  >
+                    {resendCode.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                    Kod kelmadimi? Boshqa usul bilan yuborish
+                  </button>
+                  {resendNotice && <p className="text-emerald-300 text-xs">{resendNotice}</p>}
+                </>
+              )}
+              {step === "password" && (
+                <>
+                  <input
+                    type="password"
+                    placeholder="2FA parol"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleVerifyPassword}
+                      disabled={busy || !password}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
+                    >
+                      {verifyPassword.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Tasdiqlash
+                    </button>
+                    <button
+                      onClick={resetFlow}
+                      className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
-          {step === "code" && (
-            <>
-              <input
-                type="text"
-                inputMode="numeric"
-                placeholder="Telegramdan kelgan kod"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleVerifyCode}
-                  disabled={busy || !code.trim()}
-                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
-                >
-                  {verifyCode.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Tasdiqlash
-                </button>
-                <button
-                  onClick={resetFlow}
-                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
-                >
-                  Bekor qilish
-                </button>
-              </div>
-            </>
-          )}
-          {step === "password" && (
-            <>
-              <input
-                type="password"
-                placeholder="2FA parol"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500/50"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleVerifyPassword}
-                  disabled={busy || !password}
-                  className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition"
-                >
-                  {verifyPassword.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Tasdiqlash
-                </button>
-                <button
-                  onClick={resetFlow}
-                  className="text-slate-400 text-sm px-3 py-2.5 hover:text-slate-200 transition"
-                >
-                  Bekor qilish
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-    </Glass>
+        </Glass>
+      </div>
+    </div>
   );
 }
 
-function ConnectorsPage({
-  instagramNotice,
-  onDismissInstagramNotice,
-  vkNotice,
-  onDismissVkNotice,
-  youtubeNotice,
-  onDismissYoutubeNotice,
-}: {
-  instagramNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissInstagramNotice?: () => void;
-  vkNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissVkNotice?: () => void;
-  youtubeNotice?: { type: "success" | "error"; message: string } | null;
-  onDismissYoutubeNotice?: () => void;
-}) {
+function ConnectorsPage() {
   return (
     <div className="p-6 md:p-10 max-w-2xl space-y-6">
-      {instagramNotice && (
-        <div
-          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
-            instagramNotice.type === "success"
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-          }`}
-        >
-          <span>{instagramNotice.message}</span>
-          <button
-            onClick={onDismissInstagramNotice}
-            className="shrink-0 opacity-70 hover:opacity-100 transition"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {vkNotice && (
-        <div
-          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
-            vkNotice.type === "success"
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-          }`}
-        >
-          <span>{vkNotice.message}</span>
-          <button
-            onClick={onDismissVkNotice}
-            className="shrink-0 opacity-70 hover:opacity-100 transition"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {youtubeNotice && (
-        <div
-          className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
-            youtubeNotice.type === "success"
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-              : "border-rose-500/30 bg-rose-500/10 text-rose-300"
-          }`}
-        >
-          <span>{youtubeNotice.message}</span>
-          <button
-            onClick={onDismissYoutubeNotice}
-            className="shrink-0 opacity-70 hover:opacity-100 transition"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      <TelegramConnectorCard />
-
-      <TelegramMtprotoConnectorCard />
-
-      <InstagramConnectorCard />
-
-      <VkConnectorCard />
-
+      <TelegramCard />
       <YoutubeConnectorCard />
     </div>
   );
@@ -2053,7 +2499,7 @@ function VkConnectorCard() {
 
   async function authedFetch(path: string, init: RequestInit = {}) {
     const token = await firebaseUser?.getIdToken();
-    const res = await fetch(path, {
+    const res = await fetch(apiUrl(path), {
       ...init,
       headers: {
         ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -2248,7 +2694,7 @@ function YoutubeConnectorCard() {
 
   async function authedFetch(path: string, init: RequestInit = {}) {
     const token = await firebaseUser?.getIdToken();
-    const res = await fetch(path, {
+    const res = await fetch(apiUrl(path), {
       ...init,
       headers: {
         ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -2430,7 +2876,7 @@ function StoreConnectorCard() {
     queryKey: ["store-config"],
     queryFn: async () => {
       const token = await firebaseUser?.getIdToken();
-      const res = await fetch("/api/connectors/store/config", {
+      const res = await fetch(apiUrl("/api/connectors/store/config"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load store config");
@@ -2519,6 +2965,7 @@ function ShopFrontPage() {
 // ---------------------------------------------------------------------------
 
 function Sidebar({ user, active, setActive, onLogout }: any) {
+  const t = useT();
   const displayName = user
     ? `${user.firstName} ${user.lastName}`.trim()
     : "Aziz Karimov";
@@ -2526,12 +2973,13 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
   const subLabel = user?.company || "Pro plan";
 
   const items = [
-    { key: "dashboard", label: "Dashboard", icon: Home },
-    { key: "inventory", label: "Inventory", icon: Package },
-    { key: "connectors", label: "Connectors", icon: Send },
-    { key: "shopfront", label: "ShopFront", icon: Globe },
-    { key: "settings", label: "Settings", icon: Settings },
-    { key: "profile", label: "Profile", icon: User },
+    { key: "dashboard", label: t("nav.dashboard"), icon: Home },
+    { key: "inventory", label: t("nav.inventory"), icon: Package },
+    { key: "orders", label: t("nav.orders"), icon: ShoppingBag },
+    { key: "connectors", label: t("nav.connectors"), icon: Send },
+    { key: "shopfront", label: t("nav.shopfront"), icon: Globe },
+    { key: "settings", label: t("nav.settings"), icon: Settings },
+    { key: "profile", label: t("nav.profile"), icon: User },
   ];
 
   return (
@@ -2585,12 +3033,14 @@ function Sidebar({ user, active, setActive, onLogout }: any) {
 // ---------------------------------------------------------------------------
 
 function BottomNav({ active, setActive }: any) {
+  const t = useT();
   const items = [
-    { key: "dashboard", label: "Home", icon: Home },
-    { key: "inventory", label: "Inventory", icon: Package },
-    { key: "connectors", label: "Connect", icon: Send },
-    { key: "shopfront", label: "ShopFront", icon: Globe },
-    { key: "profile", label: "Profile", icon: User },
+    { key: "dashboard", label: t("nav.home"), icon: Home },
+    { key: "inventory", label: t("nav.inventory"), icon: Package },
+    { key: "orders", label: t("nav.orders"), icon: ShoppingBag },
+    { key: "connectors", label: t("nav.connect"), icon: Send },
+    { key: "shopfront", label: t("nav.shopfront"), icon: Globe },
+    { key: "profile", label: t("nav.profile"), icon: User },
   ];
 
   return (
@@ -2770,29 +3220,119 @@ function ProductImagePicker({
   );
 }
 
+// Shared by ProductForm (right after creating/saving a product) and
+// InventoryPage (a one-time sweep over existing products on page load) —
+// see productResearch.ts's route comment for why this is safe to call
+// repeatedly: without a cached row yet it runs the real research once and
+// caches it; with one already cached it's an instant, cheap no-op.
+async function triggerProductResearch(productId: number, token: string): Promise<void> {
+  try {
+    await fetch(apiUrl(`/api/products/${productId}/research`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    // Best-effort — a failed trigger just means research runs inline the
+    // next time something needs it (Create Post, or the next reload).
+  }
+}
+
 function ProductForm({
   initial,
   onCancel,
   onSaved,
+  skipDeliveryPrompt,
 }: {
   initial?: ProductItem | null;
   onCancel: () => void;
-  onSaved: () => void;
+  onSaved: (wasCreate: boolean) => void;
+  // Onboarding: don't interrupt the guided first-product walkthrough with
+  // an unrelated "how's delivery handled?" prompt — go straight to
+  // onSaved so the congrats modal fires right after creation.
+  skipDeliveryPrompt?: boolean;
 }) {
   const isEdit = !!initial;
   const [name, setName] = useState(initial?.name ?? "");
-  const [category, setCategory] = useState(initial?.category ?? CATEGORIES[0]);
+  const [category, setCategory] = useState(initial?.category ?? "");
   const [costPrice, setCostPrice] = useState(initial?.costPrice ?? "");
   const [sellPrice, setSellPrice] = useState(initial?.sellPrice ?? "");
   const [currency, setCurrency] = useState(initial?.currency ?? "UZS");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [images, setImages] = useState<string[]>(initial?.images ?? []);
+  const [characteristics, setCharacteristics] = useState<{ label: string; value: string }[]>(
+    initial?.characteristics ?? [],
+  );
   const [error, setError] = useState("");
+  // Delivery modal — shown right after a brand-new product is created
+  // (never on edit) when the seller doesn't already have a saved default.
+  const [deliveryModalProductId, setDeliveryModalProductId] = useState<number | null>(null);
 
+  const { user: firebaseUser } = useAuth();
   const queryClient = useQueryClient();
   const createProduct = useCreateProduct();
   const updateProduct = useUpdateProduct();
   const saving = createProduct.isPending || updateProduct.isPending;
+
+  // AI card (view/edit) — only meaningful once the product already exists
+  // and has been researched at least once.
+  const { data: research } = useGetProductResearch(initial?.id, { enabled: isEdit });
+  const updateResearch = useUpdateProductResearch(initial?.id);
+  const [cardEditing, setCardEditing] = useState(false);
+  const [cardSearchTitle, setCardSearchTitle] = useState("");
+  const [cardSearchKeywords, setCardSearchKeywords] = useState("");
+  const [cardViewHook, setCardViewHook] = useState("");
+  const [cardBuyHeadline, setCardBuyHeadline] = useState("");
+  const [cardBuyCta, setCardBuyCta] = useState("");
+  const [cardPopularNames, setCardPopularNames] = useState("");
+
+  // Populate the editable fields once the cached card loads (or reloads
+  // after a save) — but only while the person isn't actively mid-edit, so
+  // a background refetch never clobbers what they're typing.
+  useEffect(() => {
+    if (!research || cardEditing) return;
+    setCardSearchTitle(research.card.searchTitle ?? "");
+    setCardSearchKeywords(research.card.searchKeywords ?? "");
+    setCardViewHook(research.card.viewHook ?? "");
+    setCardBuyHeadline(research.card.buyHeadline ?? "");
+    setCardBuyCta(research.card.buyCta ?? "");
+    setCardPopularNames((research.card.popularNames ?? []).join(", "));
+  }, [research, cardEditing]);
+
+  async function saveCard() {
+    try {
+      await updateResearch.mutateAsync({
+        searchTitle: cardSearchTitle.trim(),
+        searchKeywords: cardSearchKeywords.trim(),
+        viewHook: cardViewHook.trim(),
+        buyHeadline: cardBuyHeadline.trim(),
+        buyCta: cardBuyCta.trim(),
+        popularNames: cardPopularNames
+          .split(",")
+          .map((n) => n.trim())
+          .filter(Boolean)
+          .slice(0, 5),
+      });
+      setCardEditing(false);
+    } catch {
+      // updateResearch.error already renders below — nothing else to do.
+    }
+  }
+
+  // Fire-and-forget: as soon as a product is saved as "active" with a name
+  // + price, kick off its one-time deep AI research in the background (not
+  // awaited — the user doesn't wait for this). By the time they open
+  // "Create Post" for it, the Professional Product Card is already cached
+  // and post generation is instant instead of re-running AI/search.
+  async function triggerBackgroundResearch(productId: number) {
+    try {
+      const token = await firebaseUser?.getIdToken();
+      if (!token) return;
+      await triggerProductResearch(productId, token);
+    } catch {
+      // Best-effort — a failed background trigger just means the first
+      // "Create Post" for this product falls back to researching inline.
+    }
+  }
 
   async function save(status: "draft" | "active") {
     setError("");
@@ -2809,15 +3349,34 @@ function ProductForm({
       description: description.trim(),
       images,
       status,
+      characteristics: characteristics
+        .map((c) => ({ label: c.label.trim(), value: c.value.trim() }))
+        .filter((c) => c.label && c.value),
     };
     try {
+      let savedId = initial?.id;
+      let createdDeliveryInfo = "";
       if (isEdit && initial) {
         await updateProduct.mutateAsync({ id: initial.id, data });
       } else {
-        await createProduct.mutateAsync({ data });
+        const created = await createProduct.mutateAsync({ data });
+        savedId = (created as any)?.id;
+        createdDeliveryInfo = (created as any)?.deliveryInfo ?? "";
       }
       queryClient.invalidateQueries({ queryKey: getListProductsQueryKey() });
-      onSaved();
+      if (status === "active" && savedId && name.trim() && sellPrice.trim()) {
+        void triggerBackgroundResearch(savedId);
+      }
+      // Only for a brand-new product saved as active, and only when it
+      // didn't already get a recalled default delivery text from the
+      // backend (see POST /products — that's the "eski textni chaqirish"
+      // silent-reuse path): ask once, via the modal, instead of calling
+      // onSaved() immediately.
+      if (!skipDeliveryPrompt && !isEdit && status === "active" && savedId && !createdDeliveryInfo) {
+        setDeliveryModalProductId(savedId);
+        return;
+      }
+      onSaved(!isEdit);
     } catch (err: any) {
       setError(
         err?.data?.error || err?.message || "Saqlashda xatolik yuz berdi.",
@@ -2848,6 +3407,7 @@ function ProductForm({
               <Package className="h-3 w-3" /> Mahsulot nomi
             </label>
             <input
+              data-tour="product-name-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="masalan: AeroSound Pro Earbuds"
@@ -2857,13 +3417,17 @@ function ProductForm({
 
           <div>
             <label className="text-xs text-slate-400 mb-1.5 flex items-center gap-1.5">
-              <Tag className="h-3 w-3" /> Kategoriya
+              <Tag className="h-3 w-3" /> Kategoriya{" "}
+              <span className="text-slate-600 font-normal">(ixtiyoriy)</span>
             </label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-400 transition"
             >
+              <option value="" className="bg-slate-900">
+                — Tanlanmagan —
+              </option>
               {CATEGORIES.map((c) => (
                 <option key={c} value={c} className="bg-slate-900">
                   {c}
@@ -2889,6 +3453,7 @@ function ProductForm({
                 <DollarSign className="h-3 w-3" /> Sotish narxi
               </label>
               <input
+                data-tour="product-price-input"
                 value={sellPrice}
                 onChange={(e) => setSellPrice(e.target.value)}
                 placeholder="masalan: 349,000"
@@ -2931,6 +3496,189 @@ function ProductForm({
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none"
             />
           </div>
+
+          {/* Xarakteristika — the one part of "pro info" that stays a
+              plain seller-entered field (short structured facts like
+              Rang: Qora aren't something a web search reliably has).
+              Tarkib/Sostav, Foydalanish bo'yicha ko'rsatma, and Yetkazib
+              berish are NOT typed here anymore:
+                - Tarkib/Ko'rsatma are researched automatically (see the
+                  AI card panel below and triggerBackgroundResearch) —
+                  same one-time AI+web-search pass that already writes
+                  the post copy, just reused instead of asked for twice.
+                - Yetkazib berish is collected once via a short modal
+                  right after a NEW product is created (see the
+                  DeliveryInfoModal render below save()). */}
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-2">
+            <div className="flex items-center gap-1.5 text-xs text-slate-400">
+              <Layers className="h-3.5 w-3.5" /> Xarakteristika (ixtiyoriy) — vitrinada
+              spec jadvali sifatida ko'rinadi
+            </div>
+            <div className="space-y-2">
+              {characteristics.map((row, i) => (
+                <div key={i} className="flex gap-2">
+                  <input
+                    value={row.label}
+                    onChange={(e) => {
+                      const next = [...characteristics];
+                      next[i] = { ...next[i], label: e.target.value };
+                      setCharacteristics(next);
+                    }}
+                    placeholder="Nomi (masalan: Rang)"
+                    className="w-2/5 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+                  />
+                  <input
+                    value={row.value}
+                    onChange={(e) => {
+                      const next = [...characteristics];
+                      next[i] = { ...next[i], value: e.target.value };
+                      setCharacteristics(next);
+                    }}
+                    placeholder="Qiymati (masalan: Qora)"
+                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCharacteristics(characteristics.filter((_, j) => j !== i))
+                    }
+                    className="shrink-0 h-9 w-9 flex items-center justify-center rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              {characteristics.length < 40 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCharacteristics([...characteristics, { label: "", value: "" }])
+                  }
+                  className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-300 transition"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Xususiyat qo'shish
+                </button>
+              )}
+            </div>
+          </div>
+
+          {isEdit && research && (
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs text-violet-300">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  AI kartasi — postlarda ishlatiladigan matnlar
+                </div>
+                {!cardEditing && (
+                  <button
+                    type="button"
+                    onClick={() => setCardEditing(true)}
+                    className="text-xs text-violet-300 hover:text-violet-200 transition"
+                  >
+                    Tahrirlash
+                  </button>
+                )}
+              </div>
+
+              {cardEditing ? (
+                <>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Qidiruv nomi
+                    </label>
+                    <input
+                      value={cardSearchTitle}
+                      onChange={(e) => setCardSearchTitle(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Kalit so'zlar
+                    </label>
+                    <input
+                      value={cardSearchKeywords}
+                      onChange={(e) => setCardSearchKeywords(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      E'tibor tortuvchi jumla
+                    </label>
+                    <input
+                      value={cardViewHook}
+                      onChange={(e) => setCardViewHook(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Xarid sarlavhasi
+                    </label>
+                    <input
+                      value={cardBuyHeadline}
+                      onChange={(e) => setCardBuyHeadline(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Harakatga chaqiruv (CTA)
+                    </label>
+                    <input
+                      value={cardBuyCta}
+                      onChange={(e) => setCardBuyCta(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 mb-1 block">
+                      Mashhur nomlar (vergul bilan ajrating)
+                    </label>
+                    <input
+                      value={cardPopularNames}
+                      onChange={(e) => setCardPopularNames(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-400 transition"
+                    />
+                  </div>
+                  {updateResearch.isError && (
+                    <p className="text-rose-400 text-xs">Saqlashda xatolik yuz berdi.</p>
+                  )}
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={saveCard}
+                      disabled={updateResearch.isPending}
+                      className="flex items-center gap-1.5 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white px-3.5 py-2 rounded-lg text-xs font-medium transition"
+                    >
+                      {updateResearch.isPending && (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      )}
+                      Saqlash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCardEditing(false)}
+                      className="text-slate-400 text-xs px-2 py-2 hover:text-slate-200 transition"
+                    >
+                      Bekor qilish
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-1.5 text-xs text-slate-300">
+                  {research.card.viewHook && <p>{research.card.viewHook}</p>}
+                  {research.card.buyCta && (
+                    <p className="text-slate-400">{research.card.buyCta}</p>
+                  )}
+                  {!research.card.viewHook && !research.card.buyCta && (
+                    <p className="text-slate-500">Hali to'ldirilmagan.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {error && (
@@ -2972,6 +3720,7 @@ function ProductForm({
           )}
 
           <button
+            data-tour="product-save-button"
             onClick={() => save(isEdit ? (initial!.status as "draft" | "active") : "active")}
             disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
@@ -2980,6 +3729,115 @@ function ProductForm({
               <Loader2 className="h-4 w-4 animate-spin" />
             )}
             {isEdit ? "O'zgarishlarni saqlash" : "Mahsulot yaratish"}
+          </button>
+        </div>
+      </Glass>
+
+      {deliveryModalProductId && (
+        <DeliveryInfoModal
+          productId={deliveryModalProductId}
+          onDone={() => {
+            setDeliveryModalProductId(null);
+            onSaved(true);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Smart delivery modal — shown once, right after a brand-new product is
+// created, only when the seller doesn't already have a saved default
+// delivery text (POST /products silently recalls the saved default
+// otherwise — see products.ts). The seller types a rough note; the backend
+// rewrites it into clean storefront copy before saving, seamlessly (no
+// "AI is generating..." messaging here on purpose — it should just look
+// like their note got saved and polished).
+// ---------------------------------------------------------------------------
+
+function DeliveryInfoModal({
+  productId,
+  onDone,
+}: {
+  productId: number;
+  onDone: () => void;
+}) {
+  const [rawText, setRawText] = useState("");
+  const [busy, setBusy] = useState<"this" | "all" | "skip" | null>(null);
+  const [error, setError] = useState("");
+  const { user: firebaseUser } = useAuth();
+  useLockBodyScroll();
+
+  async function choose(scope: "this" | "all" | "skip") {
+    if (scope !== "skip" && !rawText.trim()) {
+      setError("Yetkazib berish haqida bir necha jumla yozing.");
+      return;
+    }
+    setError("");
+    setBusy(scope);
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl(`/api/products/${productId}/delivery-info`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ rawText: rawText.trim(), scope }),
+      });
+      if (!res.ok) throw new Error();
+      onDone();
+    } catch {
+      setError("Saqlashda xatolik yuz berdi. Qayta urinib ko'ring.");
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm px-0 sm:px-4">
+      <Glass className="w-full sm:max-w-md !rounded-t-2xl sm:!rounded-2xl p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Truck className="h-4 w-4 text-violet-400" />
+          <h3 className="text-white font-semibold">Yetkazib berish</h3>
+        </div>
+        <p className="text-slate-400 text-sm mb-4">
+          Mahsulot muvaffaqiyatli yaratildi. Yetkazib berish haqida bir necha
+          so'z yozing — vitrinada chiroyli qilib ko'rsatamiz.
+        </p>
+        <textarea
+          value={rawText}
+          onChange={(e) => setRawText(e.target.value)}
+          placeholder="Masalan: Toshkent bo'ylab 1 kunda, viloyatlarga 2-3 kunda, yetkazib berish 20 000 so'm..."
+          rows={3}
+          autoFocus
+          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none mb-3"
+        />
+        {error && <p className="text-rose-400 text-xs mb-3">{error}</p>}
+        <div className="space-y-2">
+          <button
+            onClick={() => choose("all")}
+            disabled={busy !== null}
+            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white py-3 rounded-xl text-sm font-medium transition"
+          >
+            {busy === "all" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Barcha mahsulotlarga saqlash
+          </button>
+          <button
+            onClick={() => choose("this")}
+            disabled={busy !== null}
+            className="w-full flex items-center justify-center gap-2 bg-white/5 border border-white/10 disabled:opacity-40 text-slate-200 py-3 rounded-xl text-sm font-medium hover:bg-white/10 transition"
+          >
+            {busy === "this" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Faqat shu mahsulot uchun
+          </button>
+          <button
+            onClick={() => choose("skip")}
+            disabled={busy !== null}
+            className="w-full flex items-center justify-center gap-2 disabled:opacity-40 text-slate-500 py-2 rounded-xl text-sm hover:text-slate-300 transition"
+          >
+            {busy === "skip" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Dostavka qo'shmaslik
           </button>
         </div>
       </Glass>
@@ -3001,7 +3859,7 @@ function ProductCard({
   const thumb = product.images?.[0];
   return (
     <Glass className="p-2.5 sm:p-4 flex flex-col">
-      <div className="relative rounded-lg sm:rounded-xl overflow-hidden bg-white/5 aspect-square mb-2 sm:mb-3 flex items-center justify-center">
+      <div className="relative rounded-lg sm:rounded-xl overflow-hidden bg-white/5 aspect-[3/4] mb-2 sm:mb-3 flex items-center justify-center">
         {thumb ? (
           <img src={thumb} alt={product.name} className="w-full h-full object-cover" />
         ) : (
@@ -3062,25 +3920,65 @@ function InventoryPage({
   editingProduct,
   onCloseForm,
   onEditProduct,
+  onProductCreated,
+  skipDeliveryPrompt,
 }: {
   formOpen: boolean;
   editingProduct: ProductItem | null;
   onCloseForm: () => void;
   onEditProduct: (p: ProductItem) => void;
+  onProductCreated?: () => void;
+  skipDeliveryPrompt?: boolean;
 }) {
   const [tab, setTab] = useState<"all" | "draft" | "active">("all");
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const queryClient = useQueryClient();
+  const { user: firebaseUser } = useAuth();
 
   const { data: products, isLoading } = useListProducts();
   const deleteProduct = useDeleteProduct();
+
+  // "...yoki bor mahsulotlar bilan saytni reload qilganda bir marta ai
+  // har mahsulot uchun shu malumotlarni topishi kerak" — a one-time sweep
+  // over the current product list every time this page loads, so a
+  // product that was created before this research even existed (or whose
+  // background trigger at creation-time failed) still gets researched.
+  // Cheap and safe to call every load: the backend route this hits is
+  // already idempotent (see productResearch.ts) — a product with a cached
+  // result just returns it instantly, no AI/search work happens twice.
+  useEffect(() => {
+    if (!products || !firebaseUser) return;
+    const candidates = products.filter(
+      (p) => p.status === "active" && p.name.trim() && p.sellPrice.trim(),
+    );
+    if (candidates.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const token = await firebaseUser.getIdToken();
+      if (cancelled) return;
+      for (const p of candidates) {
+        if (cancelled) return;
+        void triggerProductResearch(p.id, token);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-run only when the product list itself changes (new/removed
+    // products), not on every unrelated re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, firebaseUser]);
 
   if (formOpen) {
     return (
       <ProductForm
         initial={editingProduct}
         onCancel={onCloseForm}
-        onSaved={onCloseForm}
+        skipDeliveryPrompt={skipDeliveryPrompt}
+        onSaved={(wasCreate) => {
+          onCloseForm();
+          if (wasCreate) onProductCreated?.();
+        }}
       />
     );
   }
@@ -3173,16 +4071,34 @@ function DashboardSummaryCards({
   totalViews,
   viewsKnown,
   topChannel,
+  todaySubscribers,
+  yesterdaySubscribers,
+  todayViews,
+  yesterdayViews,
 }: {
   totalSubscribers?: number;
   totalViews?: number;
   viewsKnown: boolean;
   topChannel?: { title: string; views: number } | null;
+  todaySubscribers?: number;
+  yesterdaySubscribers?: number;
+  todayViews?: number;
+  yesterdayViews?: number;
 }) {
   const engagement =
     viewsKnown && totalViews !== undefined && totalSubscribers
       ? totalViews / totalSubscribers
       : null;
+
+  // "bugun 2k emas, bugun alohida 1k" — each card's own today-vs-yesterday
+  // line, right under the all-time total, so the two numbers are never
+  // confused with each other.
+  function todayLine(today?: number, yesterday?: number): string | undefined {
+    if (today === undefined) return undefined;
+    const parts = [`Bugun: ${today.toLocaleString()}`];
+    if (yesterday !== undefined) parts.push(`Kecha: ${yesterday.toLocaleString()}`);
+    return parts.join(" · ");
+  }
 
   const cards = [
     {
@@ -3190,12 +4106,14 @@ function DashboardSummaryCards({
       color: "#22d3ee",
       label: "Jami obunachilar",
       value: totalSubscribers !== undefined ? totalSubscribers.toLocaleString() : "—",
+      sub: todayLine(todaySubscribers, yesterdaySubscribers),
     },
     {
       icon: Eye,
       color: "#a78bfa",
       label: "Jami ko'rishlar",
       value: viewsKnown && totalViews !== undefined ? totalViews.toLocaleString() : "—",
+      sub: viewsKnown ? todayLine(todayViews, yesterdayViews) : undefined,
     },
     {
       icon: BarChart3,
@@ -3243,13 +4161,32 @@ function ChannelBreakdownList({
   mtprotoConnected,
 }: {
   botChannels?: { id: number; channelTitle: string; subscribers: number | null }[];
-  mtprotoChannels?: { channelRowId: number; views: number | null }[];
+  mtprotoChannels?: {
+    channelRowId: number;
+    channelTitle: string;
+    subscribers: number | null;
+    views: number | null;
+  }[];
   mtprotoConnected: boolean;
 }) {
-  const viewsByChannel = new Map(
-    (mtprotoChannels ?? []).map((c) => [c.channelRowId, c.views]),
+  const mtprotoByChannel = new Map(
+    (mtprotoChannels ?? []).map((c) => [c.channelRowId, c]),
   );
-  const rows = botChannels ?? [];
+
+  // Prefer MTProto's per-channel count — it resolves every connected
+  // channel (bot- or mtproto-connectionType) via the account's own admin
+  // access, whereas the bot API's count only ever works for a channel the
+  // bot itself is a member/admin of. Falling back to the bot API value
+  // keeps things working before MTProto is connected at all.
+  const rows = (botChannels ?? []).map((ch) => {
+    const m = mtprotoByChannel.get(ch.id);
+    return {
+      key: `bot-${ch.id}`,
+      title: ch.channelTitle,
+      subscribers: m?.subscribers ?? ch.subscribers,
+      views: m?.views ?? null,
+    };
+  });
 
   if (rows.length === 0) {
     return null;
@@ -3264,33 +4201,29 @@ function ChannelBreakdownList({
       <div className="space-y-2">
         {rows
           .slice()
-          .sort(
-            (a: { id: number }, b: { id: number }) =>
-              (viewsByChannel.get(b.id) ?? -1) - (viewsByChannel.get(a.id) ?? -1),
-          )
-          .map((ch: { id: number; channelTitle: string; subscribers: number | null }) => {
-            const views = viewsByChannel.get(ch.id);
-            return (
-              <div
-                key={ch.id}
-                className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3"
-              >
+          .sort((a, b) => (b.views ?? -1) - (a.views ?? -1))
+          .map((ch) => (
+            <div
+              key={ch.key}
+              className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-4 py-3"
+            >
+              <div className="min-w-0">
                 <p className="text-sm text-white font-medium truncate">
-                  {ch.channelTitle}
+                  {ch.title}
                 </p>
-                <div className="flex items-center gap-4 shrink-0 text-xs">
-                  <span className="flex items-center gap-1.5 text-slate-300">
-                    <Users className="h-3.5 w-3.5 text-cyan-400" />
-                    {ch.subscribers !== null ? ch.subscribers.toLocaleString() : "—"}
-                  </span>
-                  <span className="flex items-center gap-1.5 text-slate-300">
-                    <Eye className="h-3.5 w-3.5 text-violet-400" />
-                    {mtprotoConnected && views != null ? views.toLocaleString() : "—"}
-                  </span>
-                </div>
               </div>
-            );
-          })}
+              <div className="flex items-center gap-4 shrink-0 text-xs">
+                <span className="flex items-center gap-1.5 text-slate-300">
+                  <Users className="h-3.5 w-3.5 text-cyan-400" />
+                  {ch.subscribers !== null ? ch.subscribers.toLocaleString() : "—"}
+                </span>
+                <span className="flex items-center gap-1.5 text-slate-300">
+                  <Eye className="h-3.5 w-3.5 text-violet-400" />
+                  {mtprotoConnected && ch.views != null ? ch.views.toLocaleString() : "—"}
+                </span>
+              </div>
+            </div>
+          ))}
       </div>
       {!mtprotoConnected && (
         <p className="text-[11px] text-slate-500 mt-3">
@@ -3301,10 +4234,202 @@ function ChannelBreakdownList({
   );
 }
 
+// ---------------------------------------------------------------------------
+// ORDERS — every order that came in from any of the seller's storefront
+// pages. Same lifecycle real marketplaces use: Yangi -> Tasdiqlangan ->
+// Jo'natildi -> Yetkazildi, or Bekor qilindi at any point.
+// ---------------------------------------------------------------------------
+
+const ORDER_STATUS_META: Record<
+  string,
+  { label: string; color: string; next?: { key: string; label: string } }
+> = {
+  new: { label: "Yangi", color: "#fbbf24", next: { key: "confirmed", label: "Tasdiqlash" } },
+  confirmed: { label: "Tasdiqlangan", color: "#22d3ee", next: { key: "shipped", label: "Jo'natish" } },
+  shipped: { label: "Jo'natildi", color: "#a78bfa", next: { key: "delivered", label: "Yetkazildi deb belgilash" } },
+  delivered: { label: "Yetkazildi", color: "#34d399" },
+  cancelled: { label: "Bekor qilindi", color: "#f87171" },
+};
+
+const ORDER_FILTERS = [
+  { key: "all", label: "Barchasi" },
+  { key: "new", label: "Yangi" },
+  { key: "confirmed", label: "Tasdiqlangan" },
+  { key: "shipped", label: "Jo'natildi" },
+  { key: "delivered", label: "Yetkazildi" },
+  { key: "cancelled", label: "Bekor qilindi" },
+];
+
+function OrdersPage() {
+  const { user: firebaseUser } = useAuth();
+  const [orders, setOrders] = useState<any[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("all");
+  const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  async function authHeaders(): Promise<Record<string, string>> {
+    const token = await firebaseUser?.getIdToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async function load() {
+    setLoading(true);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(apiUrl("/api/orders"), { headers });
+      const data = await res.json();
+      setOrders(data.orders || []);
+    } catch {
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function updateStatus(id: number, status: string) {
+    setUpdatingId(id);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(apiUrl(`/api/orders/${id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        setOrders((prev) =>
+          prev ? prev.map((o) => (o.id === id ? { ...o, status } : o)) : prev,
+        );
+      }
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  const filtered = (orders || []).filter((o) => filter === "all" || o.status === filter);
+
+  return (
+    <div className="p-6 md:p-10 space-y-6">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        {ORDER_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            onClick={() => setFilter(f.key)}
+            className={`shrink-0 px-4 py-2 rounded-full text-sm font-medium transition ${
+              filter === f.key
+                ? "bg-gradient-to-r from-violet-500 to-blue-500 text-white"
+                : "bg-white/5 text-slate-400 hover:text-white border border-white/10"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="h-6 w-6 text-slate-500 animate-spin" />
+        </div>
+      ) : filtered.length === 0 ? (
+        <Glass className="p-10 flex flex-col items-center text-center gap-2">
+          <ShoppingBag className="h-8 w-8 text-slate-600" />
+          <p className="text-slate-400 text-sm">
+            {filter === "all"
+              ? "Hali buyurtmalar yo'q. Vitrinangiz havolasini ulashing — mijozlar u yerdan to'g'ridan-to'g'ri buyurtma bera oladi."
+              : "Bu holatda buyurtma yo'q."}
+          </p>
+        </Glass>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map((o) => {
+            const meta = ORDER_STATUS_META[o.status] || ORDER_STATUS_META.new;
+            const isExpanded = expandedId === o.id;
+            return (
+              <Glass key={o.id} className="p-4">
+                <button
+                  onClick={() => setExpandedId(isExpanded ? null : o.id)}
+                  className="w-full flex items-center justify-between gap-3 text-left"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-mono text-xs text-slate-500">{o.orderNumber}</span>
+                      <span
+                        className="text-[11px] font-medium px-2 py-0.5 rounded-full"
+                        style={{ backgroundColor: `${meta.color}1a`, color: meta.color }}
+                      >
+                        {meta.label}
+                      </span>
+                    </div>
+                    <p className="text-sm text-white truncate">{o.customerName} · {o.customerPhone}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {(o.items || []).length} mahsulot · {o.totalAmount} {o.currency}
+                    </p>
+                  </div>
+                  <ChevronDown className={`h-4 w-4 text-slate-500 shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                </button>
+
+                {isExpanded && (
+                  <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+                    <div className="space-y-2">
+                      {(o.items || []).map((it: any, i: number) => (
+                        <div key={i} className="flex items-center gap-3">
+                          {it.image && (
+                            <img src={it.image} alt={it.name} className="h-10 w-10 rounded-lg object-cover shrink-0" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm text-white truncate">{it.name}</p>
+                            <p className="text-xs text-slate-500">
+                              {it.quantity} x {it.price} {it.currency}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-slate-400 space-y-1">
+                      <p><span className="text-slate-500">Manzil:</span> {o.customerAddress}</p>
+                      {o.customerComment && <p><span className="text-slate-500">Izoh:</span> {o.customerComment}</p>}
+                      <p><span className="text-slate-500">Sana:</span> {new Date(o.createdAt).toLocaleString("uz-UZ")}</p>
+                    </div>
+                    {meta.next && o.status !== "cancelled" && o.status !== "delivered" && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          onClick={() => updateStatus(o.id, meta.next!.key)}
+                          disabled={updatingId === o.id}
+                          className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white py-2.5 rounded-xl text-sm font-medium"
+                        >
+                          {updatingId === o.id && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                          {meta.next.label}
+                        </button>
+                        <button
+                          onClick={() => updateStatus(o.id, "cancelled")}
+                          disabled={updatingId === o.id}
+                          className="px-4 py-2.5 rounded-xl text-sm font-medium bg-white/5 border border-white/10 text-rose-400 hover:bg-rose-500/10"
+                        >
+                          Bekor qilish
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Glass>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dashboard({ goCreate, user }: any) {
   void goCreate;
   void user;
 
+  const [combinedPeriod, setCombinedPeriod] = useState<PeriodKey>("daily");
   const [subscribersPeriod, setSubscribersPeriod] = useState<PeriodKey>("daily");
   const [viewsPeriod, setViewsPeriod] = useState<PeriodKey>("daily");
 
@@ -3313,13 +4438,6 @@ function Dashboard({ goCreate, user }: any) {
   // second-by-second view would need.
   const { data, isLoading } = useGetTelegramLiveStats({
     query: { refetchInterval: 30000 },
-  });
-
-  // Fetch real subscriber history — triggers a fresh snapshot upsert on the
-  // backend each time the live stats are polled, so history accumulates
-  // automatically over time without any extra user action.
-  const { data: historyData } = useGetTelegramStatsHistory(subscribersPeriod, {
-    refetchInterval: 30000,
   });
 
   const { data: mtprotoStatus } = useGetTelegramMtprotoStatus();
@@ -3331,19 +4449,13 @@ function Dashboard({ goCreate, user }: any) {
     enabled: mtprotoConnected,
     refetchInterval: 30000,
   });
-  const { data: mtprotoHistory } = useGetTelegramMtprotoStatsHistory(viewsPeriod, {
-    enabled: mtprotoConnected,
-    refetchInterval: 30000,
-  });
 
-  const viewsSnapshots = mtprotoHistory?.snapshots.map((s) => ({
-    date: s.date,
-    value: s.views,
-  }));
-  const subscribersSnapshots = historyData?.snapshots.map((s) => ({
-    date: s.date,
-    value: s.subscribers,
-  }));
+  // Period-correct bucket series + today/yesterday, straight from
+  // /api/stats/dashboard — every number here is already isolated to its
+  // own window (see statsAggregation.ts), so nothing downstream needs to
+  // re-derive deltas from cumulative snapshots itself.
+  const viewsStats = useStatsDashboard("views", viewsPeriod, mtprotoConnected);
+  const subscribersStats = useStatsDashboard("subscribers", subscribersPeriod, true);
 
   const topChannel = (mtprotoLive?.channels ?? [])
     .filter((c: { views: number | null }) => c.views != null)
@@ -3351,6 +4463,14 @@ function Dashboard({ goCreate, user }: any) {
       (a: { views: number | null }, b: { views: number | null }) =>
         (b.views ?? 0) - (a.views ?? 0),
     )[0];
+
+  // Once MTProto is connected, its channel list is the full picture — bot-
+  // connected channels (matched) plus channels the account administers but
+  // never bot-connected (see stats.ts) — so it's the more complete total.
+  // Bot API's count only ever covers bot-connected channels.
+  const totalSubscribers = mtprotoConnected && mtprotoLive
+    ? mtprotoLive.totalSubscribers
+    : data?.totalSubscribers;
 
   return (
     <div className="p-6 md:p-10 space-y-8">
@@ -3370,33 +4490,17 @@ function Dashboard({ goCreate, user }: any) {
       )}
 
       <DashboardSummaryCards
-        totalSubscribers={data?.totalSubscribers}
+        totalSubscribers={totalSubscribers}
         totalViews={mtprotoLive?.totalViews}
         viewsKnown={mtprotoConnected}
         topChannel={topChannel ? { title: topChannel.channelTitle, views: topChannel.views ?? 0 } : null}
+        todaySubscribers={subscribersStats.data?.todayValue}
+        yesterdaySubscribers={subscribersStats.data?.yesterdayValue}
+        todayViews={mtprotoConnected ? viewsStats.data?.todayValue : undefined}
+        yesterdayViews={mtprotoConnected ? viewsStats.data?.yesterdayValue : undefined}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChannelStatsChart
-          metric="views"
-          currentValue={mtprotoLive?.totalViews}
-          isLive={mtprotoConnected && Boolean(mtprotoLive)}
-          isLoading={mtprotoConnected && mtprotoLoading}
-          snapshots={viewsSnapshots}
-          period={viewsPeriod}
-          onPeriodChange={setViewsPeriod}
-        />
-        <ChannelStatsChart
-          metric="subscribers"
-          currentValue={data?.totalSubscribers}
-          isLive={Boolean(data)}
-          isLoading={isLoading}
-          snapshots={subscribersSnapshots}
-          period={subscribersPeriod}
-          onPeriodChange={setSubscribersPeriod}
-        />
-      </div>
-
+      <CombinedStatsChart period={combinedPeriod} onPeriodChange={setCombinedPeriod} />
       <ChannelBreakdownList
         botChannels={data?.channels}
         mtprotoChannels={mtprotoLive?.channels}
@@ -3442,10 +4546,11 @@ function ProductPicker({
     const thumb = p.images?.[0];
     return (
       <button
+        data-tour="post-pick-product"
         onClick={() => onPick(p)}
         className="text-left rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 hover:border-violet-400/40 transition p-3"
       >
-        <div className="relative rounded-xl overflow-hidden bg-white/5 aspect-square mb-2.5 flex items-center justify-center">
+        <div className="relative rounded-xl overflow-hidden bg-white/5 aspect-[3/4] mb-2.5 flex items-center justify-center">
           {thumb ? (
             <img src={thumb} alt={p.name} className="w-full h-full object-cover" />
           ) : (
@@ -3617,6 +4722,9 @@ function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-violet-400 transition"
               >
+                <option value="" className="bg-slate-900">
+                  — Not selected —
+                </option>
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c} className="bg-slate-900">
                     {c}
@@ -3642,6 +4750,7 @@ function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any
 
         <button
           data-testid="button-generate-post"
+          data-tour="post-generate-button"
           disabled={!valid}
           onClick={onGenerate}
           className="w-full mt-7 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3.5 rounded-xl font-medium shadow-lg shadow-violet-900/30 hover:shadow-violet-700/30 transition"
@@ -3653,7 +4762,7 @@ function CreateForm({ form, setForm, product, onChangeProduct, onGenerate }: any
   );
 }
 
-function Generating({ form, onDone, onError }: any) {
+function Generating({ form, product, onDone, onError }: any) {
   const [step, setStep] = useState(0);
   const total = PIPELINE_STEPS.length;
   const enrichProduct = useEnrichProduct();
@@ -3675,6 +4784,10 @@ function Generating({ form, onDone, onError }: any) {
           price: form.price,
           category: form.category,
           notes: form.notes || "",
+          // When this post is for a saved inventory product, the backend
+          // reuses (or creates once, then caches) that product's deep
+          // research — every post after the first is instant and free.
+          ...(product?.id ? { productId: product.id } : {}),
         },
       })
       .then((data) => {
@@ -3862,12 +4975,7 @@ function Results({
     e.target.value = "";
     if (!file) return;
 
-    const dataUrl: string = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+    const dataUrl = await resizeImageFile(file);
 
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const title = form.name || "Yuklangan rasm";
@@ -4066,6 +5174,71 @@ function Results({
         </Glass>
       )}
 
+      {/* ── PROFESSIONAL PRODUCT CARD: search / view / buy ── */}
+      {(enriched.viewHook || enriched.buyCta || enriched.searchKeywords || (enriched.popularNames && enriched.popularNames.length > 0)) && (
+        <Glass className="p-6 space-y-5">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-400" />
+            <h3 className="text-white font-semibold">
+              Professional Product Card
+            </h3>
+          </div>
+
+          {enriched.popularNames && enriched.popularNames.length > 0 && (
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">
+                Internetda topilgan mashhur nomlar
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {enriched.popularNames.map((n: string, i: number) => (
+                  <span
+                    key={i}
+                    className="text-xs bg-white/5 border border-white/10 text-slate-300 rounded-full px-3 py-1"
+                  >
+                    {n}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {enriched.searchKeywords && (
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">
+                🔍 Qidiruv uchun kalit so'zlar
+              </p>
+              <p className="text-slate-300 text-sm leading-relaxed">
+                {enriched.searchKeywords}
+              </p>
+            </div>
+          )}
+
+          {enriched.viewHook && (
+            <div className="bg-white/5 rounded-xl p-4">
+              <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wider">
+                👀 E'tibor tortish uchun (view)
+              </p>
+              <p className="text-white text-sm">{enriched.viewHook}</p>
+            </div>
+          )}
+
+          {enriched.buyCta && (
+            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
+              <p className="text-xs text-emerald-300 mb-1.5 font-medium uppercase tracking-wider">
+                🛒 Sotib olishga undash (buy)
+              </p>
+              <p className="text-slate-200 text-sm">{enriched.buyCta}</p>
+            </div>
+          )}
+
+          {enrichData?.cached && (
+            <p className="text-xs text-slate-500">
+              ⚡ Ushbu mahsulot avval tahlil qilingan — natija keshdan olindi (AI qayta chaqirilmadi).
+            </p>
+          )}
+        </Glass>
+      )}
+
       {/* ── GENERATED POST ── */}
       <Glass className="p-6">
         <div className="flex items-center justify-between mb-4">
@@ -4169,6 +5342,7 @@ function Results({
         </button>
         <button
           data-testid="button-approve"
+          data-tour="button-approve"
           onClick={() => onApprove()}
           disabled={selectedChannelIds.length === 0}
           className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-lg shadow-emerald-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -4327,6 +5501,7 @@ function Publishing({
   form,
   enrichData,
   selectedImages,
+  productId,
   onDone,
   onError,
 }: any) {
@@ -4357,6 +5532,11 @@ function Publishing({
               channelId,
               text: postText,
               ...(imageUrls.length ? { imageUrls } : {}),
+              ...(form?.name ? { name: form.name } : {}),
+              ...(form?.price
+                ? { price: `${form.price}${form.currency ? " " + form.currency : ""}` }
+                : {}),
+              ...(productId ? { productId } : {}),
             },
           });
           if (mounted.current) setDoneCount((n) => n + 1);
@@ -4448,7 +5628,7 @@ function YtMetadataGenerating({ product, form, onDone, onError }: any) {
     async function run() {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/youtube/metadata", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/metadata"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4500,7 +5680,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
 
   async function authedFetch(path: string, init: RequestInit = {}) {
     const token = await firebaseUser?.getIdToken();
-    const res = await fetch(path, {
+    const res = await fetch(apiUrl(path), {
       ...init,
       headers: {
         ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -4706,7 +5886,7 @@ function YtMetadataReview({ product, ytMetadata, uploadError, onConfirm, onBack 
 }
 
 // Step 3 — upload video, show progress
-function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, onError }: any) {
+function YtPublishing({ product, accountId, ytMetadata, onDone, onError }: any) {
   const { user: firebaseUser } = useAuth();
   const called = useRef(false);
   const mounted = useRef(true);
@@ -4721,12 +5901,11 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
         const token = await firebaseUser?.getIdToken();
         if (mounted.current) setStage("uploading");
 
-        // Send the user-selected image URLs so the backend builds the
-        // slideshow from exactly those images (falls back to product.images
-        // when the array is empty).
-        const imageUrls = (selectedImages ?? []).map((img: any) => img.url).filter(Boolean);
+        // The backend owns video rendering and reads the product images
+        // from the database. Do not send browser-side image/base64
+        // payloads here.
 
-        const res = await fetch("/api/connectors/youtube/publish", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/publish"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -4740,7 +5919,6 @@ function YtPublishing({ product, accountId, ytMetadata, selectedImages, onDone, 
             tags: ytMetadata?.tags,
             hashtags: ytMetadata?.hashtags,
             isShort: ytMetadata?.isShort,
-            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
           }),
         });
         const body = await res.json().catch(() => null);
@@ -4932,7 +6110,120 @@ function SettingsPage({ onOpenConnectors }: any) {
 // PROFILE
 // ---------------------------------------------------------------------------
 
+// External Agent — tashqi saytlarni (masalan OLX.uz do'konini) AI orqali
+// boshqaruvchi brauzer kengaytmasi bilan bog'lanish nuqtasi. Kengaytma
+// hali Chrome Web Store'da nashr qilinmagan (beta/admin bosqichi), shuning
+// uchun "o'rnatilmagan" holatda foydalanuvchiga qo'lda o'rnatish
+// ko'rsatmasi ko'rsatiladi. Kengaytma bor-yo'qligi window.postMessage
+// handshake orqali aniqlanadi (qarang: external-agent-extension/content.js).
+function ExternalAgentButton({ user }: { user: any }) {
+  const [status, setStatus] = useState<"idle" | "checking" | "installed" | "missing">(
+    "idle",
+  );
+
+  const downloadExtension = () => {
+    const a = document.createElement("a");
+    a.href = "/external-agent-extension.zip";
+    a.download = "oneoffice-external-agent-extension.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const handleClick = async () => {
+    setStatus("checking");
+    const token = user ? await user.getIdToken().catch(() => null) : null;
+    const onPong = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      if (event.data?.type === "ONEOFFICE_EXT_PONG") {
+        window.removeEventListener("message", onPong);
+        clearTimeout(timer);
+        setStatus("installed");
+        // Tab ochish endi extension'ning o'zida (background.js:
+        // OPEN_AGENT_TAB) — u chiroyli newtab.html'ni ochadi va
+        // sessiyani globalda faollashtiradi, oddiy about:blank emas.
+      }
+    };
+    window.addEventListener("message", onPong);
+    window.postMessage({ type: "ONEOFFICE_EXT_PING", token }, "*");
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", onPong);
+      setStatus("missing");
+      downloadExtension();
+    }, 400);
+  };
+
+  return (
+    <div className="w-full">
+      <button
+        data-testid="button-profile-external-agent"
+        onClick={handleClick}
+        className="w-full"
+      >
+        <Glass className="p-6 flex items-center justify-between gap-3 hover:border-white/20 transition">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-10 w-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+              <Bot className="h-4 w-4 text-violet-400" />
+            </div>
+            <div className="min-w-0 text-left">
+              <p className="text-white text-sm font-medium truncate">
+                External Agent
+              </p>
+              <p className="text-slate-500 text-xs mt-0.5 truncate">
+                Boshqa saytlarni AI orqali boshqarish (beta)
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-slate-500 shrink-0" />
+        </Glass>
+      </button>
+
+      {status === "missing" && (
+        <Glass className="mt-2 p-4 text-sm text-slate-300 space-y-2">
+          <p className="text-amber-400 font-medium flex items-center gap-1.5">
+            <AlertCircle className="h-4 w-4" /> Kengaytma yuklab olindi
+          </p>
+          <p>
+            Kengaytma hali Chrome Web Store'da yo'q (beta bosqich), shuning
+            uchun brauzer uni avtomatik o'rnata olmaydi — bu Chrome'ning
+            xavfsizlik cheklovi, faqat Web Store'dagi kengaytmalar
+            "bir bosishda" o'rnatiladi. Zip fayl yuklab bo'lindi, o'rnatish
+            uchun:
+          </p>
+          <ol className="list-decimal list-inside space-y-1 text-slate-400">
+            <li>Zip faylni oching (chiqarib oling)</li>
+            <li><code>chrome://extensions</code> → Developer mode</li>
+            <li>Load unpacked → chiqarilgan papkani tanlang</li>
+          </ol>
+          <p className="text-slate-500 text-xs">
+            O'rnatgandan so'ng yuqoridagi <strong>External Agent</strong>{" "}
+            tugmasini yana bosing — qayta tekshiradi va topilsa avtomatik
+            yangi tab ochadi.
+          </p>
+          <button
+            onClick={downloadExtension}
+            className="text-violet-400 text-xs underline mt-1"
+          >
+            Qayta yuklab olish
+          </button>
+        </Glass>
+      )}
+      {status === "installed" && (
+        <p className="mt-2 text-xs text-emerald-400 px-1">
+          ✓ Kengaytma topildi. Yangi tab ochildi — endi u yerda boshqarmoqchi bo'lgan saytni oching.
+        </p>
+      )}
+      {status === "checking" && (
+        <p className="mt-2 text-xs text-slate-500 px-1">Tekshirilmoqda…</p>
+      )}
+    </div>
+  );
+}
+
 function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
+  const t = useT();
+  const { lang, setLang } = useLanguage();
+  const { user: firebaseUser } = useAuth();
   const displayName = user
     ? `${user.firstName} ${user.lastName}`.trim()
     : "Aziz Karimov";
@@ -4951,6 +6242,39 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
             {displayName}
           </h3>
           <p className="text-slate-400 text-sm truncate">{subLabel}</p>
+        </div>
+      </Glass>
+
+      <Glass className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="h-10 w-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+            <Globe className="h-4 w-4 text-violet-400" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-white text-sm font-medium">{t("profile.language_label")}</p>
+            <p className="text-slate-500 text-xs mt-0.5">{t("profile.language_hint")}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {LANGUAGES.map((code) => (
+            <button
+              key={code}
+              data-testid={`button-profile-lang-${code}`}
+              onClick={() =>
+                setLang(code, {
+                  syncToServer: true,
+                  getToken: async () => firebaseUser?.getIdToken(),
+                })
+              }
+              className={`px-3 py-2.5 rounded-xl text-xs font-medium transition border ${
+                lang === code
+                  ? "bg-gradient-to-r from-violet-500/20 to-blue-500/20 text-white border-violet-400/40"
+                  : "bg-white/5 text-slate-400 border-white/10 hover:text-white"
+              }`}
+            >
+              {LANGUAGE_NAMES[code]}
+            </button>
+          ))}
         </div>
       </Glass>
 
@@ -4987,6 +6311,8 @@ function ProfilePage({ user, channels, onLogout, onOpenConnectors }: any) {
         </Glass>
       </button>
 
+      <ExternalAgentButton user={user} />
+
       <button
         data-testid="button-profile-signout"
         onClick={onLogout}
@@ -5017,8 +6343,955 @@ function FullscreenLoader() {
   );
 }
 
-function AppShell() {
+// ---------------------------------------------------------------------------
+// LANGUAGE PICKER — the very first thing anyone sees on a device that
+// hasn't chosen a language yet (see src/lib/i18n.tsx). Blocks every other
+// route, including sign-in/up, until a language is picked; after that the
+// whole app renders in it, and it's only ever changed again from Profile.
+// ---------------------------------------------------------------------------
+
+function LanguagePickerScreen() {
+  const { setLang } = useLanguage();
+  const t = useT();
+  return (
+    <div className="fixed inset-0 z-[300] bg-slate-950 relative overflow-hidden flex flex-col items-center justify-center px-6 py-10">
+      <GradientBlob className="h-96 w-96 bg-violet-600 -top-32 -left-20" />
+      <GradientBlob className="h-96 w-96 bg-blue-600 top-1/3 -right-32" />
+
+      <div className="relative z-10 flex flex-col items-center text-center max-w-sm w-full">
+        <img
+          src="/brand-logo.png"
+          alt="OneOffice AI"
+          className="h-14 w-14 rounded-2xl object-cover shrink-0 mb-6 shadow-lg shadow-violet-900/40"
+        />
+        <h1 className="text-2xl font-semibold text-white tracking-tight mb-2">
+          {t("langpicker.title")}
+        </h1>
+        <p className="text-slate-400 text-sm mb-8 leading-relaxed">
+          {t("langpicker.subtitle")}
+        </p>
+
+        <div className="w-full space-y-3">
+          {LANGUAGES.map((code) => (
+            <button
+              key={code}
+              data-testid={`button-lang-${code}`}
+              onClick={() => setLang(code)}
+              className="w-full flex items-center justify-between bg-white/5 border border-white/10 hover:border-violet-400/50 hover:bg-white/10 rounded-xl px-5 py-4 text-white text-sm font-medium transition"
+            >
+              {LANGUAGE_NAMES[code]}
+              <ArrowRight className="h-4 w-4 text-slate-500" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FIRST-TIME WALKTHROUGH — a short "here's what this can do" carousel
+// right after sign-up, then a guided, spotlight-driven walk through
+// creating the first product and the first post, ending with the person's
+// own Telegram channel already connected and ready to publish to.
+// ---------------------------------------------------------------------------
+
+// Real screenshots of each screen. Two separate sets — phone screenshots
+// (portrait, full-bleed) don't crop well on a wide desktop viewport, so
+// desktop gets its own set of (landscape) screenshots living under
+// /onboarding/desktop/. Drop matching files there; until they exist the
+// gradient still renders, just without a photo. titleKey/bodyKey look up
+// the actual copy from the i18n dictionary (see src/lib/i18n.tsx) so this
+// slideshow renders in whichever language was chosen on LanguagePickerScreen.
+const WELCOME_SLIDES_MOBILE: Array<{
+  titleKey: string;
+  bodyKey: string;
+  gradient: string;
+  image?: string;
+}> = [
+  {
+    titleKey: "welcome.slide1.title",
+    bodyKey: "welcome.slide1.body",
+    gradient: "from-violet-600 via-indigo-700 to-slate-950",
+    image: `${basePath}/onboarding/dashboard.jpg`,
+  },
+  {
+    titleKey: "welcome.slide2.title",
+    bodyKey: "welcome.slide2.body",
+    gradient: "from-cyan-600 via-sky-700 to-slate-950",
+    image: `${basePath}/onboarding/stats.jpg`,
+  },
+  {
+    titleKey: "welcome.slide3.title",
+    bodyKey: "welcome.slide3.body",
+    gradient: "from-blue-600 via-cyan-700 to-slate-950",
+    image: `${basePath}/onboarding/inventory.jpg`,
+  },
+  {
+    titleKey: "welcome.slide4.title",
+    bodyKey: "welcome.slide4.body",
+    gradient: "from-fuchsia-600 via-purple-700 to-slate-950",
+    image: `${basePath}/onboarding/vitrina.jpg`,
+  },
+  {
+    titleKey: "welcome.slide5.title",
+    bodyKey: "welcome.slide5.body",
+    gradient: "from-emerald-600 via-teal-700 to-slate-950",
+    image: `${basePath}/onboarding/orders.jpg`,
+  },
+];
+
+// Same 5 slides, same order/copy — only the screenshot changes. Put the
+// desktop (landscape, wide) screenshots at these paths.
+const WELCOME_SLIDES_DESKTOP: Array<{
+  titleKey: string;
+  bodyKey: string;
+  gradient: string;
+  image?: string;
+}> = WELCOME_SLIDES_MOBILE.map((slide, i) => ({
+  ...slide,
+  image: `${basePath}/onboarding/desktop/${
+    ["dashboard", "stats", "inventory", "vitrina", "orders"][i]
+  }.jpg`,
+}));
+
+function WelcomeOnboarding({
+  onDone,
+  onSignIn,
+}: {
+  onDone: () => void;
+  // Only passed when this runs pre-signup (replacing the old WelcomeScreen)
+  // — lets someone who already has an account skip straight to sign-in
+  // instead of being forced through sign-up. Not passed for the post-tour
+  // run inside AppShell, since a signed-in person obviously has one.
+  onSignIn?: () => void;
+}) {
+  useLockBodyScroll();
+  const isMobile = useIsMobile();
+  const t = useT();
+  const [index, setIndex] = useState(0);
+  const slides = isMobile ? WELCOME_SLIDES_MOBILE : WELCOME_SLIDES_DESKTOP;
+  const isLast = index === slides.length - 1;
+  const slide = slides[index];
+
+  // ---------------------------------------------------------------------
+  // MOBILE — unchanged full-bleed layout: the screenshot fills the whole
+  // screen, text sits over a bottom gradient, controls anchored below it.
+  // ---------------------------------------------------------------------
+  if (isMobile) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-slate-950 flex flex-col">
+        <div
+          className={`relative flex-1 bg-gradient-to-br ${slide.gradient} flex items-end overflow-hidden`}
+        >
+          {slide.image && (
+            <img
+              src={slide.image}
+              alt={t(slide.titleKey)}
+              className="absolute inset-0 w-full h-full object-cover object-top"
+            />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/70 to-slate-950/10" />
+          <div className="relative z-10 p-8 pb-6 max-w-lg">
+            <h2 className="text-white text-2xl font-bold mb-2">{t(slide.titleKey)}</h2>
+            <p className="text-slate-300 text-sm leading-relaxed">{t(slide.bodyKey)}</p>
+          </div>
+        </div>
+
+        <div className="p-6 bg-slate-950 shrink-0">
+          <div className="flex items-center justify-center gap-1.5 mb-5">
+            {slides.map((_, i) => (
+              <span
+                key={i}
+                className={`h-1.5 rounded-full transition-all ${
+                  i === index ? "w-6 bg-violet-400" : "w-1.5 bg-white/20"
+                }`}
+              />
+            ))}
+          </div>
+          <div className="flex items-center gap-3 max-w-lg mx-auto">
+            {index > 0 && (
+              <button
+                onClick={() => setIndex((i) => i - 1)}
+                className="px-5 py-3.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
+              >
+                {t("welcome.back")}
+              </button>
+            )}
+            <button
+              onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
+              className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
+            >
+              {isLast ? t("welcome.finish") : t("welcome.next")}
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+          {onSignIn && (
+            <button
+              onClick={onSignIn}
+              className="w-full text-center text-slate-500 text-xs mt-4 hover:text-slate-300 transition"
+            >
+              {t("welcome.signin")}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // DESKTOP — a centered card instead of an edge-to-edge background: a
+  // wide viewport stretching a phone-shaped screenshot looked broken, so
+  // this uses a 16:9 image panel sized for landscape desktop screenshots,
+  // with the copy and controls below it inside the same card.
+  // ---------------------------------------------------------------------
+  return (
+    <div className="fixed inset-0 z-[200] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-8">
+      <div className="w-full max-w-3xl bg-slate-900 border border-white/10 rounded-3xl overflow-hidden shadow-2xl">
+        <div
+          className={`relative aspect-video bg-gradient-to-br ${slide.gradient} overflow-hidden`}
+        >
+          {slide.image && (
+            <img
+              src={slide.image}
+              alt={t(slide.titleKey)}
+              className="absolute inset-0 w-full h-full object-cover object-top"
+            />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/10 to-transparent" />
+        </div>
+
+        <div className="p-8">
+          <h2 className="text-white text-2xl font-bold mb-2">{t(slide.titleKey)}</h2>
+          <p className="text-slate-400 text-sm leading-relaxed mb-6 max-w-xl">
+            {t(slide.bodyKey)}
+          </p>
+
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-1.5">
+              {slides.map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 rounded-full transition-all ${
+                    i === index ? "w-6 bg-violet-400" : "w-1.5 bg-white/20"
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              {index > 0 && (
+                <button
+                  onClick={() => setIndex((i) => i - 1)}
+                  className="px-5 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-sm font-medium"
+                >
+                  {t("welcome.back")}
+                </button>
+              )}
+              <button
+                onClick={() => (isLast ? onDone() : setIndex((i) => i + 1))}
+                className="flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white px-6 py-3 rounded-xl font-semibold"
+              >
+                {isLast ? t("welcome.finish") : t("welcome.next")}
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          {onSignIn && (
+            <button
+              onClick={onSignIn}
+              className="mt-5 text-center w-full text-slate-500 text-xs hover:text-slate-300 transition"
+            >
+              {t("welcome.signin")}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SPOTLIGHT TOUR ENGINE — dims the whole screen except one target element
+// (found live via a `data-tour="..."` attribute already on a real button),
+// and blocks interaction with everything outside it. "click"-mode steps
+// auto-advance the moment the real target is clicked (no extra button);
+// "manual"-mode steps (text fields) show a "Keyingisi" button instead,
+// since there's no single discrete action to detect.
+// ---------------------------------------------------------------------------
+
+interface TourStep {
+  target: string;
+  bodyKey: string;
+  mode: "click" | "manual";
+  // "Oxirgi qadam!" instead of the usual "N-qadam" counter — only
+  // PUBLISH_TOUR_STEPS' single step uses this.
+  isFinalStep?: boolean;
+}
+
+function TourOverlay({
+  step,
+  stepNumber,
+  totalSteps,
+  isLast,
+  onNext,
+  onSkip,
+}: {
+  step: TourStep;
+  stepNumber: number;
+  totalSteps: number;
+  isLast: boolean;
+  onNext: () => void;
+  onSkip: () => void;
+}) {
+  const t = useT();
+  const [rect, setRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    let raf = 0;
+    function measure() {
+      const el = document.querySelector(`[data-tour="${step.target}"]`);
+      setRect(el ? el.getBoundingClientRect() : null);
+      raf = requestAnimationFrame(measure);
+    }
+    raf = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(raf);
+  }, [step.target]);
+
+  useEffect(() => {
+    if (step.mode !== "click") return;
+    function onClickCapture(e: MouseEvent) {
+      const el = (e.target as HTMLElement)?.closest?.(`[data-tour="${step.target}"]`);
+      if (el) onNext();
+    }
+    document.addEventListener("click", onClickCapture, true);
+    return () => document.removeEventListener("click", onClickCapture, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step.target, step.mode]);
+
+  // Waiting for the target to exist yet (e.g. right after a navigation) —
+  // render nothing rather than a confusing full-screen dim with no hole.
+  if (!rect) return null;
+
+  const pad = 6;
+  const hole = {
+    top: rect.top - pad,
+    left: rect.left - pad,
+    width: rect.width + pad * 2,
+    height: rect.height + pad * 2,
+  };
+  const tooltipBelow = hole.top + hole.height + 160 < window.innerHeight;
+  const tooltipLeft = Math.min(Math.max(hole.left, 12), window.innerWidth - 300);
+
+  return (
+    <div className="fixed inset-0 z-[150]">
+      <div className="absolute bg-black/75" style={{ top: 0, left: 0, right: 0, height: Math.max(0, hole.top) }} />
+      <div className="absolute bg-black/75" style={{ top: hole.top + hole.height, left: 0, right: 0, bottom: 0 }} />
+      <div className="absolute bg-black/75" style={{ top: hole.top, left: 0, width: Math.max(0, hole.left), height: hole.height }} />
+      <div className="absolute bg-black/75" style={{ top: hole.top, left: hole.left + hole.width, right: 0, height: hole.height }} />
+      <div
+        className="absolute rounded-xl ring-2 ring-violet-400 pointer-events-none"
+        style={{ top: hole.top, left: hole.left, width: hole.width, height: hole.height }}
+      />
+      <div
+        className="absolute max-w-[280px] bg-slate-900 border border-violet-400/40 rounded-2xl p-4 shadow-2xl"
+        style={
+          tooltipBelow
+            ? { top: hole.top + hole.height + 12, left: tooltipLeft }
+            : { top: Math.max(hole.top - 150, 12), left: tooltipLeft }
+        }
+      >
+        <p className="text-violet-400 text-[11px] font-semibold mb-1">
+          {stepNumber}/{totalSteps}
+        </p>
+        <p className="text-white font-semibold text-sm mb-1">
+          {step.isFinalStep ? t("tour.final_step") : t("tour.step", { n: stepNumber })}
+        </p>
+        <p className="text-slate-400 text-xs mb-3 leading-relaxed">{t(step.bodyKey)}</p>
+        <div className="flex items-center justify-between gap-2">
+          <button onClick={onSkip} className="text-xs text-slate-500 hover:text-slate-300">
+            {t("tour.skip")}
+          </button>
+          <button
+            onClick={() => {
+              // "click"-mode steps point at a real button — pressing this
+              // just performs that same click (so the actual action still
+              // happens) instead of silently skipping past it. "manual"
+              // steps (text fields) have nothing to click, so this simply
+              // moves on.
+              if (step.mode === "click") {
+                const el = document.querySelector(`[data-tour="${step.target}"]`) as HTMLElement | null;
+                el?.click();
+              } else {
+                onNext();
+              }
+            }}
+            className="text-xs bg-violet-500 text-white px-3 py-1.5 rounded-full font-medium"
+          >
+            {isLast ? t("tour.finish") : t("tour.next")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PRODUCT_TOUR_STEPS: TourStep[] = [
+  { target: "product-name-input", bodyKey: "tour.body.product_name", mode: "manual" },
+  { target: "product-price-input", bodyKey: "tour.body.product_price", mode: "manual" },
+  { target: "product-save-button", bodyKey: "tour.body.product_save", mode: "click" },
+];
+
+const POST_TOUR_STEPS: TourStep[] = [
+  { target: "post-pick-product", bodyKey: "tour.body.post_pick_product", mode: "click" },
+  { target: "post-generate-button", bodyKey: "tour.body.post_generate", mode: "click" },
+];
+
+const PUBLISH_TOUR_STEPS: TourStep[] = [
+  {
+    target: "button-approve",
+    bodyKey: "tour.body.publish",
+    mode: "click",
+    isFinalStep: true,
+  },
+];
+
+function ProductCongratsModal({ onNext }: { onNext: () => void }) {
+  useLockBodyScroll();
+  const t = useT();
+  return (
+    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-slate-900 border border-white/10 rounded-3xl p-8 text-center">
+        <div className="h-16 w-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-5">
+          <CheckCircle2 className="h-8 w-8 text-emerald-400" />
+        </div>
+        <h3 className="text-white text-lg font-semibold mb-2">
+          {t("congrats.title")}
+        </h3>
+        <p className="text-slate-400 text-sm mb-6">
+          {t("congrats.body")}
+        </p>
+        <button
+          onClick={onNext}
+          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
+        >
+          {t("congrats.cta")} <ArrowRight className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OneHelp — the site's own built-in assistant. A small sticky bubble the
+// person can drag anywhere on screen (their position is remembered); a tap
+// (not a drag) opens a chat panel growing from that same corner. Phase 2/3:
+// the AI can now narrate AND actually drive the site — navigate between
+// sections, spotlight a real element (reusing the exact data-tour targets
+// the onboarding tour already uses), and open the new-product form —
+// visibly, in sync with its own narration, played back step by step from
+// the plan the backend returns (see routes/onehelp.ts for why this is a
+// plan-then-execute design rather than a live agent loop). Heavy/
+// irreversible actions aren't wired to any real action yet in this phase,
+// but the request_confirmation mechanism (Ha/Yo'q, inline in the chat)
+// already exists end-to-end so future actions can use it immediately.
+// Filling in form fields for the person is intentionally NOT part of this
+// phase yet. Only ever mounted inside the authenticated AppShell, never on
+// the public storefront.
+// ---------------------------------------------------------------------------
+
+const ONEHELP_POS_KEY = "oneoffice_onehelp_pos_v1";
+const ONEHELP_BUBBLE_SIZE = 52;
+// Default sits just above the mobile bottom nav (see BottomNav, ~64px tall)
+// so it doesn't need to be dragged out of the way on first use.
+const ONEHELP_DEFAULT_POS = { bottom: 92, right: 16 };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function loadOneHelpPos(): { bottom: number; right: number } {
+  try {
+    const raw = localStorage.getItem(ONEHELP_POS_KEY);
+    if (!raw) return ONEHELP_DEFAULT_POS;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.bottom === "number" && typeof parsed?.right === "number") {
+      return parsed;
+    }
+  } catch {
+    // ignore — fall through to default
+  }
+  return ONEHELP_DEFAULT_POS;
+}
+
+function clampOneHelpPos(pos: { bottom: number; right: number }) {
+  const margin = 4;
+  const maxRight = Math.max(margin, window.innerWidth - ONEHELP_BUBBLE_SIZE - margin);
+  const maxBottom = Math.max(margin, window.innerHeight - ONEHELP_BUBBLE_SIZE - margin);
+  return {
+    right: Math.min(Math.max(pos.right, margin), maxRight),
+    bottom: Math.min(Math.max(pos.bottom, margin), maxBottom),
+  };
+}
+
+// Briefly rings the real on-screen element the same way TourOverlay's own
+// spotlight identifies its target (the exact same data-tour attribute) —
+// reusing that convention rather than inventing a second one, per the
+// design confirmed while scoping this phase.
+function highlightElement(target: string) {
+  const el = document.querySelector(`[data-tour="${target}"]`) as HTMLElement | null;
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("ring-4", "ring-violet-400", "ring-offset-2", "ring-offset-slate-950");
+  window.setTimeout(() => {
+    el.classList.remove("ring-4", "ring-violet-400", "ring-offset-2", "ring-offset-slate-950");
+  }, 1800);
+}
+
+type OneHelpAction =
+  | { type: "navigate"; view: string }
+  | { type: "highlight"; target: string }
+  | { type: "open_new_product_form" }
+  | { type: "request_confirmation"; question: string };
+
+interface OneHelpStep {
+  say: string;
+  action?: OneHelpAction;
+}
+
+interface OneHelpMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  // Client-side only, set while a request_confirmation step is waiting on
+  // this exact message — never persisted, never comes from the server on
+  // reload (a past confirmation is over and done with by then).
+  confirmation?: { question: string; resolved?: "yes" | "no" };
+}
+
+function OneHelpBubble({
+  onNavigate,
+  onOpenNewProductForm,
+}: {
+  onNavigate: (view: string) => void;
+  onOpenNewProductForm: () => void;
+}) {
+  const { user: firebaseUser } = useAuth();
+  const [pos, setPos] = useState(() => clampOneHelpPos(loadOneHelpPos()));
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<OneHelpMessage[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    startPos: { bottom: number; right: number };
+    moved: boolean;
+    pointerId: number;
+  } | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Tracks the highest real (server-assigned) message id we've seen, so the
+  // polling effect below can tell "a background task just wrote a new
+  // progress message" apart from messages we already know about — see its
+  // own comment for why polling is the mechanism at all.
+  const maxSeenIdRef = useRef(0);
+
+  useEffect(() => {
+    function onResize() {
+      setPos((p) => clampOneHelpPos(p));
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, open]);
+
+  // Background tasks (run_task_now, or a scheduled task firing while the
+  // person happens to have the chat open) write their progress straight
+  // into one_help_messages as they go (see ai/autoPost.ts's report()) —
+  // there's no live connection to push them over, so this chat picks them
+  // up the same way Claude's own tool-call steps would read to someone
+  // watching, just via a light poll instead of a stream. Only runs while
+  // the panel is actually open, and only touches messages with an id past
+  // the highest one this tab already knows about.
+  useEffect(() => {
+    if (!open) return;
+    const interval = setInterval(async () => {
+      try {
+        const token = await firebaseUser?.getIdToken();
+        const res = await fetch(apiUrl("/api/onehelp/messages"), {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return;
+        const fresh: OneHelpMessage[] = await res.json();
+        const newer = fresh.filter((m) => m.id > maxSeenIdRef.current);
+        if (newer.length > 0) {
+          maxSeenIdRef.current = Math.max(maxSeenIdRef.current, ...newer.map((m) => m.id));
+          setMessages((prev) => [...prev, ...newer]);
+        }
+      } catch {
+        // best-effort — next poll tries again
+      }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [open, firebaseUser]);
+
+  async function loadMessages() {
+    if (messagesLoaded) return;
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/onehelp/messages"), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const loaded: OneHelpMessage[] = await res.json();
+        setMessages(loaded);
+        if (loaded.length > 0) {
+          maxSeenIdRef.current = Math.max(...loaded.map((m) => m.id));
+        }
+      }
+    } catch {
+      // best-effort — chat still works for the current session either way
+    } finally {
+      setMessagesLoaded(true);
+    }
+  }
+
+  function handlePointerDown(e: React.PointerEvent) {
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startPos: pos,
+      moved: false,
+      pointerId: e.pointerId,
+    };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+    if (!d.moved) return;
+    setPos(
+      clampOneHelpPos({
+        right: d.startPos.right - dx,
+        bottom: d.startPos.bottom - dy,
+      }),
+    );
+  }
+
+  function handlePointerUp(e: React.PointerEvent) {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    if (d.moved) {
+      localStorage.setItem(ONEHELP_POS_KEY, JSON.stringify(pos));
+    } else {
+      // A real tap, not a drag — toggle the chat.
+      setOpen((o) => {
+        const next = !o;
+        if (next) void loadMessages();
+        return next;
+      });
+    }
+  }
+
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    setSending(true);
+    const optimistic: OneHelpMessage = {
+      id: -Date.now(),
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    try {
+      const token = await firebaseUser?.getIdToken();
+      const res = await fetch(apiUrl("/api/onehelp/chat"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message: text }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data.id === "number") {
+          maxSeenIdRef.current = Math.max(maxSeenIdRef.current, data.id);
+        }
+        const steps: OneHelpStep[] =
+          Array.isArray(data.steps) && data.steps.length > 0
+            ? data.steps
+            : [{ say: data.content || "..." }];
+        await playSteps(steps);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: -Date.now() - 1,
+            role: "assistant",
+            content: "Kechirasiz, xatolik yuz berdi. Qayta urinib ko'ring.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: -Date.now() - 1,
+          role: "assistant",
+          content: "Internet aloqasida muammo bo'lishi mumkin. Qayta urinib ko'ring.",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // Reveals each planned step one at a time — narration first, then (after
+  // a short beat, so it reads as "doing" rather than instant) the real
+  // action actually fires. A request_confirmation step pauses the whole
+  // sequence and waits on this resolver until the person taps Ha/Yo'q in
+  // the chat itself; declining stops the rest of the plan from running.
+  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+
+  function handleConfirm(ok: boolean) {
+    confirmResolverRef.current?.(ok);
+    confirmResolverRef.current = null;
+  }
+
+  async function playSteps(steps: OneHelpStep[]) {
+    for (const step of steps) {
+      await sleep(450);
+      const msgId = -Date.now() - Math.floor(Math.random() * 10000);
+
+      if (step.action?.type === "request_confirmation") {
+        const question = step.action.question;
+        const confirmed = await new Promise<boolean>((resolve) => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId,
+              role: "assistant",
+              content: step.say,
+              createdAt: new Date().toISOString(),
+              confirmation: { question },
+            },
+          ]);
+          confirmResolverRef.current = resolve;
+        });
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId && m.confirmation
+              ? { ...m, confirmation: { ...m.confirmation, resolved: confirmed ? "yes" : "no" } }
+              : m,
+          ),
+        );
+        if (!confirmed) break;
+        continue;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId, role: "assistant", content: step.say, createdAt: new Date().toISOString() },
+      ]);
+
+      if (step.action) {
+        await sleep(400);
+        switch (step.action.type) {
+          case "navigate":
+            onNavigate(step.action.view);
+            break;
+          case "highlight":
+            highlightElement(step.action.target);
+            break;
+          case "open_new_product_form":
+            onOpenNewProductForm();
+            break;
+        }
+        await sleep(350);
+      }
+    }
+  }
+
+  const panelWidth = "min(360px, calc(100vw - 24px))";
+  const panelHeight = "min(520px, calc(100vh - 120px))";
+
+  return (
+    <>
+      {open && (
+        <div
+          className="fixed z-[200] flex flex-col rounded-2xl border border-white/10 bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
+          style={{
+            bottom: pos.bottom + ONEHELP_BUBBLE_SIZE + 10,
+            right: pos.right,
+            width: panelWidth,
+            height: panelHeight,
+          }}
+        >
+          <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+                <Sparkles className="h-3.5 w-3.5 text-white" />
+              </div>
+              <span className="text-white text-sm font-semibold">OneHelp</span>
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5">
+            {!messagesLoaded ? (
+              <div className="h-full flex items-center justify-center">
+                <Loader2 className="h-5 w-5 text-slate-500 animate-spin" />
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center gap-2 px-4">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center">
+                  <Sparkles className="h-5 w-5 text-white" />
+                </div>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  Salom! Men OneHelp — saytdan foydalanish bo'yicha savollaringizga
+                  javob beraman. Nima bilan yordam bera olaman?
+                </p>
+              </div>
+            ) : (
+              messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-line ${
+                      m.role === "user"
+                        ? "bg-gradient-to-r from-violet-500 to-blue-500 text-white"
+                        : "bg-white/5 border border-white/10 text-slate-200"
+                    }`}
+                  >
+                    {m.content}
+                    {m.confirmation && (
+                      <div className="mt-2.5 pt-2.5 border-t border-white/10">
+                        {!m.confirmation.resolved ? (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleConfirm(true)}
+                              className="flex-1 bg-gradient-to-r from-violet-500 to-blue-500 text-white text-xs font-medium py-2 rounded-lg transition"
+                            >
+                              Ha
+                            </button>
+                            <button
+                              onClick={() => handleConfirm(false)}
+                              className="flex-1 bg-white/5 border border-white/10 text-slate-300 text-xs font-medium py-2 rounded-lg hover:bg-white/10 transition"
+                            >
+                              Yo'q
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-500">
+                            {m.confirmation.resolved === "yes" ? "✓ Tasdiqlandi" : "✗ Bekor qilindi"}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+            {sending && (
+              <div className="flex justify-start">
+                <div className="bg-white/5 border border-white/10 rounded-2xl px-4 py-3 flex items-center gap-1.5">
+                  <span
+                    className="onehelp-typing-dot h-2 w-2 rounded-full bg-violet-400"
+                    style={{ animationDelay: "0s" }}
+                  />
+                  <span
+                    className="onehelp-typing-dot h-2 w-2 rounded-full bg-violet-400"
+                    style={{ animationDelay: "0.15s" }}
+                  />
+                  <span
+                    className="onehelp-typing-dot h-2 w-2 rounded-full bg-violet-400"
+                    style={{ animationDelay: "0.3s" }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-end gap-2 px-3 py-3 border-t border-white/10 shrink-0">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
+              }}
+              placeholder="Savolingizni yozing..."
+              rows={1}
+              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 transition resize-none max-h-24"
+            />
+            <button
+              onClick={() => void handleSend()}
+              disabled={!input.trim() || sending}
+              className="shrink-0 h-10 w-10 flex items-center justify-center rounded-xl bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white transition"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <button
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        title="OneHelp — yordam"
+        className="fixed z-[200] h-[52px] w-[52px] rounded-full bg-gradient-to-br from-violet-500 to-blue-500 shadow-lg shadow-violet-900/40 flex items-center justify-center text-white touch-none select-none hover:scale-105 active:scale-95 transition-transform"
+        style={{ bottom: pos.bottom, right: pos.right }}
+      >
+        {open ? <X className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
+      </button>
+    </>
+  );
+}
+
+// Every internal "page" AppShell can show — this list is the single source
+// of truth for which URL paths are valid app sections (see AppRoutes'
+// "/:section?" route and the initialSection validation just below).
+const APP_SHELL_SECTIONS = [
+  "dashboard",
+  "inventory",
+  "create",
+  "connectors",
+  "shopfront",
+  "orders",
+  "settings",
+  "profile",
+] as const;
+
+function AppShell({ initialSection }: { initialSection?: string }) {
   const { user: firebaseUser, signOut } = useAuth();
+  const [, setLocation] = useLocation();
 
   const {
     data: profile,
@@ -5031,7 +7304,7 @@ function AppShell() {
       // Force-refresh the token so an expired cached token never silently
       // becomes a 401 (which would show the wrong "server error" screen).
       const token = await firebaseUser?.getIdToken(true);
-      const res = await fetch("/api/me", {
+      const res = await fetch(apiUrl("/api/me"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       // 404 → profile doesn't exist yet (new user, onboarding needed)
@@ -5048,15 +7321,20 @@ function AppShell() {
     retry: 1,
   });
 
+  // A signed-in profile's saved language (chosen at sign-up, or changed on
+  // another device from Profile) wins over whatever this device guessed —
+  // keeps language consistent for the same account everywhere.
+  useSyncLanguageFromProfile(profile?.language);
+
   // Public storefront slug — same query key as StoreConnectorCard, so this
   // is a cache-share, not a duplicate request. Used to build the
-  // per-product order link that gets folded into freshly generated post
-  // text below (see handleGenerateDone).
+  // per-product order link that gets folded into post text (see
+  // handleGenerateDone / handleApprove below).
   const { data: storeConfig } = useQuery({
     queryKey: ["store-config"],
     queryFn: async () => {
       const token = await firebaseUser?.getIdToken();
-      const res = await fetch("/api/connectors/store/config", {
+      const res = await fetch(apiUrl("/api/connectors/store/config"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load store config");
@@ -5090,12 +7368,95 @@ function AppShell() {
   const createProduct = useCreateProduct();
   const updateProduct = useUpdateProduct();
 
-  const [navView, setNavView] = useState("dashboard");
+  const [navView, setNavViewRaw] = useState(
+    initialSection && (APP_SHELL_SECTIONS as readonly string[]).includes(initialSection)
+      ? initialSection
+      : "dashboard",
+  );
+  // Every internal navigation call in this component still just calls
+  // setNavView(view) exactly as before (15 call sites, unchanged) — this
+  // wrapper is the ONLY thing that changed: it now also pushes a real URL
+  // for that section, so the address bar reflects where you actually are,
+  // and reloading/opening a new tab on that URL restores the same section
+  // instead of always bouncing back to Dashboard. history.pushState (the
+  // default for setLocation) means back/forward navigate between sections
+  // too, for free.
+  function setNavView(view: string) {
+    setNavViewRaw(view);
+    setLocation(`/${view}`);
+  }
+
+  // Normalizes the address bar once on mount — covers landing on bare "/"
+  // (no section in the URL at all) or an unrecognized path, both of which
+  // resolved navView to "dashboard" above but wouldn't otherwise update the
+  // URL to match. `replace: true` so this never adds an extra back-button
+  // stop.
+  useEffect(() => {
+    if (initialSection !== navView) {
+      setLocation(`/${navView}`, { replace: true });
+    }
+    // Intentionally only on mount — subsequent changes go through
+    // setNavView above, not this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [flow, setFlow] = useState("product");
   const [productFormOpen, setProductFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(
     null,
   );
+
+  // First-time walkthrough state — see TourOverlay above. The slide-based
+  // intro now runs pre-signup (AppRoutes/WelcomeOnboarding); once a fresh
+  // profile lands here, we skip straight into the guided product/post
+  // creation tour instead of showing the same slides again.
+  const [onboardingActive, setOnboardingActive] = useState(false);
+  const [showProductCongrats, setShowProductCongrats] = useState(false);
+  const [tour, setTour] = useState<{ steps: TourStep[]; index: number; onComplete?: () => void } | null>(null);
+  const [showTelegramConnectInline, setShowTelegramConnectInline] = useState(false);
+  const seenOnboardingCheck = useRef(false);
+
+  useEffect(() => {
+    if (!profile || seenOnboardingCheck.current) return;
+    seenOnboardingCheck.current = true;
+    if (!profile.onboardingCompleted) {
+      void markOnboardingComplete();
+      setOnboardingActive(true);
+      setEditingProduct(null);
+      setProductFormOpen(true);
+      setNavView("inventory");
+      startTour(PRODUCT_TOUR_STEPS);
+    }
+  }, [profile]);
+
+  function startTour(steps: TourStep[], onComplete?: () => void) {
+    setTour({ steps, index: 0, onComplete });
+  }
+  function advanceTour() {
+    setTour((t) => {
+      if (!t) return t;
+      if (t.index + 1 >= t.steps.length) {
+        t.onComplete?.();
+        return null;
+      }
+      return { ...t, index: t.index + 1 };
+    });
+  }
+  function stopTour() {
+    setTour(null);
+  }
+
+  async function markOnboardingComplete() {
+    try {
+      const token = await firebaseUser?.getIdToken();
+      await fetch(apiUrl("/api/me/onboarding-complete"), {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+    } catch {
+      // Best-effort — worst case the welcome carousel shows once more.
+    }
+  }
+
   const [selectedProduct, setSelectedProduct] = useState<ProductItem | null>(
     null,
   );
@@ -5103,7 +7464,7 @@ function AppShell() {
     name: "",
     price: "",
     currency: "UZS",
-    category: "Electronics",
+    category: "",
     notes: "",
   });
   const [enrichData, setEnrichData] = useState<any>(null);
@@ -5218,7 +7579,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/vk/exchange", {
+        const res = await fetch(apiUrl("/api/connectors/vk/exchange"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -5289,7 +7650,7 @@ function AppShell() {
     (async () => {
       try {
         const token = await firebaseUser?.getIdToken();
-        const res = await fetch("/api/connectors/youtube/exchange", {
+        const res = await fetch(apiUrl("/api/connectors/youtube/exchange"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -5352,6 +7713,7 @@ function AppShell() {
     dashboard: "Dashboard",
     create: "Create Post",
     inventory: "Inventory",
+    orders: "Buyurtmalar",
     connectors: "Connectors",
     shopfront: "ShopFront",
     settings: "Settings",
@@ -5361,7 +7723,7 @@ function AppShell() {
   function resetCreate() {
     setFlow("product");
     setSelectedProduct(null);
-    setForm({ name: "", price: "", currency: "UZS", category: "Electronics", notes: "" });
+    setForm({ name: "", price: "", currency: "UZS", category: "", notes: "" });
     setEnrichData(null);
     setSelectedImages([]);
     setShowPreview(false);
@@ -5397,8 +7759,9 @@ function AppShell() {
     // post is for a real saved product (picked from Inventory, so it has an
     // id) that's actually "active" (drafts don't exist on the public
     // storefront yet, so linking one would 404) and the seller's storefront
-    // slug has loaded. Manually-typed posts (no selectedProduct) are left
-    // untouched — there's no product page to link to.
+    // slug has loaded. This is the fast path for the common case; the
+    // Skip/manual and Draft cases are covered as a safety net in
+    // handleApprove right before publishing (see below).
     if (
       selectedProduct?.id &&
       selectedProduct.status === "active" &&
@@ -5537,6 +7900,10 @@ function AppShell() {
   }
 
   function goToConnectors() {
+    if (onboardingActive) {
+      setShowTelegramConnectInline(true);
+      return;
+    }
     setNavView("connectors");
   }
 
@@ -5632,6 +7999,8 @@ function AppShell() {
           />
         )}
 
+        {navView === "orders" && <OrdersPage />}
+
         {navView === "create" && (
           <>
             {flow === "product" && (
@@ -5664,6 +8033,7 @@ function AppShell() {
             {flow === "generating" && (
               <Generating
                 form={form}
+                product={selectedProduct}
                 onDone={handleGenerateDone}
                 onError={handleGenerateError}
               />
@@ -5694,6 +8064,7 @@ function AppShell() {
                 form={form}
                 enrichData={enrichData}
                 selectedImages={selectedImages}
+                productId={selectedProduct?.id}
                 onDone={handlePublishDone}
                 onError={handlePublishError}
               />
@@ -5732,7 +8103,6 @@ function AppShell() {
                 product={selectedProduct}
                 accountId={ytAccountId}
                 ytMetadata={ytMetadata}
-                selectedImages={selectedImages}
                 onDone={handleYtDone}
                 onError={handleYtPublishError}
               />
@@ -5761,19 +8131,16 @@ function AppShell() {
               setEditingProduct(p);
               setProductFormOpen(true);
             }}
+            onProductCreated={() => {
+              if (!onboardingActive) return;
+              stopTour();
+              setShowProductCongrats(true);
+            }}
+            skipDeliveryPrompt={onboardingActive}
           />
         )}
 
-        {navView === "connectors" && (
-          <ConnectorsPage
-            instagramNotice={instagramNotice}
-            onDismissInstagramNotice={() => setInstagramNotice(null)}
-            vkNotice={vkNotice}
-            onDismissVkNotice={() => setVkNotice(null)}
-            youtubeNotice={youtubeNotice}
-            onDismissYoutubeNotice={() => setYoutubeNotice(null)}
-          />
-        )}
+        {navView === "connectors" && <ConnectorsPage />}
         {navView === "shopfront" && <ShopFrontPage />}
         {navView === "settings" && (
           <SettingsPage onOpenConnectors={goToConnectors} />
@@ -5809,6 +8176,57 @@ function AppShell() {
           onApprove={handleApprove}
         />
       )}
+
+      {showProductCongrats && (
+        <ProductCongratsModal
+          onNext={() => {
+            setShowProductCongrats(false);
+            setNavView("create");
+            resetCreate();
+            startTour(POST_TOUR_STEPS);
+          }}
+        />
+      )}
+
+      {tour && (
+        <TourOverlay
+          step={tour.steps[tour.index]}
+          stepNumber={tour.index + 1}
+          totalSteps={tour.steps.length}
+          isLast={tour.index === tour.steps.length - 1}
+          onNext={advanceTour}
+          onSkip={() => {
+            stopTour();
+            setOnboardingActive(false);
+          }}
+        />
+      )}
+
+      {showTelegramConnectInline && (
+        <TelegramConnectModal
+          autoCreateChannelTitle={user?.company || "Mening do'konim"}
+          onClose={() => setShowTelegramConnectInline(false)}
+          onDone={() => {
+            setShowTelegramConnectInline(false);
+            refetchChannels();
+            startTour(PUBLISH_TOUR_STEPS, () => setOnboardingActive(false));
+          }}
+        />
+      )}
+
+      {/* Hidden during the first-time guided tour — its own spotlight
+          overlay already owns the screen then, and a second floating
+          element would just compete with it visually. */}
+      {!onboardingActive && (
+        <OneHelpBubble
+          onNavigate={(view) => setNavView(view)}
+          onOpenNewProductForm={() => {
+            setEditingProduct(null);
+            setNavView("inventory");
+            setProductFormOpen(true);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -5830,7 +8248,7 @@ function StorefrontPage({ slug }: { slug: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
@@ -5985,54 +8403,83 @@ function StorefrontPage({ slug }: { slug: string }) {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-            {filtered.map((p: any) => (
-              <Glass
-                key={p.id}
-                onClick={() => setLocation(`/store/${slug}/product/${p.id}`)}
-                className="!rounded-2xl overflow-hidden group hover:border-white/20 transition cursor-pointer"
-              >
-                <div className="relative aspect-square overflow-hidden bg-white/5">
-                  {p.images?.[0] ? (
-                    <img
-                      src={p.images[0]}
-                      alt={p.name}
-                      className="w-full h-full object-cover transition duration-500 group-hover:scale-105"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <ImageIcon className="h-6 w-6 text-slate-600" />
-                    </div>
-                  )}
-                  {p.images?.length > 1 && (
-                    <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium font-mono bg-black/50 backdrop-blur-sm text-white">
-                      <ImageIcon className="h-3 w-3" /> {p.images.length}
-                    </span>
-                  )}
-                  {p.sellPrice && (
-                    <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full pl-2 pr-3 py-1 text-xs font-semibold font-mono bg-gradient-to-r from-violet-500 to-blue-500 text-white shadow-lg shadow-violet-900/30">
-                      <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
-                      {p.sellPrice} {p.currency || "UZS"}
-                    </span>
-                  )}
-                </div>
-                <div className="p-3.5">
-                  {p.category && (
-                    <p className="font-mono text-xs uppercase tracking-wide mb-1 text-violet-400/80">
-                      {p.category}
+          // "Pro card" — restructured after Uzum.uz's actual product-card
+          // anatomy (image → price, bold and dominant → title, 2 lines →
+          // status badges), adapted to our own dark violet/blue glass
+          // brand instead of copying Uzum's white theme. Two deliberate
+          // departures from the old card: (1) price moves OUT of a small
+          // pill overlaid on the image and into its own full-width,
+          // bold line below the image — on Uzum the price is the single
+          // most prominent line on the whole card, bigger than the
+          // title, not a corner badge; (2) the per-card category label
+          // and description snippet are dropped — Uzum's grid cards never
+          // repeat the category (the filter pills above already carry
+          // that) and never show body copy, only image + price + title
+          // + status badges, which keeps the grid scannable at a glance.
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {filtered.map((p: any) => {
+              const isNew =
+                p.createdAt &&
+                Date.now() - new Date(p.createdAt).getTime() < 3 * 24 * 60 * 60 * 1000;
+              return (
+                <Glass
+                  key={p.id}
+                  onClick={() => setLocation(`/store/${slug}/product/${p.id}`)}
+                  className="!rounded-2xl overflow-hidden group hover:border-violet-400/30 transition cursor-pointer"
+                >
+                  <div className="relative aspect-[3/4] overflow-hidden bg-white/5">
+                    {p.images?.[0] ? (
+                      <img
+                        src={p.images[0]}
+                        alt={p.name}
+                        className="w-full h-full object-cover transition duration-500 group-hover:scale-105"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <ImageIcon className="h-6 w-6 text-slate-600" />
+                      </div>
+                    )}
+
+                    {/* Status badges — top-left, stacked like Uzum's
+                        ORIGINAL / Yangilik corner badges. */}
+                    {isNew && (
+                      <span className="absolute top-3 left-3 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold font-mono uppercase tracking-wide bg-emerald-500 text-white shadow-lg shadow-emerald-900/30">
+                        <Sparkles className="h-2.5 w-2.5" /> Yangi
+                      </span>
+                    )}
+
+                    {/* Image count — top-right, unchanged position. */}
+                    {p.images?.length > 1 && (
+                      <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium font-mono bg-black/50 backdrop-blur-sm text-white">
+                        <ImageIcon className="h-3 w-3" /> {p.images.length}
+                      </span>
+                    )}
+
+                    {/* Bottom scrim so a busy photo never fights the
+                        content block right below it — a subtle,
+                        professional finishing touch Uzum's own cards
+                        use via a soft image-to-white gradient; ours
+                        fades to the same slate the content area sits
+                        on instead of white, to stay on-brand. */}
+                    <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-slate-950/40 to-transparent pointer-events-none" />
+                  </div>
+
+                  <div className="p-3.5">
+                    {p.sellPrice && (
+                      <p className="flex items-baseline gap-1 text-[15px] font-bold text-white">
+                        {p.sellPrice}
+                        <span className="text-xs font-semibold text-slate-400">
+                          {p.currency || "UZS"}
+                        </span>
+                      </p>
+                    )}
+                    <p className="text-sm text-slate-300 leading-snug line-clamp-2 mt-1">
+                      {p.name}
                     </p>
-                  )}
-                  <p className="text-sm font-medium text-white truncate">
-                    {p.name}
-                  </p>
-                  {p.description && (
-                    <p className="text-xs mt-1 text-slate-500 line-clamp-2">
-                      {p.description}
-                    </p>
-                  )}
-                </div>
-              </Glass>
-            ))}
+                  </div>
+                </Glass>
+              );
+            })}
           </div>
         )}
 
@@ -6051,6 +8498,29 @@ function StorefrontPage({ slug }: { slug: string }) {
 // product's details, with a back arrow that returns to the storefront grid.
 // ---------------------------------------------------------------------------
 
+// Always-visible info section — deliberately NOT a click-to-expand
+// accordion. The buyer shouldn't have to tap anything to see why they'd
+// buy this: it should read exactly like the same product's Telegram post
+// already does (see buildPostText) — ready text, right there.
+function ProductInfoSection({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+      <div className="flex items-center gap-2 text-sm font-medium text-white mb-2.5">
+        <Icon className="h-4 w-4 text-violet-400" /> {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function ProductDetailPage({
   slug,
   productId,
@@ -6061,11 +8531,34 @@ function ProductDetailPage({
   const [, setLocation] = useLocation();
   const [activeIndex, setActiveIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const carouselRef = useRef<HTMLDivElement>(null);
+
+  function handleCarouselScroll() {
+    const el = carouselRef.current;
+    if (!el || el.clientWidth === 0) return;
+    setActiveIndex(Math.round(el.scrollLeft / el.clientWidth));
+  }
+
+  function scrollCarouselTo(i: number) {
+    const el = carouselRef.current;
+    if (!el) return;
+    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    setActiveIndex(i);
+  }
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [orderResult, setOrderResult] = useState<{ orderNumber: string; totalAmount: string; currency: string } | null>(null);
+  const [orderName, setOrderName] = useState("");
+  const [orderPhone, setOrderPhone] = useState("");
+  const [orderAddress, setOrderAddress] = useState("");
+  const [orderComment, setOrderComment] = useState("");
+  const [placing, setPlacing] = useState(false);
+  const [orderError, setOrderError] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["storefront", slug],
     queryFn: async () => {
-      const res = await fetch(`/api/store/${encodeURIComponent(slug)}`);
+      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}`));
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || "Do'kon topilmadi.");
@@ -6079,6 +8572,36 @@ function ProductDetailPage({
   );
 
   const goBack = () => setLocation(`/store/${slug}`);
+
+  async function submitOrder() {
+    if (!product) return;
+    if (!orderName.trim() || !orderPhone.trim() || !orderAddress.trim()) {
+      setOrderError("Ism, telefon raqam va manzilni to'ldiring.");
+      return;
+    }
+    setPlacing(true);
+    setOrderError("");
+    try {
+      const res = await fetch(apiUrl(`/api/store/${encodeURIComponent(slug)}/orders`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: [{ productId: product.id, quantity }],
+          customerName: orderName.trim(),
+          customerPhone: orderPhone.trim(),
+          customerAddress: orderAddress.trim(),
+          customerComment: orderComment.trim() || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error || "Buyurtma yuborilmadi.");
+      setOrderResult(body);
+    } catch (err: any) {
+      setOrderError(err?.message || "Buyurtma yuborilmadi.");
+    } finally {
+      setPlacing(false);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -6118,7 +8641,7 @@ function ProductDetailPage({
       : [];
 
   return (
-    <div className="min-h-screen bg-slate-950 relative">
+    <div className="min-h-screen bg-slate-950 relative pb-24">
       <div className="sticky top-0 z-10 bg-slate-950/80 backdrop-blur-xl border-b border-white/10">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
           <button
@@ -6134,23 +8657,49 @@ function ProductDetailPage({
       </div>
 
       <div className="max-w-2xl mx-auto">
-        <div className="relative aspect-square bg-white/5">
-          {images.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => setLightboxOpen(true)}
-              className="w-full h-full cursor-zoom-in"
-              aria-label="Rasmni to'liq ekranda ochish"
-            >
-              <img
-                src={images[activeIndex]}
-                alt={product.name}
-                className="w-full h-full object-cover"
-              />
-            </button>
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <ImageIcon className="h-8 w-8 text-slate-600" />
+        <div className="relative">
+          <div
+            ref={carouselRef}
+            onScroll={handleCarouselScroll}
+            className="flex overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden"
+            style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+          >
+            {images.length > 0 ? (
+              images.map((src, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    setActiveIndex(i);
+                    setLightboxOpen(true);
+                  }}
+                  className="shrink-0 w-full snap-center aspect-[3/4] bg-white/5 cursor-zoom-in"
+                  aria-label="Rasmni to'liq ekranda ochish"
+                >
+                  <img
+                    src={src}
+                    alt={`${product.name} ${i + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+              ))
+            ) : (
+              <div className="shrink-0 w-full snap-center aspect-[3/4] bg-white/5 flex items-center justify-center">
+                <ImageIcon className="h-8 w-8 text-slate-600" />
+              </div>
+            )}
+          </div>
+
+          {images.length > 1 && (
+            <div className="absolute bottom-3 left-0 right-0 flex items-center justify-center gap-1.5">
+              {images.map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 rounded-full transition-all ${
+                    i === activeIndex ? "w-4 bg-white" : "w-1.5 bg-white/40"
+                  }`}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -6160,7 +8709,7 @@ function ProductDetailPage({
             {images.map((src, i) => (
               <button
                 key={i}
-                onClick={() => setActiveIndex(i)}
+                onClick={() => scrollCarouselTo(i)}
                 className={`shrink-0 h-16 w-16 rounded-xl overflow-hidden border-2 transition ${
                   i === activeIndex
                     ? "border-violet-400"
@@ -6169,7 +8718,7 @@ function ProductDetailPage({
               >
                 <img
                   src={src}
-                  alt={`${product.name} ${i + 1}`}
+                  alt={`${product.name} thumb ${i + 1}`}
                   className="w-full h-full object-cover"
                 />
               </button>
@@ -6202,7 +8751,200 @@ function ProductDetailPage({
             </p>
           )}
         </div>
+
+        {/* Info sections — same content a Telegram post for this product
+            already shows (see buildPostText), always visible here too, no
+            tap required: a buyer should get everything they'd need before
+            ordering right on this page, not have to open anything. Each
+            section only renders if the seller/AI research actually has
+            content for it. */}
+        <div className="px-4 pb-4 space-y-2">
+          {Array.isArray(product.characteristics) && product.characteristics.length > 0 && (
+            <ProductInfoSection title="Xarakteristikalar" icon={Layers}>
+              <div className="divide-y divide-white/5">
+                {product.characteristics.map((c: { label: string; value: string }, i: number) => (
+                  <div key={i} className="flex items-baseline gap-3 py-2 text-sm">
+                    <span className="text-slate-500 shrink-0">{c.label}</span>
+                    <span className="flex-1 border-b border-dotted border-white/10 translate-y-[-3px]" />
+                    <span className="text-white text-right">{c.value}</span>
+                  </div>
+                ))}
+              </div>
+            </ProductInfoSection>
+          )}
+
+          {product.extras && (
+            <ProductInfoSection title="Xususiyatlar" icon={Package}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.extras}
+              </p>
+            </ProductInfoSection>
+          )}
+
+          {product.composition && (
+            <ProductInfoSection title="Tarkib" icon={FileText}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.composition}
+              </p>
+            </ProductInfoSection>
+          )}
+
+          {product.instructions && (
+            <ProductInfoSection title="Foydalanish bo'yicha ko'rsatma" icon={ClipboardCheck}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.instructions}
+              </p>
+            </ProductInfoSection>
+          )}
+
+          {product.lifehacks && (
+            <ProductInfoSection title="Lifehack" icon={Sparkles}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.lifehacks}
+              </p>
+            </ProductInfoSection>
+          )}
+
+          {product.deliveryInfo && (
+            <ProductInfoSection title="Yetkazib berish" icon={Truck}>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {product.deliveryInfo}
+              </p>
+            </ProductInfoSection>
+          )}
+        </div>
       </div>
+
+      {/* Fixed checkout bar — same pattern Uzum/Ozon/Wildberries product
+          pages use: price stays visible, one primary action always in
+          reach at the bottom of the screen. */}
+      <div className="fixed bottom-0 left-0 right-0 z-10 bg-slate-950/90 backdrop-blur-xl border-t border-white/10">
+        <div className="max-w-2xl mx-auto px-4 py-3">
+          <button
+            onClick={() => setCheckoutOpen(true)}
+            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 text-white py-3.5 rounded-xl font-semibold"
+          >
+            <ShoppingCart className="h-4 w-4" /> Buyurtma berish
+          </button>
+        </div>
+      </div>
+
+      {checkoutOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4">
+          <div className="w-full sm:max-w-md bg-slate-900 border border-white/10 rounded-t-3xl sm:rounded-3xl p-6 max-h-[90vh] overflow-y-auto">
+            {orderResult ? (
+              <div className="text-center py-4">
+                <div className="h-14 w-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle2 className="h-7 w-7 text-emerald-400" />
+                </div>
+                <p className="text-white font-semibold text-lg mb-1">Buyurtma qabul qilindi!</p>
+                <p className="text-slate-400 text-sm mb-4">
+                  Buyurtma raqami: <span className="font-mono text-white">{orderResult.orderNumber}</span>
+                </p>
+                <p className="text-slate-400 text-sm mb-6">
+                  Jami: <span className="text-white font-semibold">{orderResult.totalAmount} {orderResult.currency}</span>
+                </p>
+                <button
+                  onClick={() => {
+                    setCheckoutOpen(false);
+                    setOrderResult(null);
+                    setOrderName("");
+                    setOrderPhone("");
+                    setOrderAddress("");
+                    setOrderComment("");
+                    setQuantity(1);
+                  }}
+                  className="w-full bg-white/5 border border-white/10 text-white py-3 rounded-xl font-medium"
+                >
+                  Yopish
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-5">
+                  <p className="text-white font-semibold text-lg">Buyurtma berish</p>
+                  <button
+                    onClick={() => setCheckoutOpen(false)}
+                    className="h-8 w-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3 mb-5 p-3 bg-white/5 rounded-xl">
+                  {images[0] && (
+                    <img src={images[0]} alt={product.name} className="h-12 w-12 rounded-lg object-cover shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-white truncate">{product.name}</p>
+                    <p className="text-xs text-slate-400">{product.sellPrice} {product.currency || "UZS"}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                      className="h-7 w-7 rounded-full bg-white/10 text-white flex items-center justify-center"
+                    >
+                      −
+                    </button>
+                    <span className="text-white text-sm w-5 text-center">{quantity}</span>
+                    <button
+                      onClick={() => setQuantity((q) => Math.min(99, q + 1))}
+                      className="h-7 w-7 rounded-full bg-white/10 text-white flex items-center justify-center"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <input
+                    value={orderName}
+                    onChange={(e) => setOrderName(e.target.value)}
+                    placeholder="Ism familiya"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400"
+                  />
+                  <input
+                    value={orderPhone}
+                    onChange={(e) => setOrderPhone(e.target.value)}
+                    placeholder="Telefon raqam"
+                    type="tel"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400"
+                  />
+                  <textarea
+                    value={orderAddress}
+                    onChange={(e) => setOrderAddress(e.target.value)}
+                    placeholder="Yetkazib berish manzili"
+                    rows={2}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 resize-none"
+                  />
+                  <textarea
+                    value={orderComment}
+                    onChange={(e) => setOrderComment(e.target.value)}
+                    placeholder="Izoh (ixtiyoriy)"
+                    rows={2}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400 resize-none"
+                  />
+                </div>
+
+                {orderError && (
+                  <div className="flex items-center gap-2 text-rose-400 text-sm bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3 mt-3">
+                    <AlertCircle className="h-4 w-4 shrink-0" /> {orderError}
+                  </div>
+                )}
+
+                <button
+                  onClick={submitOrder}
+                  disabled={placing}
+                  className="w-full mt-5 flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-blue-500 disabled:opacity-40 text-white py-3.5 rounded-xl font-semibold"
+                >
+                  {placing && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Buyurtmani tasdiqlash
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -6214,8 +8956,9 @@ function ProductDetailPage({
 // ---------------------------------------------------------------------------
 
 function AppRoutes() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { user, isLoaded } = useAuth();
+  const { hasChosen: hasChosenLanguage } = useLanguage();
   // Whether an account has ever been created/signed-into on THIS device.
   // Read once from localStorage; only ever flips true (never reset here) —
   // it flips as soon as sign-up/sign-in actually succeeds, via the effect
@@ -6223,10 +8966,10 @@ function AppRoutes() {
   const [accountOnDevice, setAccountOnDevice] = useState<boolean>(
     () => !!loadOnboarding(),
   );
-  // Local-only override so tapping "Boshlash" moves past Welcome to the
-  // Landing/sign-up screen for this render; nothing is persisted until the
-  // person actually finishes creating (or signing into) an account, so a
-  // reload before that point shows Welcome again.
+  // Local-only override so finishing the intro slides moves past it to the
+  // sign-up screen for this render; nothing is persisted until the person
+  // actually finishes creating (or signing into) an account, so a reload
+  // before that point shows the intro slides again.
   const [pastWelcome, setPastWelcome] = useState(false);
 
   useEffect(() => {
@@ -6235,6 +8978,13 @@ function AppRoutes() {
       setAccountOnDevice(true);
     }
   }, [user]);
+
+  // Language comes before literally everything else — even sign-in/up —
+  // except the public storefront, which customers (not app users) land on
+  // directly and shouldn't be interrupted. See src/lib/i18n.tsx.
+  if (!hasChosenLanguage && !location.startsWith("/store")) {
+    return <LanguagePickerScreen />;
+  }
 
   return (
     <Switch>
@@ -6251,28 +9001,30 @@ function AppRoutes() {
       <Route path="/store/:slug">
         {(params) => <StorefrontPage slug={params.slug || ""} />}
       </Route>
-      <Route path="/">
-        {!isLoaded ? (
-          <FullscreenLoader />
-        ) : user ? (
-          <AppShell />
-        ) : accountOnDevice || pastWelcome ? (
-          <Landing
-            onStart={() => setLocation("/sign-up")}
-            onSignIn={() => setLocation("/sign-in")}
-          />
-        ) : (
-          <WelcomeScreen
-            onGetStarted={() => {
-              setPastWelcome(true);
-              setLocation("/sign-up");
-            }}
-            onSignIn={() => {
-              setPastWelcome(true);
-              setLocation("/sign-in");
-            }}
-          />
-        )}
+      <Route path="/:section?">
+        {(params) =>
+          !isLoaded ? (
+            <FullscreenLoader />
+          ) : user ? (
+            <AppShell initialSection={params.section} />
+          ) : accountOnDevice || pastWelcome ? (
+            <Landing
+              onStart={() => setLocation("/sign-up")}
+              onSignIn={() => setLocation("/sign-in")}
+            />
+          ) : (
+            <WelcomeOnboarding
+              onDone={() => {
+                setPastWelcome(true);
+                setLocation("/sign-up");
+              }}
+              onSignIn={() => {
+                setPastWelcome(true);
+                setLocation("/sign-in");
+              }}
+            />
+          )
+        }
       </Route>
     </Switch>
   );
@@ -6312,12 +9064,14 @@ function AuthProviderWithRoutes() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={basePath}>
-          <AuthProviderWithRoutes />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
+      <LanguageProvider>
+        <TooltipProvider>
+          <WouterRouter base={basePath}>
+            <AuthProviderWithRoutes />
+          </WouterRouter>
+          <Toaster />
+        </TooltipProvider>
+      </LanguageProvider>
     </QueryClientProvider>
   );
 }
