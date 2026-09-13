@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { Loader2, Sparkles, Wand2, X } from "lucide-react";
 import { useAuth } from "../lib/auth-context";
 import { apiUrl } from "../lib/api-url";
 
 type Props = {
   images: string[];
-  setImages: React.Dispatch<React.SetStateAction<string[]>>;
+  setImages: Dispatch<SetStateAction<string[]>>;
 };
 
 export default function ProductImageGenerator({ images, setImages }: Props) {
