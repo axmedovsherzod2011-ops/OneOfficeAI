@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 
 const router = Router();
 const POLLINATIONS_URL = "https://gen.pollinations.ai/v1/images/edits";
-const MODEL = "openai/gpt-image-1.5";
+const MODEL = "kontext";
 const PROMPT = "Create a professional e-commerce product photograph from the provided reference. Preserve the exact product identity, shape, proportions, colors, materials, branding, labels, printed text and important physical details. Do not redesign or invent product features. Replace the background with a seamless pure white #FFFFFF studio background. Use realistic studio lighting, sharp focus, a natural soft contact shadow, centered composition and a premium marketplace catalog look. Show only the product, with no extra objects, people, decorative props, captions, borders, logos or watermark.";
 
 async function getCurrentUserId(req: Parameters<typeof getAuth>[0]) {
@@ -57,7 +57,6 @@ router.post("/products/generate-image", async (req, res) => {
     const payload = await response.json() as { data?: Array<{ b64_json?: string; url?: string }> };
     const result = payload.data?.[0];
     if (!result) return void res.status(502).json({ error: "AI bo'sh natija qaytardi." });
-
     if (result.b64_json) return void res.json({ image: `data:image/png;base64,${result.b64_json}` });
 
     if (result.url) {
